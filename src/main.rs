@@ -1,3 +1,5 @@
+use std::process::{Command, self};
+
 fn main() {
     // read env variables that were set in build script
     let uefi_path = env!("UEFI_PATH");
@@ -6,7 +8,8 @@ fn main() {
     // choose whether to start the UEFI or BIOS image
     let uefi = true;
 
-    let mut cmd = std::process::Command::new("qemu-system-x86_64");
+    let mut cmd = Command::new("qemu-system-x86_64");
+
     if uefi {
         println!("UEFI: {uefi_path}");
         cmd.arg("-bios").arg(ovmf_prebuilt::ovmf_pure_efi());
@@ -15,6 +18,11 @@ fn main() {
         println!("BIOS: {bios_path}");
         cmd.arg("-drive").arg(format!("format=raw,file={bios_path}"));
     }
-    let mut child = cmd.spawn().unwrap();
-    child.wait().unwrap();
+
+    cmd.arg("-device").arg("isa-debug-exit,iobase=0xf4,iosize=0x04");
+
+    let mut qemu = cmd.spawn().unwrap();
+    let status = qemu.wait().unwrap();
+
+    process::exit(status.code().unwrap_or(-1));
 }

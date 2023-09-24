@@ -23,6 +23,21 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     loop {}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QemuExitCode {
+    Success = 0x0,
+    Failure = 0x1,
+}
+
+pub fn exit_qemu(exit_code: QemuExitCode) {
+    use x86_64::instructions::port::Port;
+
+    unsafe {
+        let mut port = Port::new(0xf4);
+        port.write(exit_code as u32);
+    }
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
