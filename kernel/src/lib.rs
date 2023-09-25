@@ -3,10 +3,9 @@
 use spin::Mutex;
 use bootloader_api::BootInfo;
 
-use crate::frame_buffer::{ WRITER, FrameBufferWriter };
+use crate::io::frame_buffer::{ WRITER, FrameBufferWriter };
 
-pub mod serial;
-pub mod frame_buffer;
+pub mod io;
 
 pub fn init(boot_info: &'static mut BootInfo) {
     unsafe {
