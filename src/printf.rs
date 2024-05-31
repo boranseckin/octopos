@@ -46,7 +46,7 @@ pub fn _print(args: fmt::Arguments<'_>, newline: bool) {
         let mut lock = PRINTF.writer.lock();
         lock.write_fmt(args).unwrap();
         if newline {
-            lock.write_char('\n');
+            lock.write_char('\n').unwrap();
         }
     } else {
         // We are panicked, don't care about the lock
@@ -54,7 +54,7 @@ pub fn _print(args: fmt::Arguments<'_>, newline: bool) {
             let writer = PRINTF.writer.get_mut_unchecked();
             writer.write_fmt(args).unwrap();
             if newline {
-                writer.write_char('\n');
+                writer.write_char('\n').unwrap();
             }
         }
     }
@@ -96,9 +96,10 @@ pub fn handle_panic(info: &PanicInfo) -> ! {
     PRINTF.locking.store(false, Ordering::Relaxed);
 
     let cpu_id = unsafe { Cpus::get_id() };
-    eprint!("hart {cpu_id} panicked: {info}\n");
+    eprint!("hart {cpu_id} {info}\n");
 
     PRINTF.panicked.store(false, Ordering::Relaxed);
 
+    #[allow(clippy::empty_loop)]
     loop {}
 }

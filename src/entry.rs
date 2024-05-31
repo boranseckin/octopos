@@ -4,6 +4,8 @@ use core::arch::asm;
 #[link_section = ".entry"]
 #[no_mangle]
 pub unsafe extern "C" fn _entry() -> ! {
+    // In RISC-V, the stack grows downwards. Stack pointer of each CPU points
+    // to the top of the stack. Each stack is 4096 bits.
     asm!(
         "la sp, STACK0",    // load address of STACK0 to stack pointer
         "li a0, 4096",      // load immediate value to a0

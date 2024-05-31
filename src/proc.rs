@@ -60,21 +60,27 @@ impl Cpus {
         unsafe { transmute(array) }
     }
 
-    // # Safety: must be called with interrupts disabled,
-    // to prevent race with process being moved to a different CPU.
+    /// Return the hart id of this CPU.
+    ///
+    /// # Safety: must be called with interrupts disabled,
+    /// to prevent race with process being moved to a different CPU.
     #[inline]
     pub unsafe fn get_id() -> usize {
         tp::read()
     }
 
-    // Safety: must be called with interrupts disabled,
-    // to prevent race with process being moved to a different CPU.
+    /// Returns a mutable pointer to this CPU's [`Cpu`] struct.
+    ///
+    /// # Safety: must be called with interrupts disabled,
+    /// to prevent race with process being moved to a different CPU.
     pub unsafe fn mycpu() -> *mut Cpu {
         assert!(!interrupts::get(), "mycpu interrupts enabled");
         let id = Self::get_id();
         CPUS.0[id].get()
     }
 
+    /// Locks this CPU by disabling interrupts.
+    /// Returns an [`InterruptLock`] as the ownership and lifetime of the lock.
     pub fn lock_mycpu() -> InterruptLock {
         let old_state = interrupts::get();
         interrupts::disable();
@@ -82,6 +88,7 @@ impl Cpus {
         unsafe { (*Self::mycpu()).lock(old_state) }
     }
 
+    /// Returns an arc pointer to this CPU's [`Proc`].
     pub fn myproc() -> Option<Arc<Proc>> {
         let _lock = Self::lock_mycpu();
 
@@ -98,6 +105,7 @@ impl Drop for InterruptLock {
     }
 }
 
+/// Saved registers for kernel context switches.
 #[repr(C)]
 pub struct Context {
     pub ra: usize,
@@ -139,12 +147,24 @@ impl Context {
     }
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct PID(usize);
 
 impl PID {
     pub fn new() -> Self {
         static PID_COUNT: AtomicUsize = AtomicUsize::new(0);
         PID(PID_COUNT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for PID {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

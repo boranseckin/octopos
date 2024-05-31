@@ -232,3 +232,33 @@ pub mod interrupts {
         unsafe { (sstatus::read() & sstatus::SIE) != 0 }
     }
 }
+
+// number of bits to offset within a page
+pub const PGSHIFT: usize = 12;
+// number of bytes per page
+pub const PGSIZE: usize = 1 << PGSHIFT;
+
+pub const PTE_V: usize = 1 << 0;
+pub const PTE_R: usize = 1 << 1;
+pub const PTE_W: usize = 1 << 2;
+pub const PTE_X: usize = 1 << 3;
+pub const PTE_U: usize = 1 << 4;
+
+pub const fn pa_to_pte(pa: usize) -> usize {
+    (pa >> 12) << 10
+}
+
+pub const fn pte_to_pa(pte: usize) -> usize {
+    (pte >> 10) << 12
+}
+
+pub const fn pte_flags(pte: usize) -> usize {
+    pte & 0x3FF
+}
+
+// one beyond the highest possible virtual address
+// (3 x 9-bit pages) + 12-bit offset
+//
+// this is 1-bit less than the max allowed by Sv39 to avoid having to sign-extend virtual addresses
+// that have the high bit set
+pub const MAXVA: usize = 1 << (9 + 9 + 9 + 12 - 1);

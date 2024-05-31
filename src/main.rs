@@ -17,16 +17,21 @@ extern "C" fn main() -> ! {
     let cpu_id = unsafe { Cpus::get_id() };
     if cpu_id == 0 {
         console::init();
+
         println!("");
         println!("octopos kernel is booting");
         println!("");
+
         STARTED.store(true, Ordering::SeqCst);
+
         loop {}
     } else {
         while !STARTED.load(Ordering::SeqCst) {
             core::hint::spin_loop()
         }
+
         println!("hart {cpu_id} is starting");
+
         loop {}
     }
 
