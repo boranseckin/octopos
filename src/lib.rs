@@ -2,6 +2,7 @@
 #![feature(fn_align)]
 #![feature(naked_functions)]
 #![feature(negative_impls)]
+#![feature(asm_const)]
 #![allow(clippy::missing_safety_doc)]
 
 extern crate alloc;
@@ -16,6 +17,7 @@ pub mod proc;
 pub mod riscv;
 pub mod spinlock;
 pub mod start;
+pub mod trampoline;
 pub mod uart;
 
 use buddy_alloc::{BuddyAllocParam, FastAllocParam, NonThreadsafeAlloc};
