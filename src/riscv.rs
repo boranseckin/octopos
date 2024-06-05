@@ -71,13 +71,43 @@ pub mod registers {
         }
     }
 
+    // Supervisor Trap Cause
+    pub mod scause {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            let bits: usize;
+            asm!("csrr {}, scause", out(reg) bits);
+            bits
+        }
+    }
+
+    // Supervisor Exception Program Counter
+    // holds the instruction address to which a return from exception will go
+    pub mod sepc {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            let bits: usize;
+            asm!("csrr {}, sepc", out(reg) bits);
+            bits
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            asm!("csrw sepc, {}", in(reg) bits);
+        }
+    }
+
     // Machien Exception Program Counter register, mepc
     pub mod mepc {
         use core::arch::asm;
 
         #[inline]
-        pub unsafe fn write(x: usize) {
-            asm!("csrw mepc, {}", in(reg) x);
+        pub unsafe fn write(bits: usize) {
+            asm!("csrw mepc, {}", in(reg) bits);
         }
     }
 

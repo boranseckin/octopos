@@ -18,6 +18,7 @@ pub mod riscv;
 pub mod spinlock;
 pub mod start;
 pub mod trampoline;
+pub mod trap;
 pub mod uart;
 
 use buddy_alloc::{BuddyAllocParam, FastAllocParam, NonThreadsafeAlloc};
