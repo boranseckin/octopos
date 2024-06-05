@@ -1,5 +1,4 @@
 use core::arch::asm;
-use core::hint::unreachable_unchecked;
 
 use crate::kernelvec::timervec;
 use crate::memlayout::{clint_mtimecmp, CLINT_MTIME};
@@ -45,9 +44,7 @@ pub unsafe fn start() -> ! {
     let id = mhartid::read();
     tp::write(id);
 
-    asm!("mret");
-
-    unreachable_unchecked();
+    asm!("mret", options(noreturn));
 }
 
 static mut TIMER_SCRATCH: [[u64; 5]; NCPU] = [[0; 5]; NCPU];
