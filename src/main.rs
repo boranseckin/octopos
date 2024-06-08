@@ -6,6 +6,7 @@ extern crate alloc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use kernel::console;
+use kernel::kalloc;
 use kernel::printf;
 use kernel::println;
 use kernel::proc::Cpus;
@@ -22,6 +23,9 @@ extern "C" fn main() -> ! {
         println!("octopos kernel is booting");
         println!("");
 
+        kalloc::init();
+
+        println!("hart {cpu_id} is starting");
         STARTED.store(true, Ordering::SeqCst);
 
         loop {}
@@ -34,8 +38,6 @@ extern "C" fn main() -> ! {
 
         loop {}
     }
-
-    todo!()
 }
 
 #[panic_handler]
