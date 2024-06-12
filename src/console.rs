@@ -1,11 +1,7 @@
-use crate::{spinlock::Mutex, uart};
+use crate::spinlock::Mutex;
+use crate::uart;
 
 const INPUT_BUF_SIZE: usize = 128;
-
-const BACKSPACE: u8 = 0x08;
-const fn ctrl(c: u8) -> u8 {
-    c - b'@'
-}
 
 pub static CONSOLE: Mutex<Console> = Mutex::new(Console::new(), "console");
 
@@ -28,13 +24,7 @@ impl Console {
 }
 
 pub fn putc(c: u8) {
-    if c == BACKSPACE {
-        uart::putc_sync(BACKSPACE);
-        uart::putc_sync(b' ');
-        uart::putc_sync(BACKSPACE);
-    } else {
-        uart::putc_sync(c);
-    }
+    uart::putc_sync(c);
 }
 
 pub fn init() {
