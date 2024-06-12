@@ -28,7 +28,9 @@ extern "C" fn main() -> ! {
         println!("hart {cpu_id} is starting");
         STARTED.store(true, Ordering::SeqCst);
 
-        loop {}
+        loop {
+            core::hint::spin_loop()
+        }
     } else {
         while !STARTED.load(Ordering::SeqCst) {
             core::hint::spin_loop()
@@ -36,7 +38,9 @@ extern "C" fn main() -> ! {
 
         println!("hart {cpu_id} is starting");
 
-        loop {}
+        loop {
+            core::hint::spin_loop()
+        }
     }
 }
 
