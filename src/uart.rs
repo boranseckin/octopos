@@ -108,6 +108,7 @@ impl Mutex<Uart> {
 
         while guard.tx_w == guard.tx_r + UART_TX_BUF_SIZE {
             // TODO: sleep
+            todo!()
         }
 
         let index = guard.tx_w % UART_TX_BUF_SIZE;

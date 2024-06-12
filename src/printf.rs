@@ -41,17 +41,25 @@ impl fmt::Write for Writer {
     }
 }
 
+pub fn print_simple(s: &str) {
+    let mut lock = PRINTF.writer.lock();
+    lock.write_str(s);
+    lock.write_char('\n');
+}
+
 pub fn _print(args: fmt::Arguments<'_>, newline: bool) {
     if PRINTF.locking.load(Ordering::Relaxed) {
         let mut lock = PRINTF.writer.lock();
-        lock.write_fmt(args).unwrap();
+
+        lock.write_fmt(args).expect("print error");
         if newline {
-            lock.write_char('\n').unwrap();
+            lock.write_char('\n').expect("print error nl");
         }
     } else {
         // We are panicked, don't care about the lock
         unsafe {
             let writer = PRINTF.writer.get_mut_unchecked();
+
             writer.write_fmt(args).unwrap();
             if newline {
                 writer.write_char('\n').unwrap();
