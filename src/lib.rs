@@ -3,10 +3,12 @@
 #![feature(naked_functions)]
 #![feature(negative_impls)]
 #![feature(asm_const)]
+#![feature(allocator_api)]
 #![feature(alloc_error_handler)]
 #![feature(const_refs_to_static)]
 #![allow(unused)]
 #![allow(clippy::missing_safety_doc)]
+#![allow(clippy::new_without_default)]
 
 extern crate alloc;
 
@@ -24,3 +26,4 @@ pub mod start;
 pub mod trampoline;
 pub mod trap;
 pub mod uart;
+pub mod vm;

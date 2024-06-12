@@ -268,6 +268,14 @@ pub const PGSHIFT: usize = 12;
 // number of bytes per page
 pub const PGSIZE: usize = 1 << PGSHIFT;
 
+pub const fn pg_round_up(size: usize) -> usize {
+    (size + PGSIZE - 1) & !(PGSIZE - 1)
+}
+
+pub const fn pg_round_down(addr: usize) -> usize {
+    addr & !(PGSIZE - 1)
+}
+
 pub const PTE_V: usize = 1 << 0;
 pub const PTE_R: usize = 1 << 1;
 pub const PTE_W: usize = 1 << 2;
@@ -284,6 +292,20 @@ pub const fn pte_to_pa(pte: usize) -> usize {
 
 pub const fn pte_flags(pte: usize) -> usize {
     pte & 0x3FF
+}
+
+// extraxt the three 9-bit page table indices from a virtual address
+pub const PXMASK: usize = 0x1FF; // 9 bits
+
+// returns the amount to shift-left to get to the correct page table index
+pub const fn px_shift(level: usize) -> usize {
+    // 12-bit page offset + 9-bit per level
+    PGSHIFT + (9 * level)
+}
+
+// returns the page table index of the va for the corresponding level
+pub const fn px(level: usize, va: usize) -> usize {
+    (va >> px_shift(level)) & PXMASK
 }
 
 // one beyond the highest possible virtual address
