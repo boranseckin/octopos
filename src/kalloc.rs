@@ -7,7 +7,7 @@ use crate::memlayout::PHYSTOP;
 use crate::println;
 use crate::spinlock::Mutex;
 
-// furst address after kernel, defined by kernel.ld
+// first address after kernel, defined by kernel.ld
 extern "C" {
     static mut end: [u8; 0];
 }
@@ -20,6 +20,7 @@ unsafe impl Sync for Kmem {}
 
 unsafe impl GlobalAlloc for Kmem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        println!("kalloc");
         self.0
             .lock()
             .as_mut()
@@ -43,8 +44,8 @@ pub fn init() {
 
         let size = (PHYSTOP as *const u8).offset_from(end.as_ptr()) as usize;
         println!("kmem");
-        println!("base {:?}", addr_of!(end));
         println!("top  {:#X}", PHYSTOP);
+        println!("base {:?}", addr_of!(end));
         println!("size {:#X}", size);
         println!();
         let buddy_param = BuddyAllocParam::new(end.as_ptr(), size, 16);

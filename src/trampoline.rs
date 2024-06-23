@@ -19,6 +19,7 @@ unsafe extern "C" fn trampoline() {
 
     #[no_mangle]
     #[naked]
+    #[link_section = "trampsec"]
     unsafe extern "C" fn uservec() -> ! {
         // trap.rs sets stvec to point here, so traps from user space start here in supervisor mode
         // but with a user page table.
@@ -98,6 +99,7 @@ unsafe extern "C" fn trampoline() {
 
     #[no_mangle]
     #[naked]
+    #[link_section = "trampsec"]
     unsafe extern "C" fn userret(page_table: usize) -> ! {
         // called by usertrapret() in trap.rs to switch from kernel to user
         asm!(
