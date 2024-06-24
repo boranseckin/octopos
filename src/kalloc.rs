@@ -20,7 +20,6 @@ unsafe impl Sync for Kmem {}
 
 unsafe impl GlobalAlloc for Kmem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        println!("kalloc");
         self.0
             .lock()
             .as_mut()

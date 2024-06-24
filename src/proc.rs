@@ -36,7 +36,7 @@ impl Cpu {
             self.interrupt_enabled = old_state;
         }
         self.num_off += 1;
-        InterruptLock {}
+        InterruptLock
     }
 
     fn unlock(&mut self) {
@@ -98,7 +98,7 @@ impl Cpus {
     }
 }
 
-pub struct InterruptLock {}
+pub struct InterruptLock;
 
 impl Drop for InterruptLock {
     fn drop(&mut self) {
