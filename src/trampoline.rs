@@ -14,7 +14,7 @@ use crate::memlayout::TRAPFRAME;
 #[no_mangle]
 #[link_section = "trampsec"]
 #[repr(align(4))]
-unsafe extern "C" fn trampoline() {
+pub unsafe extern "C" fn trampoline() {
     unreachable!();
 
     #[no_mangle]

@@ -19,7 +19,11 @@
 
 use crate::riscv::{MAXVA, PGSIZE};
 
+// qemu UART registers
 pub const UART0: usize = 0x1000_0000;
+
+// virtio mmio interface
+pub const VIRTIO0: usize = 0x1000_1000;
 
 // Core Local Interrupter (CLINT), contains the timer
 pub const CLINT: usize = 0x200_0000;

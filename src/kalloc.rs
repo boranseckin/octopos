@@ -1,5 +1,4 @@
 use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::addr_of;
 
 use buddy_alloc::{buddy_alloc::BuddyAlloc, BuddyAllocParam};
 
@@ -39,16 +38,18 @@ fn handle_alloc_error(layout: Layout) -> ! {
 
 pub fn init() {
     unsafe {
+        println!("kmem");
+
         let mut guard = KMEM.0.lock();
 
         let size = (PHYSTOP as *const u8).offset_from(end.as_ptr()) as usize;
-        println!("kmem");
-        println!("top  {:#X}", PHYSTOP);
-        println!("base {:?}", addr_of!(end));
-        println!("size {:#X}", size);
-        println!();
-        let buddy_param = BuddyAllocParam::new(end.as_ptr(), size, 16);
+        let alloc_param = BuddyAllocParam::new(end.as_ptr(), size, 0x1000);
+        let alloc = BuddyAlloc::new(alloc_param);
 
-        *guard = Some(BuddyAlloc::new(buddy_param))
+        println!("top  {:#X}", PHYSTOP);
+        println!("base {:#X}", end.as_ptr() as usize);
+        println!("size {:#X}\n", alloc.available_bytes());
+
+        *guard = Some(alloc);
     }
 }
