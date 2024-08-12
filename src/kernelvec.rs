@@ -2,7 +2,6 @@ use core::arch::asm;
 
 #[naked]
 #[no_mangle]
-#[repr(align(4))]
 // interrupts and exceptions while in supervisor mode come here
 //
 // the current stack is a kernel stack
@@ -87,7 +86,6 @@ pub unsafe extern "C" fn kernelvec() -> ! {
 
 #[naked]
 #[no_mangle]
-#[repr(align(4))]
 // machine mode timer interrupt
 pub unsafe extern "C" fn timervec() -> ! {
     // start.rs has set up the memory that mscratch points to:
