@@ -26,9 +26,9 @@ use core::mem::MaybeUninit;
 use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0};
-use crate::println;
+use crate::proc::PROCS;
 use crate::riscv::{
-    pa_to_pte, pg_round_down, pte_to_pa, px, MAXVA, PGSHIFT, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X,
+    pa_to_pte, pg_round_down, pte_to_pa, px, MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X,
 };
 use crate::trampoline::trampoline;
 
@@ -41,11 +41,11 @@ pub static mut KVM: UnsafeCell<MaybeUninit<Kvm>> = Kvm::new_uninit();
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-struct PA(usize);
+pub struct PA(pub usize);
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-struct VA(usize);
+pub struct VA(pub usize);
 
 #[repr(C, align(4096))]
 #[derive(Debug, Clone)]
@@ -108,12 +108,12 @@ impl IndexMut<usize> for RawPageTable {
 }
 
 #[derive(Debug, Clone)]
-struct PageTable {
+pub struct PageTable {
     ptr: *mut RawPageTable,
 }
 
 impl PageTable {
-    fn new() -> Result<Self, core::alloc::AllocError> {
+    pub fn new() -> Result<Self, core::alloc::AllocError> {
         Ok(Self {
             ptr: RawPageTable::try_new()?,
         })
@@ -123,6 +123,10 @@ impl PageTable {
         Self {
             ptr: pa.0 as *mut RawPageTable,
         }
+    }
+
+    pub fn as_pa(&self) -> PA {
+        PA(self.ptr as usize)
     }
 
     fn walk(&mut self, va: VA, alloc: bool) -> Option<&mut PageTableEntry> {
@@ -191,15 +195,15 @@ impl Kvm {
         *inner = MaybeUninit::new(Kvm(PageTable::new().unwrap()));
     }
 
-    fn get() -> &'static Self {
+    pub fn get() -> &'static Self {
         unsafe { &*(*KVM.get()).as_ptr() }
     }
 
-    fn get_mut() -> &'static mut Self {
+    pub fn get_mut() -> &'static mut Self {
         unsafe { &mut *(*KVM.get()).as_mut_ptr() }
     }
 
-    fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
+    pub fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
         if self.0.map_pages(va, pa, size, perm).is_err() {
             panic!("kvmmap");
         }
@@ -238,6 +242,8 @@ impl Kvm {
             PGSIZE,
             PTE_R | PTE_X,
         );
+
+        PROCS.map_stacks();
     }
 }
 

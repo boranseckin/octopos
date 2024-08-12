@@ -1,13 +1,17 @@
-use alloc::string::String;
-use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 use core::mem::{transmute, MaybeUninit};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::param::NCPU;
-use crate::riscv::interrupts;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::sync::Arc;
+
+use crate::memlayout::kstack;
+use crate::param::{NCPU, NPROC};
 use crate::riscv::registers::tp;
-use crate::spinlock::SpinLock;
+use crate::riscv::{interrupts, PGSIZE, PTE_R, PTE_W};
+use crate::spinlock::{Mutex, SpinLock};
+use crate::vm::{Kvm, PageTable, VA};
 
 pub static CPUS: Cpus = Cpus::new();
 
@@ -221,6 +225,43 @@ impl Default for PID {
     }
 }
 
+pub static mut PROCS: Procs = Procs::new();
+
+pub struct Procs([MaybeUninit<Proc>; NPROC]);
+
+impl Procs {
+    const fn new() -> Self {
+        Self([const { MaybeUninit::uninit() }; NPROC])
+    }
+
+    pub fn init(&mut self) {
+        for (i, p) in self.0.iter_mut().enumerate() {
+            let mut proc = Proc::new();
+            proc.data.kstack = VA(kstack(i));
+            p.write(proc);
+            unsafe { p.assume_init_mut() };
+        }
+    }
+
+    pub fn map_stacks(&mut self) {
+        for (i, _) in self.0.iter().enumerate() {
+            // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
+            // initializer works for now. It would be better to create a new struct called Stack...
+            let pa = PageTable::new().expect("proc map stack kalloc").as_pa();
+            // Cannot get va from proc.data.kstack since init function is not called yet.
+            let va = VA(kstack(i));
+            Kvm::get_mut().map(va, pa, PGSIZE, PTE_R | PTE_W);
+        }
+    }
+}
+
+// Per-process state
+pub struct Proc {
+    pub inner: Mutex<ProcInner>,
+    data: ProcData,
+    // TODO: parent
+}
+
 pub enum ProcState {
     Unused,
     Used,
@@ -230,30 +271,79 @@ pub enum ProcState {
     Zombie,
 }
 
-// Per-process state
-pub struct Proc {
-    inner: ProcInner,
-    data: ProcData,
-}
-
-// lock must be held when using these
+// Public fields for Proc, lock must be held when using these
 pub struct ProcInner {
+    // Process state
     pub state: ProcState,
+    // If Some, sleeping on chan
     pub chan: Option<()>,
-    pub killed: Option<()>,
+    // If Some, have been killed
+    pub killed: bool,
+    // Exit status to be returned to parent's wait
     pub xstate: i32,
+    // Process ID
     pub pid: PID,
 }
 
+impl ProcInner {
+    fn new() -> Self {
+        Self {
+            state: ProcState::Unused,
+            chan: None,
+            killed: false,
+            xstate: 0,
+            pid: PID::new(),
+        }
+    }
+}
+
+// Private fields for Proc
 struct ProcData {
-    kstack: usize,
+    // Virtual address of kernel stack
+    kstack: VA,
+    // Size of process memory (bytes)
     sz: usize,
-    // pagetable: PageTable,
-    trapframe: TrapFrame,
+    // User page table
+    pagetable: PageTable,
+    // Data page for trampoline
+    trapframe: Box<TrapFrame>,
+    // swtch() here to run process
     context: Context,
+    // Open files
     open_files: (),
+    // Current directory
     cwd: (),
+    // Process name
     name: String,
+}
+
+impl ProcData {
+    fn new() -> Self {
+        Self {
+            kstack: VA(0),
+            sz: 0,
+            pagetable: todo!(),
+            trapframe: todo!(),
+            context: Context::new(),
+            open_files: (),
+            cwd: (),
+            name: Default::default(),
+        }
+    }
+}
+
+impl Proc {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(ProcInner::new(), "proc"),
+            data: ProcData::new(),
+        }
+    }
+
+    fn init(&mut self) {
+        let guard = self.inner.lock();
+        // TODO: Wait_lock
+    }
 }
 
 pub fn sleep(chan: usize, lock: SpinLock) {}

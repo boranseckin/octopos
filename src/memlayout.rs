@@ -57,7 +57,7 @@ pub const fn kstack(p: usize) -> usize {
  *   fixed-size stack
  *   expandable heap
  *   ...
- *   TRAPFRAM (p->trapframe, used by the trampoline)
+ *   TRAPFRAME (p->trapframe, used by the trampoline)
  *   TRAMPOLINE (the same page as in the kernel)
  */
 pub const TRAPFRAME: usize = TRAMPOLINE - PGSIZE;
