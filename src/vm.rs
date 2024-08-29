@@ -28,7 +28,9 @@ use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0};
 use crate::proc::PROCS;
 use crate::riscv::{
-    pa_to_pte, pg_round_down, pte_to_pa, px, MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X,
+    self, pa_to_pte, pg_round_down, pte_to_pa, px,
+    registers::{satp, vma},
+    MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X,
 };
 use crate::trampoline::trampoline;
 
@@ -247,9 +249,24 @@ impl Kvm {
     }
 }
 
+// Initialize kernel page table
 pub fn kinit() {
     unsafe {
         Kvm::init();
         Kvm::get_mut().make();
+    }
+}
+
+// Switch hardware page table register to the kernel's page table and enable paging
+pub fn hartinit() {
+    unsafe {
+        // wait for any previous writes to the page table memory to finish
+        vma::sfence();
+
+        // set kvm as the page table address
+        satp::write(satp::make(Kvm::get().0.as_pa().0));
+
+        // flush stale entries from the TLB
+        vma::sfence();
     }
 }

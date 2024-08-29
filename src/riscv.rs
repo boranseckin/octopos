@@ -210,8 +210,16 @@ pub mod registers {
     }
 
     // Supervisor Address Translation and Protection register, satp
+    // holds the address of the page table
     pub mod satp {
         use core::arch::asm;
+
+        // use riscv's sv39 page table scheme
+        const SV39: usize = 8 << 60;
+
+        pub const fn make(pagetable: usize) -> usize {
+            SV39 | (pagetable >> 12)
+        }
 
         #[inline]
         pub unsafe fn read() -> usize {
@@ -240,6 +248,17 @@ pub mod registers {
         #[inline]
         pub unsafe fn write(bits: usize) {
             asm!("mv tp, {}", in(reg) bits);
+        }
+    }
+
+    pub mod vma {
+        use core::arch::asm;
+
+        #[inline]
+        // Synchronizes updates to the supervisor memory-management data structers.
+        // When used with r1=0 and r2=0, The fence also invalidates all address-translation cache entries, for all address spaces.
+        pub unsafe fn sfence() {
+            asm!("sfence.vma zero, zero");
         }
     }
 }

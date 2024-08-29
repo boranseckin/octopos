@@ -26,6 +26,7 @@ extern "C" fn main() -> ! {
 
         kalloc::init();
         vm::kinit();
+        vm::hartinit();
 
         println!("hart {cpu_id} is starting");
         STARTED.store(true, Ordering::SeqCst);
@@ -39,6 +40,8 @@ extern "C" fn main() -> ! {
         }
 
         println!("hart {cpu_id} is starting");
+
+        vm::hartinit();
 
         loop {
             core::hint::spin_loop()
