@@ -10,6 +10,7 @@ use kernel::kalloc;
 use kernel::printf;
 use kernel::println;
 use kernel::proc::Cpus;
+use kernel::trap;
 use kernel::vm;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -26,7 +27,9 @@ extern "C" fn main() -> ! {
 
         kalloc::init();
         vm::kinit();
-        vm::hartinit();
+        vm::init_hart();
+        trap::init();
+        trap::init_hart();
 
         println!("hart {cpu_id} is starting");
         STARTED.store(true, Ordering::SeqCst);
@@ -41,7 +44,8 @@ extern "C" fn main() -> ! {
 
         println!("hart {cpu_id} is starting");
 
-        vm::hartinit();
+        vm::init_hart();
+        trap::init_hart();
 
         loop {
             core::hint::spin_loop()

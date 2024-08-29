@@ -83,6 +83,23 @@ pub mod registers {
         }
     }
 
+    // Supervisor Trap-Vector Base Address
+    pub mod stvec {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            let bits: usize;
+            asm!("csrr {}, stvec", out(reg) bits);
+            bits
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            asm!("csrw stvec, {}", in(reg) bits);
+        }
+    }
+
     // Supervisor Exception Program Counter
     // holds the instruction address to which a return from exception will go
     pub mod sepc {

@@ -258,7 +258,7 @@ pub fn kinit() {
 }
 
 // Switch hardware page table register to the kernel's page table and enable paging
-pub fn hartinit() {
+pub fn init_hart() {
     unsafe {
         // wait for any previous writes to the page table memory to finish
         vma::sfence();

@@ -339,11 +339,6 @@ impl Proc {
             data: ProcData::new(),
         }
     }
-
-    fn init(&mut self) {
-        let guard = self.inner.lock();
-        // TODO: Wait_lock
-    }
 }
 
 pub fn sleep(chan: usize, lock: SpinLock) {}
