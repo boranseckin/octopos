@@ -2,7 +2,6 @@
 #![feature(fn_align)]
 #![feature(naked_functions)]
 #![feature(negative_impls)]
-#![feature(asm_const)]
 #![feature(allocator_api)]
 #![feature(new_uninit)]
 #![feature(alloc_error_handler)]
