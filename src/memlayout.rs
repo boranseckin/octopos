@@ -21,20 +21,28 @@ use crate::riscv::{MAXVA, PGSIZE};
 
 // qemu UART registers
 pub const UART0: usize = 0x1000_0000;
+pub const UART0_IRQ: usize = 10;
 
 // virtio mmio interface
 pub const VIRTIO0: usize = 0x1000_1000;
+pub const VIRTIO0_IRQ: usize = 1;
 
 // Core Local Interrupter (CLINT), contains the timer
 pub const CLINT: usize = 0x200_0000;
 pub const CLINT_MTIME: usize = CLINT + 0xBFF8; // Cycles since boot
 
-pub const fn clint_mtimecmp(hartid: usize) -> usize {
-    CLINT + 0x4000 + 8 * hartid
+pub const fn clint_mtimecmp(hart: usize) -> usize {
+    CLINT + 0x4000 + 8 * hart
 }
 
 // Platform-Level Interrupt Controller (PLIC)
 pub const PLIC: usize = 0x0C00_0000;
+pub const fn plic_senable(hart: usize) -> usize {
+    PLIC + 0x2000 + hart * 0x100
+}
+pub const fn plic_spriority(hart: usize) -> usize {
+    PLIC + 0x201000 + hart * 0x2000
+}
 
 // Physical RAM resides from KERNBASE to PHYSTOP
 pub const KERNBASE: usize = 0x8000_0000;

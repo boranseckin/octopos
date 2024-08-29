@@ -7,6 +7,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use kernel::console;
 use kernel::kalloc;
+use kernel::plic;
 use kernel::printf;
 use kernel::println;
 use kernel::proc::Cpus;
@@ -30,6 +31,8 @@ extern "C" fn main() -> ! {
         vm::init_hart();
         trap::init();
         trap::init_hart();
+        plic::init();
+        plic::init_hart();
 
         println!("hart {cpu_id} is starting");
         STARTED.store(true, Ordering::SeqCst);
@@ -46,6 +49,7 @@ extern "C" fn main() -> ! {
 
         vm::init_hart();
         trap::init_hart();
+        plic::init_hart();
 
         loop {
             core::hint::spin_loop()

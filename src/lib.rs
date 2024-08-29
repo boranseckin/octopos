@@ -18,6 +18,7 @@ pub mod kalloc;
 pub mod kernelvec;
 pub mod memlayout;
 pub mod param;
+pub mod plic;
 pub mod printf;
 pub mod proc;
 pub mod riscv;
