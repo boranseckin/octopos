@@ -3,7 +3,6 @@
 #![feature(naked_functions)]
 #![feature(negative_impls)]
 #![feature(allocator_api)]
-#![feature(new_uninit)]
 #![feature(alloc_error_handler)]
 #![feature(const_refs_to_static)]
 #![allow(unused)]
