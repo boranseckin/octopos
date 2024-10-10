@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::arch::naked_asm;
 
 #[naked]
 #[no_mangle]
@@ -8,7 +8,7 @@ use core::arch::asm;
 // push all registers, call kerneltrap()
 // when kerneltrap() returns, restore registers and return
 pub unsafe extern "C" fn kernelvec() -> ! {
-    asm!(
+    naked_asm!(
         // make room to save registers
         "addi sp, sp, -256",
         // save the registers
@@ -80,7 +80,6 @@ pub unsafe extern "C" fn kernelvec() -> ! {
         "addi sp, sp, 256",
         // return to whatever we were doing in the kernel
         "sret",
-        options(noreturn)
     );
 }
 
@@ -93,7 +92,7 @@ pub unsafe extern "C" fn timervec() -> ! {
     // scratch[24] : address of CLINT's MTIMECMP register.
     // scratch[32] : desired interval between interrupts.
 
-    asm!(
+    naked_asm!(
         // save register
         "csrrw a0, mscratch, a0",
         "sd a1, 0(a0)",
@@ -115,6 +114,5 @@ pub unsafe extern "C" fn timervec() -> ! {
         "csrrw a0, mscratch, a0",
         // return from the interrupt
         "mret",
-        options(noreturn)
     );
 }

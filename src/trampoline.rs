@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::arch::naked_asm;
 
 use crate::memlayout::TRAPFRAME;
 
@@ -23,7 +23,7 @@ pub unsafe extern "C" fn trampoline() {
     unsafe extern "C" fn uservec() -> ! {
         // trap.rs sets stvec to point here, so traps from user space start here in supervisor mode
         // but with a user page table.
-        asm!(
+        naked_asm!(
             // save user a0 in sscratch so a0 can be used to get at TRAPFRAME
             "csrw sscratch, a0",
 
@@ -93,7 +93,6 @@ pub unsafe extern "C" fn trampoline() {
             "jr t0",
 
             tp = const TRAPFRAME,
-            options(noreturn),
         );
     }
 
@@ -102,7 +101,7 @@ pub unsafe extern "C" fn trampoline() {
     #[link_section = "trampsec"]
     unsafe extern "C" fn userret(page_table: usize) -> ! {
         // called by usertrapret() in trap.rs to switch from kernel to user
-        asm!(
+        naked_asm!(
             // switch to user page table
             "sfence.vma zero, zero",
             "csrw satp, a0",
@@ -150,7 +149,6 @@ pub unsafe extern "C" fn trampoline() {
             "sret",
 
             tf = const TRAPFRAME,
-            options(noreturn)
         );
     }
 }
