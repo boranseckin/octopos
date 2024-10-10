@@ -4,7 +4,6 @@
 #![feature(negative_impls)]
 #![feature(allocator_api)]
 #![feature(alloc_error_handler)]
-#![feature(const_refs_to_static)]
 #![allow(unused)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::new_without_default)]
