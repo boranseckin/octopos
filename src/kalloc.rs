@@ -8,13 +8,13 @@ use crate::spinlock::Mutex;
 
 // first address after kernel, defined by kernel.ld
 extern "C" {
-    static mut end: [u8; 0];
+    static end: [u8; 0];
 }
 
 #[global_allocator]
-pub static mut KMEM: Kmem = Kmem(Mutex::new(None, "kmem"));
+static KMEM: Kmem = Kmem(Mutex::new(None, "kmem"));
 
-pub struct Kmem(Mutex<Option<BuddyAlloc>>);
+struct Kmem(Mutex<Option<BuddyAlloc>>);
 unsafe impl Sync for Kmem {}
 
 unsafe impl GlobalAlloc for Kmem {
