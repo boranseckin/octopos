@@ -89,6 +89,7 @@ pub fn pop_off() {
 }
 
 // Locked when CPU pointer is not null.
+#[derive(Debug)]
 pub struct Mutex<T> {
     name: &'static str,
     cpu: AtomicPtr<Cpu>,
