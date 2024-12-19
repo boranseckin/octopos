@@ -98,9 +98,9 @@ pub fn handle_panic(info: &PanicInfo) -> ! {
     PRINTF.locking.store(false, Ordering::Relaxed);
 
     let cpu_id = unsafe { Cpus::get_id() };
-    eprint!("hart {cpu_id} {info}\n");
+    println!("hart {cpu_id} {info}");
 
-    PRINTF.panicked.store(false, Ordering::Relaxed);
+    PRINTF.panicked.store(true, Ordering::Relaxed);
 
     #[allow(clippy::empty_loop)]
     loop {}
