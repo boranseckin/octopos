@@ -11,7 +11,7 @@ use crate::param::{NCPU, NPROC};
 use crate::riscv::registers::tp;
 use crate::riscv::{interrupts, PGSIZE, PTE_R, PTE_W};
 use crate::spinlock::{Mutex, SpinLock};
-use crate::vm::{Kvm, PageTable, VA};
+use crate::vm::{PageTable, KVM, VA};
 
 pub static CPUS: Cpus = Cpus::new();
 
@@ -250,7 +250,10 @@ impl Procs {
             let pa = PageTable::new().expect("proc map stack kalloc").as_pa();
             // Cannot get va from proc.data.kstack since init function is not called yet.
             let va = VA(kstack(i));
-            Kvm::get_mut().map(va, pa, PGSIZE, PTE_R | PTE_W);
+            unsafe {
+                #[allow(static_mut_refs)]
+                KVM.get_mut().unwrap().map(va, pa, PGSIZE, PTE_R | PTE_W)
+            };
         }
     }
 }

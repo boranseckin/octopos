@@ -1,27 +1,8 @@
-/*
- * kvmmake
- * kvminit
- * kvminithart
- * walk
- * walkaddr
- * kvmmap
- * mappages
- * uvmunmap
- * uvmcreate
- * uvmfirst
- * uvmalloc
- * uvmdealloc
- * freewalk
- * uvmfree
- * uvmcopy
- * uvmclear
- * copyout
- * copyin
- * copyinstr
- */
+#![allow(static_mut_refs)]
 
 use alloc::boxed::Box;
 use core::cell::UnsafeCell;
+use core::iter::Once;
 use core::mem::MaybeUninit;
 use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 
@@ -32,6 +13,7 @@ use crate::riscv::{
     registers::{satp, vma},
     MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X,
 };
+use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 
 // kernel.ld sets this to end of kernel code
@@ -39,7 +21,7 @@ extern "C" {
     fn etext();
 }
 
-pub static mut KVM: UnsafeCell<MaybeUninit<Kvm>> = Kvm::new_uninit();
+pub static mut KVM: OnceLock<Kvm> = OnceLock::new();
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
@@ -185,24 +167,12 @@ impl PageTable {
     }
 }
 
+#[derive(Debug)]
 pub struct Kvm(PageTable);
 
 impl Kvm {
-    const fn new_uninit() -> UnsafeCell<MaybeUninit<Self>> {
-        UnsafeCell::new(MaybeUninit::uninit())
-    }
-
-    unsafe fn init() {
-        let inner = KVM.get_mut();
-        *inner = MaybeUninit::new(Kvm(PageTable::new().unwrap()));
-    }
-
-    pub fn get() -> &'static Self {
-        unsafe { &*(*KVM.get()).as_ptr() }
-    }
-
-    pub fn get_mut() -> &'static mut Self {
-        unsafe { &mut *(*KVM.get()).as_mut_ptr() }
+    fn new() -> Result<Self, core::alloc::AllocError> {
+        Ok(Self(PageTable::new()?))
     }
 
     pub fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
@@ -252,8 +222,8 @@ impl Kvm {
 // Initialize kernel page table
 pub fn kinit() {
     unsafe {
-        Kvm::init();
-        Kvm::get_mut().make();
+        KVM.initialize(Kvm::new);
+        KVM.get_mut().expect("kvm to be init").make();
     }
 }
 
@@ -264,7 +234,7 @@ pub fn init_hart() {
         vma::sfence();
 
         // set kvm as the page table address
-        satp::write(satp::make(Kvm::get().0.as_pa().0));
+        satp::write(satp::make(KVM.get().unwrap().0.as_pa().0));
 
         // flush stale entries from the TLB
         vma::sfence();
