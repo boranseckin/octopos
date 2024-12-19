@@ -1,6 +1,6 @@
 use crate::{
-    memlayout::{plic_senable, plic_spriority, PLIC, UART0_IRQ, VIRTIO0_IRQ},
-    proc::{Cpu, Cpus, CPUS},
+    memlayout::{PLIC, UART0_IRQ, VIRTIO0_IRQ, plic_senable, plic_spriority},
+    proc::{CPUS, Cpu, Cpus},
 };
 
 // RISCV Platfform Level Interrupt Controller (PLIC)

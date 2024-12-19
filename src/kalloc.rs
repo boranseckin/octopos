@@ -1,13 +1,13 @@
 use core::alloc::{GlobalAlloc, Layout};
 
-use buddy_alloc::{buddy_alloc::BuddyAlloc, BuddyAllocParam};
+use buddy_alloc::{BuddyAllocParam, buddy_alloc::BuddyAlloc};
 
 use crate::memlayout::PHYSTOP;
 use crate::println;
 use crate::spinlock::Mutex;
 
 // first address after kernel, defined by kernel.ld
-extern "C" {
+unsafe extern "C" {
     static end: [u8; 0];
 }
 

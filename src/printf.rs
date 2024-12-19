@@ -79,11 +79,11 @@ macro_rules! println {
     }};
 }
 
-static mut EWRITER: Writer = Writer;
+static EWRITER: Mutex<Writer> = Mutex::new(Writer, "eprintf");
 
 pub fn _eprint(args: fmt::Arguments<'_>) {
     unsafe {
-        EWRITER.write_fmt(args).unwrap();
+        EWRITER.lock().write_fmt(args).unwrap();
     }
 }
 

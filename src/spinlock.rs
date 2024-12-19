@@ -164,7 +164,7 @@ impl<T> Mutex<T> {
     // Use this over `get_mut` when you need unsafe mutable access.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut_unchecked(&self) -> &mut T {
-        &mut *self.data.get()
+        unsafe { &mut *self.data.get() }
     }
 }
 

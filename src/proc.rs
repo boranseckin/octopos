@@ -1,5 +1,5 @@
 use core::cell::UnsafeCell;
-use core::mem::{transmute, MaybeUninit};
+use core::mem::{MaybeUninit, transmute};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
@@ -9,9 +9,9 @@ use alloc::sync::Arc;
 use crate::memlayout::kstack;
 use crate::param::{NCPU, NPROC};
 use crate::riscv::registers::tp;
-use crate::riscv::{interrupts, PGSIZE, PTE_R, PTE_W};
+use crate::riscv::{PGSIZE, PTE_R, PTE_W, interrupts};
 use crate::spinlock::{Mutex, SpinLock};
-use crate::vm::{PageTable, KVM, VA};
+use crate::vm::{KVM, PageTable, VA};
 
 pub static CPUS: Cpus = Cpus::new();
 
@@ -71,7 +71,7 @@ impl Cpus {
     /// to prevent race with process being moved to a different CPU.
     #[inline]
     pub unsafe fn get_id() -> usize {
-        tp::read()
+        unsafe { tp::read() }
     }
 
     /// Returns a mutable pointer to this CPU's [`Cpu`] struct.
@@ -79,9 +79,11 @@ impl Cpus {
     /// # Safety: must be called with interrupts disabled,
     /// to prevent race with process being moved to a different CPU.
     pub unsafe fn mycpu() -> *mut Cpu {
-        assert!(!interrupts::get(), "mycpu interrupts enabled");
-        let id = Self::get_id();
-        CPUS.0[id].get()
+        unsafe {
+            assert!(!interrupts::get(), "mycpu interrupts enabled");
+            let id = Self::get_id();
+            CPUS.0[id].get()
+        }
     }
 
     /// Locks this CPU by disabling interrupts.

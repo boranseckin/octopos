@@ -5,9 +5,11 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let id: usize;
-            asm!("csrr {}, mhartid", out(reg) id);
-            id
+            unsafe {
+                let id: usize;
+                asm!("csrr {}, mhartid", out(reg) id);
+                id
+            }
         }
     }
 
@@ -27,14 +29,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, mstatus", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, mstatus", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw mstatus, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw mstatus, {}", in(reg) bits);
+            }
         }
 
         #[inline]
@@ -60,14 +66,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, sstatus", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, sstatus", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw sstatus, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw sstatus, {}", in(reg) bits);
+            }
         }
     }
 
@@ -77,9 +87,11 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, scause", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, scause", out(reg) bits);
+                bits
+            }
         }
     }
 
@@ -89,14 +101,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, stvec", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, stvec", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw stvec, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw stvec, {}", in(reg) bits);
+            }
         }
     }
 
@@ -107,14 +123,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, sepc", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, sepc", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw sepc, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw sepc, {}", in(reg) bits);
+            }
         }
     }
 
@@ -124,7 +144,9 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw mepc, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw mepc, {}", in(reg) bits);
+            }
         }
     }
 
@@ -134,7 +156,9 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw medeleg, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw medeleg, {}", in(reg) bits);
+            }
         }
     }
 
@@ -144,7 +168,9 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw mideleg, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw mideleg, {}", in(reg) bits);
+            }
         }
     }
 
@@ -153,7 +179,9 @@ pub mod registers {
         use core::arch::asm;
 
         pub unsafe fn write(bits: usize) {
-            asm!("csrw mscratch, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw mscratch, {}", in(reg) bits);
+            }
         }
     }
 
@@ -162,7 +190,9 @@ pub mod registers {
         use core::arch::asm;
 
         pub unsafe fn write(bits: usize) {
-            asm!("csrw mtvec, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw mtvec, {}", in(reg) bits);
+            }
         }
     }
 
@@ -171,7 +201,9 @@ pub mod registers {
         use core::arch::asm;
 
         pub unsafe fn write(bits: usize) {
-            asm!("csrw pmpcfg0, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw pmpcfg0, {}", in(reg) bits);
+            }
         }
     }
 
@@ -180,7 +212,9 @@ pub mod registers {
         use core::arch::asm;
 
         pub unsafe fn write(bits: usize) {
-            asm!("csrw pmpaddr0, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw pmpaddr0, {}", in(reg) bits);
+            }
         }
     }
 
@@ -194,14 +228,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, sie", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, sie", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw sie, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw sie, {}", in(reg) bits);
+            }
         }
     }
 
@@ -215,14 +253,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, mie", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, mie", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw mie, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw mie, {}", in(reg) bits);
+            }
         }
     }
 
@@ -240,14 +282,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("csrr {}, satp", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, satp", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("csrw satp, {}", in(reg) bits);
+            unsafe {
+                asm!("csrw satp, {}", in(reg) bits);
+            }
         }
     }
 
@@ -257,14 +303,18 @@ pub mod registers {
 
         #[inline]
         pub unsafe fn read() -> usize {
-            let bits: usize;
-            asm!("mv {}, tp", out(reg) bits);
-            bits
+            unsafe {
+                let bits: usize;
+                asm!("mv {}, tp", out(reg) bits);
+                bits
+            }
         }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
-            asm!("mv tp, {}", in(reg) bits);
+            unsafe {
+                asm!("mv tp, {}", in(reg) bits);
+            }
         }
     }
 
@@ -275,7 +325,9 @@ pub mod registers {
         // Synchronizes updates to the supervisor memory-management data structers.
         // When used with r1=0 and r2=0, The fence also invalidates all address-translation cache entries, for all address spaces.
         pub unsafe fn sfence() {
-            asm!("sfence.vma zero, zero");
+            unsafe {
+                asm!("sfence.vma zero, zero");
+            }
         }
     }
 }

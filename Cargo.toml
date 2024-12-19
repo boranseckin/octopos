@@ -2,7 +2,7 @@
 name = "octopos"
 version = "0.1.0"
 authors = ["Boran Seckin <boran@boranseckin.com>"]
-edition = "2021"
+edition = "2024"
 description = "xv6 for RISC-V in Rust"
 repository = "https://github.com/boranseckin/octopos"
 license = "MIT"

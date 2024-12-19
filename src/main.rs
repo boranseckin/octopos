@@ -16,7 +16,7 @@ use kernel::vm;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
-#[export_name = "main"]
+#[unsafe(export_name = "main")]
 extern "C" fn main() -> ! {
     let cpu_id = unsafe { Cpus::get_id() };
     if cpu_id == 0 {

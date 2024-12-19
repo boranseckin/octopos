@@ -153,5 +153,5 @@ pub fn putc_sync(c: u8) {
 }
 
 pub unsafe fn init() {
-    UART.get_mut_unchecked().init()
+    unsafe { UART.get_mut_unchecked().init() }
 }

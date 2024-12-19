@@ -9,15 +9,14 @@ use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0};
 use crate::proc::PROCS;
 use crate::riscv::{
-    self, pa_to_pte, pg_round_down, pte_to_pa, px,
+    self, MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pte_to_pa, px,
     registers::{satp, vma},
-    MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X,
 };
 use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 
 // kernel.ld sets this to end of kernel code
-extern "C" {
+unsafe extern "C" {
     fn etext();
 }
 
@@ -215,7 +214,7 @@ impl Kvm {
             PTE_R | PTE_X,
         );
 
-        PROCS.map_stacks();
+        unsafe { PROCS.map_stacks() };
     }
 }
 
