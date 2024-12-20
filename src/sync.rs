@@ -1,6 +1,7 @@
-use core::cell::UnsafeCell;
+use core::cell::{Cell, UnsafeCell};
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
+use core::ops::Deref;
 
 use crate::spinlock::Mutex;
 
@@ -85,3 +86,37 @@ impl<T> Drop for OnceLock<T> {
 
 unsafe impl<T: Sync + Send> Sync for OnceLock<T> {}
 unsafe impl<T: Send> Send for OnceLock<T> {}
+
+pub struct LazyLock<T, F = fn() -> T> {
+    once: OnceLock<T>,
+    // Use option since F does not have a default after Cell::take()
+    func: Cell<Option<F>>,
+}
+
+impl<T, F: FnOnce() -> T> LazyLock<T, F> {
+    pub const fn new(f: F) -> Self {
+        Self {
+            once: OnceLock::new(),
+            func: Cell::new(Some(f)),
+        }
+    }
+}
+
+impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        if !self.once.is_init() {
+            self.once
+                .initialize(|| {
+                    let f = self.func.take().unwrap();
+                    let value = f();
+                    Ok::<T, ()>(value)
+                })
+                .expect("lazy lock to be able to init");
+        }
+        self.once.get().expect("lazy lock to be init")
+    }
+}
+
+unsafe impl<T: Sync + Send, F: Send> Sync for LazyLock<T, F> {}
