@@ -10,7 +10,7 @@ use kernel::kalloc;
 use kernel::plic;
 use kernel::printf;
 use kernel::println;
-use kernel::proc::Cpus;
+use kernel::proc::{self, Cpus};
 use kernel::trap;
 use kernel::vm;
 
@@ -29,6 +29,7 @@ extern "C" fn main() -> ! {
         kalloc::init();
         vm::kinit();
         vm::init_hart();
+        proc::init();
         trap::init();
         trap::init_hart();
         plic::init();

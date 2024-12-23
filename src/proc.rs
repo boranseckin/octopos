@@ -5,12 +5,15 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use crate::memlayout::kstack;
 use crate::param::{NCPU, NPROC};
+use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, interrupts};
 use crate::spinlock::{Mutex, SpinLock};
+use crate::sync::LazyLock;
 use crate::vm::{KVM, PageTable, VA};
 
 pub static CPUS: Cpus = Cpus::new();
@@ -113,6 +116,7 @@ impl Drop for InterruptLock {
 }
 
 /// Saved registers for kernel context switches.
+#[derive(Debug)]
 #[repr(C)]
 pub struct Context {
     pub ra: usize,
@@ -172,6 +176,7 @@ impl Default for Context {
 // the trapframe includes callee-saved user registers like s0-s11 because the
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
+#[derive(Debug)]
 #[repr(C, align(4096))]
 pub struct TrapFrame {
     /*   0 */ pub kernel_satp: usize, // kernel page table
@@ -212,6 +217,7 @@ pub struct TrapFrame {
     /* 280 */ pub t6: usize,
 }
 
+#[derive(Debug)]
 pub struct PID(usize);
 
 impl PID {
@@ -227,25 +233,22 @@ impl Default for PID {
     }
 }
 
-pub static mut PROCS: Procs = Procs::new();
+pub static PROCS: LazyLock<Procs> = LazyLock::new(Procs::new);
 
-pub struct Procs([MaybeUninit<Proc>; NPROC]);
+pub struct Procs(pub Vec<Arc<Proc>>);
 
 impl Procs {
-    const fn new() -> Self {
-        Self([const { MaybeUninit::uninit() }; NPROC])
+    pub fn new() -> Self {
+        // don't like how this turned out
+        let pool = [(); NPROC]
+            .iter()
+            .enumerate()
+            .map(|(i, _)| Arc::new(Proc::new(i)))
+            .collect::<Vec<_>>();
+        Self(pool)
     }
 
-    pub fn init(&mut self) {
-        for (i, p) in self.0.iter_mut().enumerate() {
-            let mut proc = Proc::new();
-            proc.data.kstack = VA(kstack(i));
-            p.write(proc);
-            unsafe { p.assume_init_mut() };
-        }
-    }
-
-    pub fn map_stacks(&mut self) {
+    pub unsafe fn map_stacks(&self) {
         for (i, _) in self.0.iter().enumerate() {
             // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
             // initializer works for now. It would be better to create a new struct called Stack...
@@ -260,13 +263,26 @@ impl Procs {
     }
 }
 
+unsafe impl Sync for Procs {}
+
+pub fn init() {
+    unsafe {
+        for p in PROCS.0.iter() {
+            p.data_mut().kstack = VA(kstack(p.id));
+        }
+    }
+}
+
 // Per-process state
+#[derive(Debug)]
 pub struct Proc {
+    id: usize,
     pub inner: Mutex<ProcInner>,
-    data: ProcData,
+    data: UnsafeCell<ProcData>,
     // TODO: parent
 }
 
+#[derive(Debug)]
 pub enum ProcState {
     Unused,
     Used,
@@ -277,6 +293,7 @@ pub enum ProcState {
 }
 
 // Public fields for Proc, lock must be held when using these
+#[derive(Debug)]
 pub struct ProcInner {
     // Process state
     pub state: ProcState,
@@ -303,15 +320,16 @@ impl ProcInner {
 }
 
 // Private fields for Proc
+#[derive(Debug)]
 struct ProcData {
     // Virtual address of kernel stack
     kstack: VA,
     // Size of process memory (bytes)
     sz: usize,
     // User page table
-    pagetable: PageTable,
+    pagetable: (),
     // Data page for trampoline
-    trapframe: Box<TrapFrame>,
+    trapframe: (),
     // swtch() here to run process
     context: Context,
     // Open files
@@ -327,8 +345,8 @@ impl ProcData {
         Self {
             kstack: VA(0),
             sz: 0,
-            pagetable: todo!(),
-            trapframe: todo!(),
+            pagetable: (),
+            trapframe: (),
             context: Context::new(),
             open_files: (),
             cwd: (),
@@ -337,13 +355,27 @@ impl ProcData {
     }
 }
 
+unsafe impl Sync for ProcData {}
+
 impl Proc {
-    fn new() -> Self {
+    fn new(id: usize) -> Self {
         Self {
+            id,
             inner: Mutex::new(ProcInner::new(), "proc"),
-            data: ProcData::new(),
+            data: UnsafeCell::new(ProcData::new()),
         }
     }
+
+    unsafe fn data(&self) -> &ProcData {
+        unsafe { &*self.data.get() }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn data_mut(&self) -> &mut ProcData {
+        unsafe { &mut *self.data.get() }
+    }
 }
+
+unsafe impl Sync for Proc {}
 
 pub fn sleep(chan: usize, lock: SpinLock) {}

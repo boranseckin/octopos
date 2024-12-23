@@ -67,6 +67,16 @@ impl<T> OnceLock<T> {
         }
     }
 
+    pub fn get_or_init(&self, f: impl FnOnce() -> T) -> &T {
+        match self.get() {
+            Some(value) => value,
+            None => {
+                self.initialize(|| Ok::<T, ()>(f()));
+                unsafe { self.get_unchecked() }
+            }
+        }
+    }
+
     unsafe fn get_unchecked(&self) -> &T {
         unsafe { (*self.value.get()).assume_init_ref() }
     }
@@ -93,7 +103,7 @@ pub struct LazyLock<T, F = fn() -> T> {
     func: Cell<Option<F>>,
 }
 
-impl<T, F: FnOnce() -> T> LazyLock<T, F> {
+impl<T, F> LazyLock<T, F> {
     pub const fn new(f: F) -> Self {
         Self {
             once: OnceLock::new(),
@@ -102,21 +112,22 @@ impl<T, F: FnOnce() -> T> LazyLock<T, F> {
     }
 }
 
+impl<T, F: FnOnce() -> T> LazyLock<T, F> {
+    pub fn force(this: &LazyLock<T, F>) -> &T {
+        this.once.get_or_init(|| {
+            let f = this.func.take().expect("lazy lock to be not init");
+            f()
+        })
+    }
+}
+
 impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        if !self.once.is_init() {
-            self.once
-                .initialize(|| {
-                    let f = self.func.take().unwrap();
-                    let value = f();
-                    Ok::<T, ()>(value)
-                })
-                .expect("lazy lock to be able to init");
-        }
-        self.once.get().expect("lazy lock to be init")
+        LazyLock::force(self)
     }
 }
 
-unsafe impl<T: Sync + Send, F: Send> Sync for LazyLock<T, F> {}
+// unsafe impl<T: Sync + Send, F: Send> Sync for LazyLock<T, F> {}
+unsafe impl<T, F: Send> Sync for LazyLock<T, F> where OnceLock<T>: Sync {}
