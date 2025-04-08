@@ -95,6 +95,20 @@ pub mod registers {
         }
     }
 
+    // Machine-mode Cycle Counter
+    pub mod time {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, time", out(reg) bits);
+                bits
+            }
+        }
+    }
+
     // Supervisor Trap-Vector Base Address
     pub mod stvec {
         use core::arch::asm;
@@ -112,6 +126,27 @@ pub mod registers {
         pub unsafe fn write(bits: usize) {
             unsafe {
                 asm!("csrw stvec, {}", in(reg) bits);
+            }
+        }
+    }
+
+    // Supervisor Time Comparison Register
+    pub mod stimecmp {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, 0x14d", out(reg) bits);
+                bits
+            }
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            unsafe {
+                asm!("csrw 0x14d, {}", in(reg) bits);
             }
         }
     }
