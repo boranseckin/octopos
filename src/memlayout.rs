@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 /* Physical memory layout
  * qemu -machine virt is set up like this,
  * based on qemu's hw/riscv/virt.c:
@@ -16,16 +17,15 @@
  * end -- start of kernel page allocation area
  * PHYSTOP -- end RAM used by the kernel
  */
-
 use crate::riscv::{MAXVA, PGSIZE};
 
 // qemu UART registers
-pub const UART0: usize = 0x1000_0000;
-pub const UART0_IRQ: usize = 10;
+pub const UART0: u32 = 0x1000_0000;
+pub const UART0_IRQ: u32 = 10;
 
 // virtio mmio interface
-pub const VIRTIO0: usize = 0x1000_1000;
-pub const VIRTIO0_IRQ: usize = 1;
+pub const VIRTIO0: u32 = 0x1000_1000;
+pub const VIRTIO0_IRQ: u32 = 1;
 
 // Core Local Interrupter (CLINT), contains the timer
 pub const CLINT: usize = 0x200_0000;
@@ -36,12 +36,18 @@ pub const fn clint_mtimecmp(hart: usize) -> usize {
 }
 
 // Platform-Level Interrupt Controller (PLIC)
-pub const PLIC: usize = 0x0C00_0000;
-pub const fn plic_senable(hart: usize) -> usize {
-    PLIC + 0x2000 + hart * 0x100
+// https://github.com/riscv/riscv-plic-spec/blob/master/riscv-plic.adoc
+pub const PLIC: u32 = 0x0C00_0000;
+pub const PLIC_PRIORITY: u32 = (PLIC + 0x0);
+pub const PLIC_PENDING: u32 = (PLIC + 0x1000);
+pub const fn PLIC_SENABLE(hart: usize) -> u32 {
+    PLIC + 0x2080 + (hart as u32 * 0x100)
 }
-pub const fn plic_spriority(hart: usize) -> usize {
-    PLIC + 0x201000 + hart * 0x2000
+pub const fn PLIC_SPRIORITY(hart: usize) -> u32 {
+    PLIC + 0x201000 + (hart as u32 * 0x2000)
+}
+pub const fn PLIC_SCLAIM(hart: usize) -> u32 {
+    PLIC + 0x201004 + (hart as u32 * 0x2000)
 }
 
 // Physical RAM resides from KERNBASE to PHYSTOP
