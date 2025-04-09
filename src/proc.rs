@@ -12,7 +12,7 @@ use crate::param::{NCPU, NPROC};
 use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, interrupts};
-use crate::spinlock::{Mutex, SpinLock};
+use crate::spinlock::{Mutex, MutexGuard, SpinLock};
 use crate::sync::LazyLock;
 use crate::vm::{KVM, PageTable, VA};
 
@@ -217,19 +217,21 @@ pub struct TrapFrame {
     /* 280 */ pub t6: usize,
 }
 
+impl TrapFrame {
+    pub fn try_new() -> Result<Self, core::alloc::AllocError> {
+        let memory: Box<MaybeUninit<Self>> = Box::try_new_zeroed()?;
+        let memory = unsafe { memory.assume_init() };
+        Ok(*memory)
+    }
+}
+
 #[derive(Debug)]
 pub struct PID(usize);
 
 impl PID {
-    pub fn new() -> Self {
+    pub fn alloc() -> Self {
         static PID_COUNT: AtomicUsize = AtomicUsize::new(0);
         PID(PID_COUNT.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl Default for PID {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -261,6 +263,46 @@ impl Procs {
             };
         }
     }
+
+    /// Look in the process table for an `ProcState::Unused` proc.
+    /// If found, initialize state required to run in the kernel,
+    /// and return both proc and its inner mutex guard.
+    pub fn alloc(
+        &self,
+    ) -> Result<(&Arc<Proc>, MutexGuard<'_, ProcInner>), core::alloc::AllocError> {
+        for proc in &self.0 {
+            let mut inner = proc.inner.lock();
+            if inner.state == ProcState::Unused {
+                inner.pid = PID::alloc();
+                inner.state = ProcState::Used;
+
+                let data = unsafe { proc.data_mut() };
+
+                // Allocate a trapframe page.
+                if let Ok(trapframe) = Box::<TrapFrame>::try_new_zeroed() {
+                    data.trapframe.replace(unsafe { trapframe.assume_init() });
+                } else {
+                    todo!("free")
+                }
+
+                // Allocate empty user page table.
+                if let Ok(pagetable) = PageTable::new() {
+                    data.pagetable = Some(pagetable);
+                } else {
+                    todo!("free")
+                }
+
+                // Set up new context to start executing at forkret, which return to user space.
+                data.context.ra = todo!("forkret");
+                data.context.sp = data.kstack.0 + PGSIZE;
+
+                return Ok((proc, inner));
+            }
+        }
+
+        // TODO: change this error to "out of free proc"
+        Err(core::alloc::AllocError)
+    }
 }
 
 unsafe impl Sync for Procs {}
@@ -282,7 +324,7 @@ pub struct Proc {
     // TODO: parent
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ProcState {
     Unused,
     Used,
@@ -314,7 +356,7 @@ impl ProcInner {
             chan: None,
             killed: false,
             xstate: 0,
-            pid: PID::new(),
+            pid: PID(0),
         }
     }
 }
@@ -327,9 +369,9 @@ struct ProcData {
     // Size of process memory (bytes)
     sz: usize,
     // User page table
-    pagetable: (),
+    pagetable: Option<PageTable>,
     // Data page for trampoline
-    trapframe: (),
+    trapframe: Option<Box<TrapFrame>>,
     // swtch() here to run process
     context: Context,
     // Open files
@@ -345,8 +387,8 @@ impl ProcData {
         Self {
             kstack: VA(0),
             sz: 0,
-            pagetable: (),
-            trapframe: (),
+            pagetable: None,
+            trapframe: None,
             context: Context::new(),
             open_files: (),
             cwd: (),
@@ -356,6 +398,7 @@ impl ProcData {
 }
 
 unsafe impl Sync for ProcData {}
+unsafe impl Send for ProcData {}
 
 impl Proc {
     fn new(id: usize) -> Self {
@@ -373,6 +416,26 @@ impl Proc {
     #[allow(clippy::mut_from_ref)]
     unsafe fn data_mut(&self) -> &mut ProcData {
         unsafe { &mut *self.data.get() }
+    }
+
+    /// Free the process and the data attached to it (including user pages).
+    pub fn free(&self, mut inner: MutexGuard<'_, ProcInner>) {
+        let data = unsafe { self.data_mut() };
+
+        data.trapframe.take();
+
+        if let Some(pagetable) = data.pagetable.take() {
+            todo!("free")
+        }
+
+        data.sz = 0;
+        inner.pid = PID(0);
+        // TODO: parent
+        data.name.clear();
+        inner.chan = None;
+        inner.killed = false;
+        inner.xstate = 0;
+        inner.state = ProcState::Unused;
     }
 }
 
