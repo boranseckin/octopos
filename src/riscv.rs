@@ -399,10 +399,15 @@ pub const fn pg_round_down(addr: usize) -> usize {
     addr & !(PGSIZE - 1)
 }
 
+/// Valid bit
 pub const PTE_V: usize = 1 << 0;
+/// Readable bit
 pub const PTE_R: usize = 1 << 1;
+/// Writable bit
 pub const PTE_W: usize = 1 << 2;
+/// Executable bit
 pub const PTE_X: usize = 1 << 3;
+/// User bit (if not set, can only be used in supervisor mode)
 pub const PTE_U: usize = 1 << 4;
 
 pub const fn pa_to_pte(pa: usize) -> usize {

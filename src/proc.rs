@@ -7,6 +7,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use crate::error::KernelError;
 use crate::memlayout::kstack;
 use crate::param::{NCPU, NPROC};
 use crate::println;
@@ -218,7 +219,7 @@ pub struct TrapFrame {
 }
 
 impl TrapFrame {
-    pub fn try_new() -> Result<Self, core::alloc::AllocError> {
+    pub fn try_new() -> Result<Self, KernelError> {
         let memory: Box<MaybeUninit<Self>> = Box::try_new_zeroed()?;
         let memory = unsafe { memory.assume_init() };
         Ok(*memory)
@@ -254,7 +255,7 @@ impl Procs {
         for (i, _) in self.0.iter().enumerate() {
             // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
             // initializer works for now. It would be better to create a new struct called Stack...
-            let pa = PageTable::new().expect("proc map stack kalloc").as_pa();
+            let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
             // Cannot get va from proc.data.kstack since init function is not called yet.
             let va = VA(kstack(i));
             unsafe {
@@ -267,9 +268,7 @@ impl Procs {
     /// Look in the process table for an `ProcState::Unused` proc.
     /// If found, initialize state required to run in the kernel,
     /// and return both proc and its inner mutex guard.
-    pub fn alloc(
-        &self,
-    ) -> Result<(&Arc<Proc>, MutexGuard<'_, ProcInner>), core::alloc::AllocError> {
+    pub fn alloc(&self) -> Result<(&Arc<Proc>, MutexGuard<'_, ProcInner>), KernelError> {
         for proc in &self.0 {
             let mut inner = proc.inner.lock();
             if inner.state == ProcState::Unused {
@@ -286,7 +285,7 @@ impl Procs {
                 }
 
                 // Allocate empty user page table.
-                if let Ok(pagetable) = PageTable::new() {
+                if let Ok(pagetable) = PageTable::try_new() {
                     data.pagetable = Some(pagetable);
                 } else {
                     todo!("free")
@@ -301,7 +300,7 @@ impl Procs {
         }
 
         // TODO: change this error to "out of free proc"
-        Err(core::alloc::AllocError)
+        Err(KernelError::AllocError)
     }
 }
 

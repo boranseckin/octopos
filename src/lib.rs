@@ -12,6 +12,7 @@ extern crate alloc;
 
 pub mod console;
 pub mod entry;
+pub mod error;
 pub mod kalloc;
 pub mod kernelvec;
 pub mod memlayout;

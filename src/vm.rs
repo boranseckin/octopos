@@ -6,12 +6,14 @@ use core::iter::Once;
 use core::mem::MaybeUninit;
 use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 
+use crate::error::KernelError;
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0};
 use crate::proc::PROCS;
 use crate::riscv::{
     self, MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pte_to_pa, px,
     registers::{satp, vma},
 };
+use crate::riscv::{PTE_U, pg_round_up, pte_flags};
 use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 
@@ -26,9 +28,21 @@ pub static mut KVM: OnceLock<Kvm> = OnceLock::new();
 #[derive(Debug, Clone, Copy)]
 pub struct PA(pub usize);
 
+impl From<usize> for PA {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct VA(pub usize);
+
+impl From<usize> for VA {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
 
 #[repr(C, align(4096))]
 #[derive(Debug, Clone)]
@@ -39,8 +53,25 @@ struct Page([u8; 4096]);
 struct PageTableEntry(usize);
 
 impl PageTableEntry {
+    /// Check if the PTE is valid.
     fn is_v(&self) -> bool {
-        self.0 & PTE_V == 1
+        self.0 & PTE_V != 0
+    }
+
+    /// Check if the PTE is accessible by user mode instructions.
+    fn is_u(&self) -> bool {
+        self.0 & PTE_U != 0
+    }
+
+    /// Return flags of the PTE (least significant 10 bits).
+    fn flags(&self) -> usize {
+        pte_flags(self.0)
+    }
+
+    /// Check if the PTE is a leaf (pointing to a PA).
+    fn is_leaf(&self) -> bool {
+        // If the PTE is a leaf, it should have at least one of the permission bits set.
+        (self.0 & (PTE_X | PTE_W | PTE_R)) != 0
     }
 
     fn from_pa(pa: PA) -> Self {
@@ -57,7 +88,7 @@ impl PageTableEntry {
 struct RawPageTable([PageTableEntry; 512]);
 
 impl RawPageTable {
-    fn try_new() -> Result<*mut Self, core::alloc::AllocError> {
+    fn try_new() -> Result<*mut Self, KernelError> {
         let memory: Box<MaybeUninit<RawPageTable>> = Box::try_new_zeroed()?;
         let memory = unsafe { memory.assume_init() };
         Ok(Box::into_raw(memory))
@@ -96,7 +127,7 @@ pub struct PageTable {
 }
 
 impl PageTable {
-    pub fn new() -> Result<Self, core::alloc::AllocError> {
+    pub fn try_new() -> Result<Self, KernelError> {
         Ok(Self {
             ptr: RawPageTable::try_new()?,
         })
@@ -112,32 +143,34 @@ impl PageTable {
         PA(self.ptr as usize)
     }
 
-    fn walk(&mut self, va: VA, alloc: bool) -> Option<&mut PageTableEntry> {
+    fn walk(&mut self, va: VA, alloc: bool) -> Result<&mut PageTableEntry, KernelError> {
         assert!(va.0 < MAXVA, "walk");
 
         let mut pagetable = self.ptr;
 
         unsafe {
             for level in (1..=2).rev() {
-                let pte = (*pagetable).get_mut(px(level, va.0))?;
+                let pte = (*pagetable)
+                    .get_mut(px(level, va.0))
+                    .expect("walk: valid pagetable");
 
                 if pte.is_v() {
                     pagetable = pte.as_pa().0 as *mut RawPageTable;
                 } else {
                     if !alloc {
-                        return None;
+                        return Err(KernelError::InvalidPageError);
                     }
 
-                    pagetable = RawPageTable::try_new().expect("walk page allocation");
+                    pagetable = RawPageTable::try_new()?;
                     pte.0 = pa_to_pte(pagetable as usize) | PTE_V;
                 }
             }
 
-            Some((*pagetable).get_mut(px(0, va.0)).unwrap())
+            Ok((*pagetable).get_mut(px(0, va.0)).unwrap())
         }
     }
 
-    fn map_pages(&mut self, va: VA, pa: PA, size: usize, perm: usize) -> Result<(), ()> {
+    fn map_pages(&mut self, va: VA, pa: PA, size: usize, perm: usize) -> Result<(), KernelError> {
         assert_ne!(size, 0, "map_pages: size");
 
         let last = pg_round_down(va.0 + size - 1);
@@ -145,21 +178,17 @@ impl PageTable {
         let mut pa = pa.0;
 
         loop {
-            if let Some(pte) = self.walk(va, true) {
-                assert!(!pte.is_v(), "map_pages: remap");
+            let pte = self.walk(va, true)?;
+            assert!(!pte.is_v(), "map_pages: remap");
 
-                pte.0 = pa_to_pte(pa) | perm | PTE_V;
+            pte.0 = pa_to_pte(pa) | perm | PTE_V;
 
-                if va.0 == last {
-                    break;
-                }
-
-                va.0 += PGSIZE;
-                pa += PGSIZE;
-            } else {
-                // Allocation error
-                return Err(());
+            if va.0 == last {
+                break;
             }
+
+            va.0 += PGSIZE;
+            pa += PGSIZE;
         }
 
         Ok(())
@@ -170,8 +199,8 @@ impl PageTable {
 pub struct Kvm(PageTable);
 
 impl Kvm {
-    fn new() -> Result<Self, core::alloc::AllocError> {
-        Ok(Self(PageTable::new()?))
+    fn new() -> Result<Self, KernelError> {
+        Ok(Self(PageTable::try_new()?))
     }
 
     pub fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
@@ -215,6 +244,101 @@ impl Kvm {
         );
 
         unsafe { PROCS.map_stacks() };
+    }
+}
+
+/// User Page Table
+#[derive(Debug)]
+pub struct Uvm(PageTable);
+
+impl Uvm {
+    /// Create an empty user page table.
+    pub fn try_new() -> Result<Self, KernelError> {
+        Ok(Self(PageTable::try_new()?))
+    }
+
+    /// Remove npages of mappings starting from `va`.
+    /// `va` must be page-aligned and the mapping must exist.
+    /// Optionally, free the physical memory.
+    pub fn unmap(&mut self, va: VA, npages: usize, free: bool) {
+        assert!(va.0 % PGSIZE == 0, "uvmunmap: not aligned");
+
+        for i in (va.0..va.0 + (npages * PGSIZE)).step_by(PGSIZE) {
+            match self.0.walk(va, false) {
+                Err(_) => panic!("uvmunmap: walk"),
+                Ok(pte) if !pte.is_v() => panic!("uvmunmap: not mapped"),
+                Ok(pte) if !pte.is_leaf() => panic!("uvmunmap: not a leaf"),
+                Ok(pte) => {
+                    if free {
+                        let pa = pte.as_pa();
+                        // free page
+                        let _pa = unsafe { Box::from_raw(pa.0 as *mut Page) };
+                    }
+                    *pte = PageTableEntry(0);
+                }
+            }
+        }
+    }
+
+    /// Allocate PTEs and physical memory to grow process from `old_size` to `new_size`,
+    /// which need not be page aligned.
+    /// Returns the new process size or error.
+    pub fn alloc(
+        &mut self,
+        old_size: usize,
+        new_size: usize,
+        xperm: usize,
+    ) -> Result<usize, KernelError> {
+        if new_size < old_size {
+            return Ok(old_size);
+        }
+
+        let old_size = pg_round_up(old_size);
+        for i in (old_size..new_size).step_by(PGSIZE) {
+            let mem = match Box::<Page>::try_new_zeroed() {
+                Ok(mem) => unsafe { mem.assume_init() },
+                Err(err) => {
+                    self.dealloc(i, old_size);
+                    return Err(err.into());
+                }
+            };
+
+            let mem = Box::into_raw(mem);
+
+            if let Err(err) = self.0.map_pages(
+                i.into(),
+                (mem as usize).into(),
+                PGSIZE,
+                PTE_R | PTE_U | xperm,
+            ) {
+                let _pg = unsafe { Box::from_raw(mem) };
+                self.dealloc(i, old_size);
+                return Err(err);
+            }
+        }
+
+        Ok(new_size)
+    }
+
+    /// Deallocate user pages to bring the process size from `old_size` to `new_size`.
+    /// `old_size` and `new_size` need not be page-aligned, nor does `new_size` need to be less
+    /// than `old_size`. `old_size` can be larger than the actual process size.
+    /// Return the new process size or error.
+    pub fn dealloc(&mut self, old_size: usize, new_size: usize) -> Result<usize, KernelError> {
+        if new_size >= old_size {
+            return Ok(old_size);
+        }
+
+        let original_new_size = new_size;
+        let old_size = pg_round_up(old_size);
+        let new_size = pg_round_up(new_size);
+
+        if new_size < old_size {
+            let npages = (old_size - new_size) / PGSIZE;
+            self.unmap(new_size.into(), npages, true);
+        }
+
+        Ok(original_new_size)
     }
 }
 
