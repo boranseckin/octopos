@@ -7,7 +7,7 @@ use core::mem::MaybeUninit;
 use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
 
 use crate::error::KernelError;
-use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0};
+use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
 use crate::proc::PROCS;
 use crate::riscv::{
     self, MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pte_to_pa, px,
@@ -170,7 +170,13 @@ impl PageTable {
         }
     }
 
-    fn map_pages(&mut self, va: VA, pa: PA, size: usize, perm: usize) -> Result<(), KernelError> {
+    pub fn map_pages(
+        &mut self,
+        va: VA,
+        pa: PA,
+        size: usize,
+        perm: usize,
+    ) -> Result<(), KernelError> {
         assert_ne!(size, 0, "map_pages: size");
 
         let last = pg_round_down(va.0 + size - 1);
@@ -192,6 +198,31 @@ impl PageTable {
         }
 
         Ok(())
+    }
+
+    /// Recursively free page-table pages.
+    /// All leaf mapping must already have been removed.
+    pub fn free_walk(self) {
+        let pagetable = unsafe { &mut *self.ptr };
+
+        // iterate over all 512 PTEs
+        for pte in pagetable.iter_mut() {
+            if pte.is_v() {
+                // if this PTE is a leaf
+                if pte.is_leaf() {
+                    panic!("free_walk: leaf");
+                }
+
+                // if this PTE points to a lower-level page tabel
+                let child = pte.as_pa();
+                let mut child = PageTable::from_pa(child);
+                child.free_walk();
+                *pte = PageTableEntry(0);
+            }
+        }
+
+        // Free pagetable
+        let _pt = unsafe { Box::from_raw(self.ptr) };
     }
 }
 
@@ -249,7 +280,7 @@ impl Kvm {
 
 /// User Page Table
 #[derive(Debug)]
-pub struct Uvm(PageTable);
+pub struct Uvm(pub PageTable);
 
 impl Uvm {
     /// Create an empty user page table.
@@ -323,10 +354,10 @@ impl Uvm {
     /// Deallocate user pages to bring the process size from `old_size` to `new_size`.
     /// `old_size` and `new_size` need not be page-aligned, nor does `new_size` need to be less
     /// than `old_size`. `old_size` can be larger than the actual process size.
-    /// Return the new process size or error.
-    pub fn dealloc(&mut self, old_size: usize, new_size: usize) -> Result<usize, KernelError> {
+    /// Return the new process size.
+    pub fn dealloc(&mut self, old_size: usize, new_size: usize) -> usize {
         if new_size >= old_size {
-            return Ok(old_size);
+            return old_size;
         }
 
         let original_new_size = new_size;
@@ -338,7 +369,36 @@ impl Uvm {
             self.unmap(new_size.into(), npages, true);
         }
 
-        Ok(original_new_size)
+        original_new_size
+    }
+
+    /// Free user memory pages, then free page-table pages.
+    pub fn free(mut self, size: usize) {
+        if (size > 0) {
+            self.unmap(0.into(), pg_round_up(size) / PGSIZE, true);
+        }
+        self.0.free_walk();
+    }
+
+    /// Free a process's page table, and free the physical memory it refers to.
+    pub fn proc_free(mut self, size: usize) {
+        self.unmap(TRAMPOLINE.into(), 1, false);
+        self.unmap(TRAPFRAME.into(), 1, false);
+        self.free(size);
+    }
+}
+
+impl Deref for Uvm {
+    type Target = PageTable;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Uvm {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

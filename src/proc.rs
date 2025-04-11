@@ -8,14 +8,15 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::error::KernelError;
-use crate::memlayout::kstack;
+use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
 use crate::param::{NCPU, NPROC};
 use crate::println;
 use crate::riscv::registers::tp;
-use crate::riscv::{PGSIZE, PTE_R, PTE_W, interrupts};
+use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
 use crate::spinlock::{Mutex, MutexGuard, SpinLock};
 use crate::sync::LazyLock;
-use crate::vm::{KVM, PageTable, VA};
+use crate::trampoline::trampoline;
+use crate::vm::{KVM, PageTable, Uvm, VA};
 
 pub static CPUS: Cpus = Cpus::new();
 
@@ -278,21 +279,29 @@ impl Procs {
                 let data = unsafe { proc.data_mut() };
 
                 // Allocate a trapframe page.
-                if let Ok(trapframe) = Box::<TrapFrame>::try_new_zeroed() {
-                    data.trapframe.replace(unsafe { trapframe.assume_init() });
-                } else {
-                    todo!("free")
+                match Box::<TrapFrame>::try_new_zeroed() {
+                    Ok(trapframe) => {
+                        data.trapframe.replace(unsafe { trapframe.assume_init() });
+                    }
+                    Err(err) => {
+                        proc.free(inner);
+                        return Err(err.into());
+                    }
                 }
 
-                // Allocate empty user page table.
-                if let Ok(pagetable) = PageTable::try_new() {
-                    data.pagetable = Some(pagetable);
-                } else {
-                    todo!("free")
+                // Allocate an empty user page table.
+                match proc.create_pagetable() {
+                    Ok(uvm) => {
+                        data.pagetable = Some(uvm);
+                    }
+                    Err(err) => {
+                        proc.free(inner);
+                        return Err(err);
+                    }
                 }
 
                 // Set up new context to start executing at forkret, which return to user space.
-                data.context.ra = todo!("forkret");
+                data.context.ra = fork_ret as usize;
                 data.context.sp = data.kstack.0 + PGSIZE;
 
                 return Ok((proc, inner));
@@ -366,9 +375,9 @@ struct ProcData {
     // Virtual address of kernel stack
     kstack: VA,
     // Size of process memory (bytes)
-    sz: usize,
+    size: usize,
     // User page table
-    pagetable: Option<PageTable>,
+    pagetable: Option<Uvm>,
     // Data page for trampoline
     trapframe: Option<Box<TrapFrame>>,
     // swtch() here to run process
@@ -385,7 +394,7 @@ impl ProcData {
     fn new() -> Self {
         Self {
             kstack: VA(0),
-            sz: 0,
+            size: 0,
             pagetable: None,
             trapframe: None,
             context: Context::new(),
@@ -408,7 +417,7 @@ impl Proc {
         }
     }
 
-    unsafe fn data(&self) -> &ProcData {
+    fn data(&self) -> &ProcData {
         unsafe { &*self.data.get() }
     }
 
@@ -417,17 +426,53 @@ impl Proc {
         unsafe { &mut *self.data.get() }
     }
 
+    /// Create a user page table using a given process's trapframe address, with no user memory,
+    /// but with trampoline and trapframe pages.
+    pub fn create_pagetable(&self) -> Result<Uvm, KernelError> {
+        let mut uvm = Uvm::try_new()?;
+
+        // Map the trampoline code (for system call returns) at the highest user virtual address.
+        // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
+        if let Err(err) = uvm.map_pages(
+            TRAMPOLINE.into(),
+            (trampoline as usize).into(),
+            PGSIZE,
+            PTE_R | PTE_X,
+        ) {
+            uvm.free(0);
+            return Err(err);
+        }
+
+        // Map the trapframe page just below the trampoline page, for `trampoline.rs`.
+        let data = self.data();
+        if let Err(err) = uvm.map_pages(
+            TRAPFRAME.into(),
+            // As disgusting as this is, we need to get the address of the trapframe.
+            (data.trapframe.as_deref().unwrap() as *const _ as usize).into(),
+            PGSIZE,
+            PTE_R | PTE_W,
+        ) {
+            uvm.unmap(TRAMPOLINE.into(), 1, false);
+            uvm.free(0);
+            return Err(err);
+        }
+
+        Ok(uvm)
+    }
+
     /// Free the process and the data attached to it (including user pages).
     pub fn free(&self, mut inner: MutexGuard<'_, ProcInner>) {
         let data = unsafe { self.data_mut() };
 
-        data.trapframe.take();
-
-        if let Some(pagetable) = data.pagetable.take() {
-            todo!("free")
+        if let Some(trapframe) = data.trapframe.take() {
+            let _tf = trapframe;
         }
 
-        data.sz = 0;
+        if let Some(mut uvm) = data.pagetable.take() {
+            uvm.free(data.size);
+        }
+
+        data.size = 0;
         inner.pid = PID(0);
         // TODO: parent
         data.name.clear();
@@ -439,5 +484,7 @@ impl Proc {
 }
 
 unsafe impl Sync for Proc {}
+
+unsafe extern "C" fn fork_ret() {}
 
 pub fn sleep(chan: usize, lock: SpinLock) {}
