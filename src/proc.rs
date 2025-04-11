@@ -485,6 +485,20 @@ impl Proc {
 
 unsafe impl Sync for Proc {}
 
-unsafe extern "C" fn fork_ret() {}
+pub unsafe extern "C" fn fork_ret() {
+    unsafe {
+        static mut FIRST: bool = true;
+
+        // Still holding process lock from scheduler.
+        Cpus::myproc().unwrap().inner.force_unlock();
+
+        if FIRST {
+            FIRST = false;
+            todo!("fsinit");
+        }
+
+        todo!("usertrapret")
+    }
+}
 
 pub fn sleep(chan: usize, lock: SpinLock) {}

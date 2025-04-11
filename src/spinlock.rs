@@ -59,7 +59,7 @@ impl SpinLock {
 }
 
 unsafe fn holding(lock: &SpinLock) -> bool {
-    lock.locked.load(Ordering::Relaxed) && lock.cpu == unsafe { Cpus::mycpu() }
+    lock.locked.load(Ordering::Relaxed) && core::ptr::eq(lock.cpu, unsafe { Cpus::mycpu() })
 }
 
 pub fn push_off() {
@@ -148,6 +148,14 @@ impl<T> Mutex<T> {
 
                 hint::spin_loop()
             }
+        }
+    }
+
+    /// Used by `fork_ret` to unlock after returning from scheduler.
+    pub unsafe fn force_unlock(&self) {
+        unsafe {
+            assert!(self.holding(), "force_unlock: not locked {}", self.name);
+            self.cpu.store(ptr::null_mut(), Ordering::Release);
         }
     }
 
