@@ -5,7 +5,7 @@ use core::arch::naked_asm;
 // the current stack is a kernel stack
 // push all registers, call kerneltrap()
 // when kerneltrap() returns, restore registers and return
-#[naked]
+#[unsafe(naked)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kernelvec() -> ! {
     unsafe {
@@ -85,7 +85,7 @@ pub unsafe extern "C" fn kernelvec() -> ! {
     }
 }
 
-#[naked]
+#[unsafe(naked)]
 #[unsafe(no_mangle)]
 // machine mode timer interrupt
 pub unsafe extern "C" fn timervec() -> ! {

@@ -18,7 +18,7 @@ pub unsafe extern "C" fn trampoline() {
     unreachable!();
 
     #[unsafe(no_mangle)]
-    #[naked]
+    #[unsafe(naked)]
     #[unsafe(link_section = "trampsec")]
     unsafe extern "C" fn uservec() -> ! {
         unsafe {
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn trampoline() {
     }
 
     #[unsafe(no_mangle)]
-    #[naked]
+    #[unsafe(naked)]
     #[unsafe(link_section = "trampsec")]
     unsafe extern "C" fn userret(page_table: usize) -> ! {
         unsafe {
