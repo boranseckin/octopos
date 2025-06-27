@@ -123,7 +123,7 @@ impl<T> Mutex<T> {
         self.cpu.load(Ordering::Relaxed) == unsafe { Cpus::mycpu() }
     }
 
-    pub fn lock(&self) -> MutexGuard<T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         let _intr_lock = Cpus::lock_mycpu();
 
         unsafe {
