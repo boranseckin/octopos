@@ -2,8 +2,7 @@ use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::plic;
 use crate::println;
-use crate::proc;
-use crate::proc::Cpus;
+use crate::proc::{self, Cpus};
 use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
@@ -17,21 +16,19 @@ unsafe extern "C" {
     fn userret();
 }
 
-static TICKS_LOCK: Mutex<i32> = Mutex::new(0, "time");
+static TICKS_LOCK: Mutex<usize> = Mutex::new(0, "time");
 
 pub fn init() {
     // No work since lock is already initialized
 }
 
-// set up to take exceptions and traps while in the kernel
+// Set up to take exceptions and traps while in the kernel.
 pub fn init_hart() {
-    unsafe {
-        stvec::write(kernelvec as usize);
-    }
+    unsafe { stvec::write(kernelvec as usize) };
 }
 
-// handles an interrupt, exception, or system call from user space.
-// called from trampoline.S
+// Handles an interrupt, exception, or system call from user space.
+// Called from trampoline.S
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrap() {
     unsafe {
@@ -98,13 +95,14 @@ pub unsafe extern "C" fn usertrap() {
         }
 
         if which_dev == Some(InterruptType::External) {
-            todo!("yield()")
+            proc::r#yield();
         }
 
         usertrapret();
     }
 }
 
+// Return to user space.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrapret() {
     let proc = Cpus::myproc().unwrap();
@@ -152,25 +150,46 @@ pub unsafe extern "C" fn usertrapret() {
     }
 }
 
-// interrupts and exceptions from the kernel code go here via kernelvec
-// on whatever the current kernel stack is
+// Interrupts and exceptions from the kernel code go here via kernelvec, on whatever the current
+// kernel stack is.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kerneltrap() {
     unsafe {
-        // let which_dev;
-
         let sepc = sepc::read();
         let sstatus = sstatus::read();
         let scause = scause::read();
 
         assert!(
-            sstatus & sstatus::SPP == 0,
+            sstatus & sstatus::SPP != 0,
             "kerneltrap: not from supervisor mode"
         );
 
         assert!(!interrupts::get(), "kerneltrap: interrupts enabled");
 
-        todo!()
+        match dev_intr() {
+            // interrupt or trap from unknown source
+            InterruptType::Other => {
+                println!(
+                    "scause=0x{:X} sepc=0x{:X} stval=0x{:X}",
+                    scause,
+                    sepc::read(),
+                    stval::read()
+                );
+                panic!("kerneltrap");
+            }
+
+            // give up the cpu if this is a timer interrupt
+            InterruptType::Internal if Cpus::myproc().is_some() => {
+                proc::r#yield();
+            }
+
+            _ => {}
+        }
+
+        // the yield() may have caused some traps to occur,
+        // so restore trap registers for use by kernelvec.S's sepc instruction.
+        sepc::write(sepc);
+        sstatus::write(sstatus);
     }
 }
 
@@ -181,7 +200,7 @@ pub fn clock_intr() {
     if hart == 0 {
         let mut ticks = unsafe { TICKS_LOCK.lock() };
         *ticks += 1;
-        todo!("wakeup");
+        proc::wakeup(*ticks);
     }
 
     // Ask for the next timer interrupt.
@@ -208,7 +227,7 @@ pub fn dev_intr() -> InterruptType {
 
             match irq as usize {
                 UART0_IRQ => UART.handle_interrupt(),
-                VIRTIO0_IRQ => todo!(),
+                VIRTIO0_IRQ => todo!("virtio_disk_intr()"),
                 _ => println!("unexpected interrupt irq = {irq}"),
             }
 
@@ -218,11 +237,13 @@ pub fn dev_intr() -> InterruptType {
 
             InterruptType::External
         }
+
         // Timer interrupt
         0x8000_0000_0000_0005 => {
             clock_intr();
             InterruptType::Internal
         }
+
         // some other interrupt, we don't recognize
         _ => InterruptType::Other,
     }

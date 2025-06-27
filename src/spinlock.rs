@@ -151,6 +151,10 @@ impl<T> Mutex<T> {
         }
     }
 
+    pub fn unlock(guard: MutexGuard<'_, T>) -> &'_ Mutex<T> {
+        guard.mutex
+    }
+
     /// Used by `fork_ret` to unlock after returning from scheduler.
     pub unsafe fn force_unlock(&self) {
         unsafe {

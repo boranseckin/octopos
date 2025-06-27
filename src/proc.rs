@@ -348,7 +348,7 @@ pub struct ProcInner {
     // Process state
     pub state: ProcState,
     // If Some, sleeping on chan
-    pub chan: Option<()>,
+    pub chan: usize,
     // If Some, have been killed
     pub killed: bool,
     // Exit status to be returned to parent's wait
@@ -361,7 +361,7 @@ impl ProcInner {
     fn new() -> Self {
         Self {
             state: ProcState::Unused,
-            chan: None,
+            chan: 0,
             killed: false,
             xstate: 0,
             pid: PID(0),
@@ -476,7 +476,7 @@ impl Proc {
         inner.pid = PID(0);
         // TODO: parent
         data.name.clear();
-        inner.chan = None;
+        inner.chan = 0;
         inner.killed = false;
         inner.xstate = 0;
         inner.state = ProcState::Unused;
@@ -501,12 +501,75 @@ pub unsafe extern "C" fn fork_ret() {
     }
 }
 
-pub fn sleep(chan: usize, lock: SpinLock) {}
-
 // Exit the current process. Does not return. An exited process remains in the zombie state until
 // its parent calls wait().
 pub fn exit(status: i32) -> ! {
     let proc = Cpus::myproc().unwrap();
 
+    todo!()
+}
+
+// Per-CPU process scheduler.
+// Each CPU calls scheduler() after setting itself up.
+// Scheduler never returns.  It loops, doing:
+//  - choose a process to run.
+//  - swtch to start running that process.
+//  - eventually that process transfers control
+//    via swtch back to the scheduler.
+pub fn scheduler() {
+    todo!()
+}
+
+// Switch to scheduler. Must hold only p->lock and have changed proc->state. Saves and restores
+// intena because intena is a property of this kernel thread, not this CPU. It should be
+// proc->intena and proc->noff, but that would break in the few places where a lock is held but
+// there's no process.
+pub fn sched() {
+    todo!()
+}
+
+// Give up the cpu for one scheduling round.
+pub fn r#yield() {
+    let proc = Cpus::myproc().unwrap();
+    let mut inner = proc.inner.lock();
+    inner.state = ProcState::Runnable;
+    sched();
+}
+
+// Atomically release lock and sleep on chan. Reacquires lock when awakened.
+pub fn sleep<T>(chan: usize, mut lock: MutexGuard<'_, T>) -> MutexGuard<'_, T> {
+    // Must acquire p->lock in order to change p->state and then call sched.
+    // Once we hold p->lock, we can be guaranteed that we won't miss any wakeup (wakeup locks
+    // p->lock), so it's okay to release lk.
+
+    let mutex;
+    {
+        let proc = Cpus::myproc().unwrap();
+        let mut inner = proc.inner.lock();
+
+        mutex = Mutex::unlock(lock);
+
+        // go to sleep.
+        inner.chan = chan;
+        inner.state = ProcState::Sleeping;
+
+        sched();
+
+        // tidy up.
+        inner.chan = 0;
+    } // drop inner lock
+
+    // reacquire original lock.
+    mutex.lock()
+}
+
+// Wake up all processes sleeping on chan. Must be called without any p->lock.
+pub fn wakeup(chan: usize) {
+    todo!()
+}
+
+// Kill the process with the given pid. The victim won't exit until it tries to return to user space
+// (see usertrap() in trap.rs).
+pub fn kill(pid: PID) {
     todo!()
 }
