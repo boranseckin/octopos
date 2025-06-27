@@ -228,7 +228,7 @@ impl TrapFrame {
 }
 
 #[derive(Debug)]
-pub struct PID(usize);
+pub struct PID(pub usize);
 
 impl PID {
     pub fn alloc() -> Self {
@@ -371,23 +371,23 @@ impl ProcInner {
 
 // Private fields for Proc
 #[derive(Debug)]
-struct ProcData {
+pub struct ProcData {
     // Virtual address of kernel stack
-    kstack: VA,
+    pub kstack: VA,
     // Size of process memory (bytes)
-    size: usize,
+    pub size: usize,
     // User page table
-    pagetable: Option<Uvm>,
+    pub pagetable: Option<Uvm>,
     // Data page for trampoline
-    trapframe: Option<Box<TrapFrame>>,
+    pub trapframe: Option<Box<TrapFrame>>,
     // swtch() here to run process
-    context: Context,
+    pub context: Context,
     // Open files
-    open_files: (),
+    pub open_files: (),
     // Current directory
-    cwd: (),
+    pub cwd: (),
     // Process name
-    name: String,
+    pub name: String,
 }
 
 impl ProcData {
@@ -417,12 +417,12 @@ impl Proc {
         }
     }
 
-    fn data(&self) -> &ProcData {
+    pub fn data(&self) -> &ProcData {
         unsafe { &*self.data.get() }
     }
 
     #[allow(clippy::mut_from_ref)]
-    unsafe fn data_mut(&self) -> &mut ProcData {
+    pub unsafe fn data_mut(&self) -> &mut ProcData {
         unsafe { &mut *self.data.get() }
     }
 

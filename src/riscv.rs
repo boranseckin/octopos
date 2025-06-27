@@ -130,6 +130,20 @@ pub mod registers {
         }
     }
 
+    // Supervisor Trap Value
+    pub mod stval {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, stval", out(reg) bits);
+                bits
+            }
+        }
+    }
+
     // Supervisor Time Comparison Register
     pub mod stimecmp {
         use core::arch::asm;

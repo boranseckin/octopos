@@ -22,8 +22,12 @@ pub unsafe extern "C" fn trampoline() {
     #[unsafe(link_section = "trampsec")]
     unsafe extern "C" fn uservec() -> ! {
         unsafe {
-            // trap.rs sets stvec to point here, so traps from user space start here in supervisor mode
-            // but with a user page table.
+            // trap.rs sets stvec to point here, so traps from user space start here in supervisor
+            // mode but with a user page table. To continue handling the interrupt in supervisor
+            // mode, this code switches the page table from user's to kernel's.
+            // Inside the trap, there is only 1 scratch register to use (sscratch). We use this
+            // register to hold the original value of a0, and use a0 as the general purpose
+            // register to hold the address of the TRAPFRAME.
             naked_asm!(
                 // save user a0 in sscratch so a0 can be used to get at TRAPFRAME
                 "csrw sscratch, a0",
@@ -32,7 +36,7 @@ pub unsafe extern "C" fn trampoline() {
                 // virtual address (TRAPFRAME) in every process' user page table.
                 "li a0, {tp}",
 
-                // save the user registers in tRAPFRAME
+                // save the user registers in TRAPFRAME
                 "sd ra, 40(a0)",
                 "sd sp, 48(a0)",
                 "sd gp, 56(a0)",
