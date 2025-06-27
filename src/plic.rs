@@ -1,9 +1,7 @@
 // RISCV Platfform Level Interrupt Controller (PLIC)
 
-use crate::{
-    memlayout::{PLIC, PLIC_SCLAIM, PLIC_SENABLE, PLIC_SPRIORITY, UART0_IRQ, VIRTIO0_IRQ},
-    proc::{CPUS, Cpu, Cpus},
-};
+use crate::memlayout::{PLIC, PLIC_SCLAIM, PLIC_SENABLE, PLIC_SPRIORITY, UART0_IRQ, VIRTIO0_IRQ};
+use crate::proc::{CPUS, Cpu, Cpus};
 
 pub fn init() {
     // set desired IRQ priorities non-zero (otherwise disabled)

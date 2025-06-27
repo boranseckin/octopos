@@ -1,14 +1,15 @@
 use crate::kernelvec::kernelvec;
-use crate::memlayout::{UART0_IRQ, VIRTIO0_IRQ};
+use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
+use crate::plic;
+use crate::println;
+use crate::proc;
 use crate::proc::Cpus;
-use crate::riscv::registers::{stimecmp, stval, time};
 use crate::riscv::{
-    interrupts,
-    registers::{scause, sepc, sstatus, stvec},
+    PGSIZE, interrupts,
+    registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
 };
 use crate::spinlock::Mutex;
 use crate::uart::UART;
-use crate::{plic, println};
 
 unsafe extern "C" {
     fn trampoline();
@@ -53,45 +54,51 @@ pub unsafe extern "C" fn usertrap() {
 
         let mut which_dev = None;
 
-        // system call
-        if scause::read() == 8 {
-            if proc.inner.lock().killed {
-                // TODO: proc::exit
+        match scause::read() {
+            // system call
+            8 => {
+                if proc.inner.lock().killed {
+                    proc::exit(-1);
+                }
+
+                // sepc points to the ecall instruction, but we want to return to the next instruction.
+                trapframe.epc += 4;
+
+                // an interrupt will change sepc, scause, and sstatus, so enable only now that we're
+                // done with those registers.
+                interrupts::enable();
+
+                todo!("syscall()")
             }
 
-            // sepc points to the ecall instruction, but we want to return to the next instruction.
-            trapframe.epc += 4;
+            // device interrupt
+            _ if {
+                which_dev = Some(dev_intr());
+                which_dev == Some(InterruptType::External)
+            } => {}
 
-            // an interrupt will change sepc, scause, and sstatus, so enable only now that we're
-            // done with those registers.
-            interrupts::enable();
+            // something else
+            _ => {
+                let mut inner = proc.inner.lock();
 
-            // TODO: syscall()
-        } else if {
-            which_dev = Some(dev_intr());
-            which_dev == Some(InterruptType::External)
-        } {
-            // ok
-        } else {
-            let mut inner = proc.inner.lock();
+                println!(
+                    "usertrap: unexpected scause: 0x{:X} pid={:?} sepc=0x{:X} stval=0x{:X}",
+                    scause::read(),
+                    inner.pid,
+                    sepc::read(),
+                    stval::read(),
+                );
 
-            println!(
-                "usertrap: unexpected scause: 0x{:X} pid={:?} sepc=0x{:X} stval=0x{:X}",
-                scause::read(),
-                inner.pid,
-                sepc::read(),
-                stval::read(),
-            );
-
-            inner.killed = true;
+                inner.killed = true;
+            }
         }
 
         if proc.inner.lock().killed {
-            // TODO: proc::exit
+            proc::exit(-1);
         }
 
         if which_dev == Some(InterruptType::External) {
-            // TODO: yield
+            todo!("yield()")
         }
 
         usertrapret();
@@ -99,7 +106,51 @@ pub unsafe extern "C" fn usertrap() {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn usertrapret() {}
+pub unsafe extern "C" fn usertrapret() {
+    let proc = Cpus::myproc().unwrap();
+
+    // we're about to switch the destination of traps from
+    // kerneltrap() to usertrap(), so turn off interrupts until
+    // we're back in user space, where usertrap() is correct.
+    interrupts::disable();
+
+    // send syscalls, interrupts, and exceptions to uservec in trampoline.S
+    let trampoline_uservec = TRAMPOLINE + (uservec as usize - trampoline as usize);
+    unsafe { stvec::write(trampoline_uservec) };
+
+    // set up trapframe values that uservec will need when
+    // the process next traps into the kernel.
+    let data = unsafe { proc.data_mut() };
+    let trapframe = data.trapframe.as_mut().unwrap();
+    trapframe.kernel_satp = unsafe { satp::read() };
+    trapframe.kernel_sp = data.kstack.0 + PGSIZE;
+    trapframe.kernel_trap = usertrap as usize;
+    trapframe.kernel_hartid = unsafe { tp::read() };
+
+    // set up the registers that trampoline.S's sret will use to get to user space.
+
+    // set Supervisor Previous Privilege mode to User.
+    let mut x = unsafe { sstatus::read() };
+    x &= !sstatus::SPP; // clear SPP to 0 for user mode
+    x |= sstatus::SPIE; // enable interrupts in user mode
+    unsafe { sstatus::write(x) };
+
+    // set S Exception Program Counter to the saved user pc.
+    unsafe { sepc::write(trapframe.epc) };
+
+    // tell trampoline.S the user page table to switch to.
+    let user_satp = satp::make(data.pagetable.as_ref().unwrap().0.as_pa().0);
+
+    // jump to userret in trampoline.S at the top of memory, which
+    // switches to the user page table, restores user registers,
+    // and switches to user mode with sret.
+    unsafe {
+        let trampoline_userret: usize = TRAMPOLINE + (userret as usize - trampoline as usize);
+        let trampoline_userret: extern "C" fn(usize) -> ! =
+            core::mem::transmute(trampoline_userret);
+        trampoline_userret(user_satp);
+    }
+}
 
 // interrupts and exceptions from the kernel code go here via kernelvec
 // on whatever the current kernel stack is
@@ -133,7 +184,7 @@ pub fn clock_intr() {
         todo!("wakeup");
     }
 
-    // Ask fro the next timer interrupt.
+    // Ask for the next timer interrupt.
     // This also clears the interrupt request.
     // 1000000 is about a tenth of a second.
     unsafe { stimecmp::write(time::read() + 1000000) };
@@ -146,6 +197,7 @@ pub enum InterruptType {
     Other,
 }
 
+// Check if interrupt is external or software and handle device interrupt
 pub fn dev_intr() -> InterruptType {
     let scause = unsafe { scause::read() };
 

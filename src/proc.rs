@@ -502,3 +502,11 @@ pub unsafe extern "C" fn fork_ret() {
 }
 
 pub fn sleep(chan: usize, lock: SpinLock) {}
+
+// Exit the current process. Does not return. An exited process remains in the zombie state until
+// its parent calls wait().
+pub fn exit(status: i32) -> ! {
+    let proc = Cpus::myproc().unwrap();
+
+    todo!()
+}

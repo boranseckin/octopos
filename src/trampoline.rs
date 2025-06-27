@@ -108,6 +108,7 @@ pub unsafe extern "C" fn trampoline() {
     unsafe extern "C" fn userret(page_table: usize) -> ! {
         unsafe {
             // called by usertrapret() in trap.rs to switch from kernel to user
+            // a0 includes the user page table base, passed as the only argument
             naked_asm!(
                 // switch to user page table
                 "sfence.vma zero, zero",
