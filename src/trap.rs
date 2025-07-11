@@ -49,11 +49,12 @@ pub unsafe extern "C" fn usertrap() {
         // switches to user space, overwriting sepc.
         trapframe.epc = sepc::read();
 
+        let scause = scause::Scause::from(scause::read());
         let mut which_dev = None;
 
-        match scause::read() {
-            // system call
-            8 => {
+        match scause.cause() {
+            // System call
+            scause::Trap::Exception(scause::Exception::EnvironmentCall) => {
                 if proc.inner.lock().killed {
                     proc::exit(-1);
                 }
@@ -69,18 +70,23 @@ pub unsafe extern "C" fn usertrap() {
             }
 
             // device interrupt
-            _ if {
-                which_dev = Some(dev_intr());
-                which_dev == Some(InterruptType::External)
-            } => {}
+            scause::Trap::Interrupt(intr)
+                if {
+                    which_dev = dev_intr(intr);
+                    which_dev.is_some()
+                } =>
+            {
+                // dev_intr handles the interrupt if it is a device interrupt
+                // nothing to do
+            }
 
             // something else
             _ => {
                 let mut inner = proc.inner.lock();
 
                 println!(
-                    "usertrap: unexpected scause: 0x{:X} pid={:?} sepc=0x{:X} stval=0x{:X}",
-                    scause::read(),
+                    "usertrap: unexpected scause=0x{:X} pid={:?} sepc=0x{:X} stval=0x{:X}",
+                    scause.bits(),
                     inner.pid,
                     sepc::read(),
                     stval::read(),
@@ -94,7 +100,7 @@ pub unsafe extern "C" fn usertrap() {
             proc::exit(-1);
         }
 
-        if which_dev == Some(InterruptType::External) {
+        if Some(InterruptType::Timer) == which_dev {
             proc::r#yield();
         }
 
@@ -157,7 +163,7 @@ pub unsafe extern "C" fn kerneltrap() {
     unsafe {
         let sepc = sepc::read();
         let sstatus = sstatus::read();
-        let scause = scause::read();
+        let scause = scause::Scause::from(scause::read());
 
         assert!(
             sstatus & sstatus::SPP != 0,
@@ -166,28 +172,35 @@ pub unsafe extern "C" fn kerneltrap() {
 
         assert!(!interrupts::get(), "kerneltrap: interrupts enabled");
 
-        match dev_intr() {
-            // interrupt or trap from unknown source
-            InterruptType::Other => {
+        let which_dev;
+
+        // If we got exceptions in supervisor mode, or we got an interrupt from an unknown source,
+        // it is fatal
+        match scause.cause() {
+            scause::Trap::Interrupt(intr)
+                if {
+                    which_dev = dev_intr(intr);
+                    which_dev.is_some()
+                } => {}
+
+            _ => {
                 println!(
                     "scause=0x{:X} sepc=0x{:X} stval=0x{:X}",
-                    scause,
+                    scause.bits(),
                     sepc::read(),
                     stval::read()
                 );
                 panic!("kerneltrap");
             }
-
-            // give up the cpu if this is a timer interrupt
-            InterruptType::Internal if Cpus::myproc().is_some() => {
-                proc::r#yield();
-            }
-
-            _ => {}
         }
 
-        // the yield() may have caused some traps to occur,
-        // so restore trap registers for use by kernelvec.S's sepc instruction.
+        // If we got a timer interrupt, give up the cpu for another process
+        if Some(InterruptType::Timer) == which_dev && Cpus::myproc().is_some() {
+            proc::r#yield();
+        }
+
+        // The yield() may have caused some traps to occur, so restore trap registers for use by
+        // kernelvec.S's sepc instruction.
         sepc::write(sepc);
         sstatus::write(sstatus);
     }
@@ -210,19 +223,18 @@ pub fn clock_intr() {
 }
 
 #[derive(PartialEq, Eq)]
-pub enum InterruptType {
-    Internal,
-    External,
-    Other,
+enum InterruptType {
+    Device,
+    Timer,
 }
 
-// Check if interrupt is external or software and handle device interrupt
-pub fn dev_intr() -> InterruptType {
-    let scause = unsafe { scause::read() };
+// Check if interrupt is from an external device or software timer.
+fn dev_intr(intr: scause::Interrupt) -> Option<InterruptType> {
+    println!("dev_intr");
 
-    match scause {
+    match intr {
         // Supervisor external interrupt via PLIC
-        0x8000_0000_0000_0009 => {
+        scause::Interrupt::SupervisorExternal => {
             let irq = plic::claim();
 
             match irq as usize {
@@ -235,16 +247,16 @@ pub fn dev_intr() -> InterruptType {
                 plic::complete(irq);
             }
 
-            InterruptType::External
+            Some(InterruptType::Device)
         }
 
         // Timer interrupt
-        0x8000_0000_0000_0005 => {
+        scause::Interrupt::SupervisorTimer => {
             clock_intr();
-            InterruptType::Internal
+            Some(InterruptType::Timer)
         }
 
         // some other interrupt, we don't recognize
-        _ => InterruptType::Other,
+        _ => None,
     }
 }

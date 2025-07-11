@@ -85,6 +85,102 @@ pub mod registers {
     pub mod scause {
         use core::arch::asm;
 
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Trap {
+            Interrupt(Interrupt),
+            Exception(Exception),
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Interrupt {
+            UserSoftware,
+            SupervisorSoftware,
+            UserTimer,
+            SupervisorTimer,
+            SupervisorExternal,
+            Unknown,
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Exception {
+            InstructionAddressMisaligned,
+            InstructionAccessFault,
+            IllegalInstruction,
+            Breakpoint,
+            LoadAccessFault,
+            StoreAddressMisaligned,
+            StoreAccessFault,
+            EnvironmentCall,
+            Unknown,
+        }
+
+        impl From<usize> for Interrupt {
+            fn from(value: usize) -> Self {
+                match value {
+                    0 => Interrupt::UserSoftware,
+                    1 => Interrupt::SupervisorSoftware,
+                    4 => Interrupt::UserTimer,
+                    5 => Interrupt::SupervisorTimer,
+                    9 => Interrupt::SupervisorExternal,
+                    _ => Interrupt::Unknown,
+                }
+            }
+        }
+
+        impl From<usize> for Exception {
+            fn from(value: usize) -> Self {
+                match value {
+                    0 => Exception::InstructionAddressMisaligned,
+                    1 => Exception::InstructionAccessFault,
+                    2 => Exception::IllegalInstruction,
+                    3 => Exception::Breakpoint,
+                    5 => Exception::LoadAccessFault,
+                    6 => Exception::StoreAddressMisaligned,
+                    7 => Exception::StoreAccessFault,
+                    8 => Exception::EnvironmentCall,
+                    _ => Exception::Unknown,
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        pub struct Scause {
+            bits: usize,
+        }
+
+        impl Scause {
+            pub fn bits(&self) -> usize {
+                self.bits
+            }
+
+            pub fn code(&self) -> usize {
+                let mask = 1 << (usize::BITS as usize - 1);
+                self.bits() & !mask
+            }
+
+            pub fn is_interrupt(&self) -> bool {
+                self.bits() & (1 << (usize::BITS as usize - 1)) != 0
+            }
+
+            pub fn is_exception(&self) -> bool {
+                !self.is_interrupt()
+            }
+
+            pub fn cause(&self) -> Trap {
+                if self.is_interrupt() {
+                    Trap::Interrupt(Interrupt::from(self.code()))
+                } else {
+                    Trap::Exception(Exception::from(self.code()))
+                }
+            }
+        }
+
+        impl From<usize> for Scause {
+            fn from(value: usize) -> Self {
+                Self { bits: value }
+            }
+        }
+
         #[inline]
         pub unsafe fn read() -> usize {
             unsafe {
@@ -313,6 +409,27 @@ pub mod registers {
         pub unsafe fn write(bits: usize) {
             unsafe {
                 asm!("csrw mie, {}", in(reg) bits);
+            }
+        }
+    }
+
+    // Supervisor Interrupt Pending
+    pub mod sip {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, sip", out(reg) bits);
+                bits
+            }
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            unsafe {
+                asm!("csrw sip, {}", in(reg) bits);
             }
         }
     }

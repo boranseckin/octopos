@@ -31,7 +31,7 @@ pub const VIRTIO0_IRQ: usize = 1;
 pub const CLINT: usize = 0x200_0000;
 pub const CLINT_MTIME: usize = CLINT + 0xBFF8; // Cycles since boot
 
-pub const fn clint_mtimecmp(hart: usize) -> usize {
+pub const fn CLINT_MTIMECMP(hart: usize) -> usize {
     CLINT + 0x4000 + 8 * hart
 }
 

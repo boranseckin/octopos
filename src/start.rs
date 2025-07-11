@@ -1,7 +1,7 @@
 use core::arch::asm;
 
 use crate::kernelvec::timervec;
-use crate::memlayout::{CLINT_MTIME, clint_mtimecmp};
+use crate::memlayout::{CLINT_MTIME, CLINT_MTIMECMP};
 use crate::param::NCPU;
 use crate::riscv::registers::*;
 
@@ -57,7 +57,7 @@ unsafe fn timer_init() {
 
         // ask CLINT for a timer interrupt
         let interval = 1_000_000; // cycles; about 1/10th second in qemu
-        let mtimecmp = clint_mtimecmp(id) as *mut u64;
+        let mtimecmp = CLINT_MTIMECMP(id) as *mut u64;
         let mtime = CLINT_MTIME as *const u64;
         mtimecmp.write_volatile(mtime.read_volatile() + interval);
 
