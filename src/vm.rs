@@ -170,6 +170,8 @@ impl PageTable {
         }
     }
 
+    // Create PTEs for virtual addresses starting at va that refer to physical addresses starting
+    // at pa. va and size MUST be page-aligned.
     pub fn map_pages(
         &mut self,
         va: VA,
@@ -177,10 +179,13 @@ impl PageTable {
         size: usize,
         perm: usize,
     ) -> Result<(), KernelError> {
+        assert_eq!(va.0 % PGSIZE, 0, "mappages: va not aligned");
+        assert_eq!(size % PGSIZE, 0, "mappages: size not aligned");
+
         assert_ne!(size, 0, "map_pages: size");
 
-        let last = pg_round_down(va.0 + size - 1);
-        let mut va = VA(pg_round_down(va.0));
+        let last = va.0 + size - PGSIZE;
+        let mut va = va;
         let mut pa = pa.0;
 
         loop {
