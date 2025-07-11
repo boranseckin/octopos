@@ -191,6 +191,27 @@ pub mod registers {
         }
     }
 
+    // Machine-mode Counter-Enable
+    pub mod mcounteren {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, mcounteren", out(reg) bits);
+                bits
+            }
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            unsafe {
+                asm!("csrw mcounteren, {}", in(reg) bits);
+            }
+        }
+    }
+
     // Machine-mode Cycle Counter
     pub mod time {
         use core::arch::asm;
@@ -261,6 +282,27 @@ pub mod registers {
         }
     }
 
+    // Machine Environment Configuration Register
+    pub mod menvcfg {
+        use core::arch::asm;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, menvcfg", out(reg) bits);
+                bits
+            }
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            unsafe {
+                asm!("csrw menvcfg, {}", in(reg) bits);
+            }
+        }
+    }
+
     // Supervisor Exception Program Counter
     // holds the instruction address to which a return from exception will go
     pub mod sepc {
@@ -319,28 +361,6 @@ pub mod registers {
         }
     }
 
-    // Machine Scratch register, mscratch
-    pub mod mscratch {
-        use core::arch::asm;
-
-        pub unsafe fn write(bits: usize) {
-            unsafe {
-                asm!("csrw mscratch, {}", in(reg) bits);
-            }
-        }
-    }
-
-    // Machine Trap Vector Register, mtvec
-    pub mod mtvec {
-        use core::arch::asm;
-
-        pub unsafe fn write(bits: usize) {
-            unsafe {
-                asm!("csrw mtvec, {}", in(reg) bits);
-            }
-        }
-    }
-
     // Physical Memory Protection Config register, pmpcfg0
     pub mod pmpcfg0 {
         use core::arch::asm;
@@ -395,6 +415,7 @@ pub mod registers {
         pub const MEIE: usize = 1 << 11; // external
         pub const MTIE: usize = 1 << 7; // timer
         pub const MSIE: usize = 1 << 3; // software
+        pub const STIE: usize = 1 << 5; // supervisor timer
 
         #[inline]
         pub unsafe fn read() -> usize {

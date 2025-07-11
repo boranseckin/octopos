@@ -1,7 +1,5 @@
 use core::arch::asm;
 
-use crate::kernelvec::timervec;
-use crate::memlayout::{CLINT_MTIME, CLINT_MTIMECMP};
 use crate::param::NCPU;
 use crate::riscv::registers::*;
 
@@ -49,34 +47,19 @@ pub unsafe fn start() -> ! {
     }
 }
 
-static mut TIMER_SCRATCH: [[u64; 5]; NCPU] = [[0; 5]; NCPU];
-
+// Ask each hart to generate timer interrupts.
 unsafe fn timer_init() {
     unsafe {
-        let id = mhartid::read();
+        // enable supervisor-mode timer interrupts.
+        mie::write(mie::read() | mie::STIE);
 
-        // ask CLINT for a timer interrupt
-        let interval = 1_000_000; // cycles; about 1/10th second in qemu
-        let mtimecmp = CLINT_MTIMECMP(id) as *mut u64;
-        let mtime = CLINT_MTIME as *const u64;
-        mtimecmp.write_volatile(mtime.read_volatile() + interval);
+        // enable the sstc extension (i.e. stimecmp).
+        menvcfg::write(menvcfg::read() | (1 << 63));
 
-        // prepare information in scratch[] for timervec
-        // scratch[0..2] : space for timervec to save registers
-        // scratch[3]    : address of CLINT MTIMECMP register
-        // scratch[4]    : desired interval (in cycles) between timer interrupts
-        let scratch = &mut TIMER_SCRATCH[id];
-        scratch[3] = mtimecmp as u64;
-        scratch[4] = interval;
-        mscratch::write(scratch.as_mut_ptr() as usize);
+        // allow supervisor to use stimecmp and time.
+        mcounteren::write(mcounteren::read() | 2);
 
-        // set machine mode trap handler
-        mtvec::write(timervec as usize);
-
-        // enable machine mode interrupts
-        mstatus::write(mstatus::read() | mstatus::MIE);
-
-        // enable machine mode timer interrupts
-        mie::write(mie::read() | mie::MTIE);
+        // ask for the very first timer interrupt.
+        stimecmp::write(time::read() + 1000000);
     }
 }

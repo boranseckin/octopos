@@ -218,8 +218,8 @@ pub fn clock_intr() {
 
     // Ask for the next timer interrupt.
     // This also clears the interrupt request.
-    // 1000000 is about a tenth of a second.
-    unsafe { stimecmp::write(time::read() + 1000000) };
+    // 1_000_000 is about a tenth of a second.
+    unsafe { stimecmp::write(time::read() + 1_000_000) };
 }
 
 #[derive(PartialEq, Eq)]
@@ -230,8 +230,6 @@ enum InterruptType {
 
 // Check if interrupt is from an external device or software timer.
 fn dev_intr(intr: scause::Interrupt) -> Option<InterruptType> {
-    println!("dev_intr");
-
     match intr {
         // Supervisor external interrupt via PLIC
         scause::Interrupt::SupervisorExternal => {

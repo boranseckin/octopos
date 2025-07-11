@@ -565,7 +565,7 @@ pub fn sleep<T>(chan: usize, mut lock: MutexGuard<'_, T>) -> MutexGuard<'_, T> {
 
 // Wake up all processes sleeping on chan. Must be called without any p->lock.
 pub fn wakeup(chan: usize) {
-    todo!()
+    // todo!()
 }
 
 // Kill the process with the given pid. The victim won't exit until it tries to return to user space
