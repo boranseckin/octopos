@@ -417,6 +417,10 @@ pub mod registers {
     pub mod sip {
         use core::arch::asm;
 
+        pub const SEIP: usize = 1 << 9; // external
+        pub const STIP: usize = 1 << 5; // timer
+        pub const SSIP: usize = 1 << 1; // software
+
         #[inline]
         pub unsafe fn read() -> usize {
             unsafe {
@@ -508,7 +512,7 @@ pub mod interrupts {
 
     #[inline]
     pub fn disable() {
-        unsafe { sstatus::write(sstatus::read() | !sstatus::SIE) };
+        unsafe { sstatus::write(sstatus::read() & !sstatus::SIE) };
     }
 
     #[inline]
