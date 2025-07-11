@@ -19,4 +19,4 @@ name = "kernel"
 path = "src/lib.rs"
 
 [dependencies]
-buddy-alloc = "0.5"
+buddy-alloc = "0.6"
