@@ -269,7 +269,7 @@ pub mod registers {
         pub unsafe fn read() -> usize {
             unsafe {
                 let bits: usize;
-                asm!("csrr {}, 0x14d", out(reg) bits);
+                asm!("csrr {}, stimecmp", out(reg) bits);
                 bits
             }
         }
@@ -277,7 +277,7 @@ pub mod registers {
         #[inline]
         pub unsafe fn write(bits: usize) {
             unsafe {
-                asm!("csrw 0x14d, {}", in(reg) bits);
+                asm!("csrw stimecmp, {}", in(reg) bits);
             }
         }
     }
