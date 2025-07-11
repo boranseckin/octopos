@@ -15,7 +15,7 @@ const THR: usize = 0;
 /// Interrupt Enable Register
 const IER: usize = 1;
 const IER_RX_ENABLE: u8 = 1 << 0;
-const IER_TX_ENABLE: u8 = 1 << 0;
+const IER_TX_ENABLE: u8 = 1 << 1;
 /// FIFO Control Register
 const FCR: usize = 2;
 const FCR_FIFO_ENABLE: u8 = 1 << 0;
@@ -30,7 +30,7 @@ const LCR_EIGHT_BITS: u8 = 3 << 0;
 const LCR_BAUD_LATCH: u8 = 1 << 7;
 /// Line Status Register
 const LSR: usize = 5;
-/// Input is waiting to e read from RHR
+/// Input is waiting to be read from RHR
 const LSR_RX_READY: u8 = 1 << 0;
 /// THR can accept another character to send
 const LSR_TX_IDLE: u8 = 1 << 5;
@@ -116,7 +116,7 @@ impl Mutex<Uart> {
     pub fn getc(&self) -> Option<u8> {
         // Safety: we are only reading from uart
         let uart = unsafe { self.get_mut_unchecked() };
-        if uart.read(LSR) & 0x01 != 0 {
+        if uart.read(LSR) & LSR_RX_READY != 0 {
             Some(uart.read(RHR))
         } else {
             None
@@ -126,7 +126,7 @@ impl Mutex<Uart> {
     // Handle a UART interrupt, raised because input has arrived, UART is ready for more output, or both.
     pub fn handle_interrupt(&self) {
         while let Some(c) = self.getc() {
-            // TODO: console interrupt with c
+            todo!("console interrupt with c");
         }
 
         self.lock().start();
