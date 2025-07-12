@@ -595,7 +595,9 @@ pub fn sleep<T>(chan: usize, mut condition_lock: MutexGuard<'_, T>) -> MutexGuar
 // Wake up all processes sleeping on chan. Must be called without any proc.lock.
 pub fn wakeup(chan: usize) {
     for p in PROCS.0.iter() {
-        if !Arc::ptr_eq(p, &Cpus::myproc().unwrap()) {
+        if let Some(myproc) = Cpus::myproc()
+            && !Arc::ptr_eq(p, &myproc)
+        {
             let mut inner = p.inner.lock();
             if inner.state == ProcState::Sleeping && inner.chan == chan {
                 inner.state = ProcState::Runnable;
