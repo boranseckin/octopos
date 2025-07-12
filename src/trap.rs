@@ -213,7 +213,7 @@ pub fn clock_intr() {
     if hart == 0 {
         let mut ticks = unsafe { TICKS_LOCK.lock() };
         *ticks += 1;
-        proc::wakeup(*ticks);
+        proc::wakeup(&(*ticks) as *const _ as usize);
     }
 
     // Ask for the next timer interrupt.

@@ -348,7 +348,7 @@ pub enum ProcState {
 pub struct ProcInner {
     // Process state
     pub state: ProcState,
-    // If Some, sleeping on chan
+    // If Some, sleeping on chan (any const pointer to a struct)
     pub chan: usize,
     // If Some, have been killed
     pub killed: bool,

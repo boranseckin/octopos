@@ -153,7 +153,7 @@ impl<'a> MutexGuard<'a, Uart> {
             let c = self.tx_buf[self.tx_r % UART_TX_BUF_SIZE];
             self.tx_r += 1;
 
-            proc::wakeup(self.tx_r);
+            proc::wakeup(&self.tx_r as *const _ as usize);
 
             self.write(THR, c);
         }
