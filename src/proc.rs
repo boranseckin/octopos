@@ -592,9 +592,16 @@ pub fn sleep<T>(chan: usize, mut condition_lock: MutexGuard<'_, T>) -> MutexGuar
     condition_mutex.lock()
 }
 
-// Wake up all processes sleeping on chan. Must be called without any p->lock.
+// Wake up all processes sleeping on chan. Must be called without any proc.lock.
 pub fn wakeup(chan: usize) {
-    // todo!()
+    for p in PROCS.0.iter() {
+        if !Arc::ptr_eq(p, &Cpus::myproc().unwrap()) {
+            let mut inner = p.inner.lock();
+            if inner.state == ProcState::Sleeping && inner.chan == chan {
+                inner.state = ProcState::Runnable;
+            }
+        }
+    }
 }
 
 // Kill the process with the given pid. The victim won't exit until it tries to return to user space

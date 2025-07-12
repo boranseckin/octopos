@@ -3,7 +3,7 @@ use core::sync::atomic::Ordering;
 
 use crate::memlayout::UART0;
 use crate::printf::PRINTF;
-use crate::proc::Cpus;
+use crate::proc::{self, Cpus};
 use crate::spinlock::{Mutex, MutexGuard};
 
 // UART control registers are memory-mapped at address UART0.
@@ -153,7 +153,7 @@ impl<'a> MutexGuard<'a, Uart> {
             let c = self.tx_buf[self.tx_r % UART_TX_BUF_SIZE];
             self.tx_r += 1;
 
-            // TODO: Wakeup
+            proc::wakeup(self.tx_r);
 
             self.write(THR, c);
         }
