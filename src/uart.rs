@@ -25,7 +25,7 @@ const FCR_FIFO_CLEAR: u8 = 3 << 1;
 const ISR: usize = 2;
 /// Line Control Register
 const LCR: usize = 3;
-const LCR_EIGHT_BITS: u8 = 3 << 0;
+const LCR_EIGHT_BITS: u8 = 3;
 /// Special mode to set baud rate
 const LCR_BAUD_LATCH: u8 = 1 << 7;
 /// Line Status Register
@@ -96,13 +96,13 @@ impl Mutex<Uart> {
         let mut guard = self.lock();
 
         if PRINTF.is_panicked().load(Ordering::Relaxed) {
+            #[allow(clippy::empty_loop)]
             loop {}
         }
 
         // buffer is full, sleep until there is space
         while guard.tx_w == guard.tx_r + UART_TX_BUF_SIZE {
-            // TODO: sleep
-            todo!()
+            guard = proc::sleep(&guard.tx_r as *const _ as usize, guard)
         }
 
         let index = guard.tx_w % UART_TX_BUF_SIZE;
@@ -170,6 +170,7 @@ pub fn putc_sync(c: u8) {
     let uart = unsafe { UART.get_mut_unchecked() };
 
     if PRINTF.is_panicked().load(Ordering::Relaxed) {
+        #[allow(clippy::empty_loop)]
         loop {}
     }
 
