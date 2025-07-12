@@ -68,7 +68,7 @@ pub fn push_off() {
     unsafe {
         let c = &mut *Cpus::mycpu();
         if c.num_off == 0 {
-            c.interrupt_enabled = old;
+            c.interrupts_enabled = old;
         }
         c.num_off += 1;
     }
@@ -82,7 +82,7 @@ pub fn pop_off() {
         assert!(c.num_off >= 1, "pop_off");
 
         c.num_off -= 1;
-        if c.num_off == 0 && c.interrupt_enabled {
+        if c.num_off == 0 && c.interrupts_enabled {
             interrupts::enable();
         }
     }

@@ -14,6 +14,7 @@ use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
 use crate::spinlock::{Mutex, MutexGuard, SpinLock};
+use crate::swtch::swtch;
 use crate::sync::LazyLock;
 use crate::trampoline::trampoline;
 use crate::vm::{KVM, PageTable, Uvm, VA};
@@ -27,7 +28,7 @@ pub struct Cpu {
     pub proc: Option<Arc<Proc>>,
     pub context: Context,
     pub num_off: isize,
-    pub interrupt_enabled: bool,
+    pub interrupts_enabled: bool,
 }
 
 impl Cpu {
@@ -36,13 +37,13 @@ impl Cpu {
             proc: None,
             context: Context::new(),
             num_off: 0,
-            interrupt_enabled: false,
+            interrupts_enabled: false,
         }
     }
 
     fn lock(&mut self, old_state: bool) -> InterruptLock {
         if self.num_off == 0 {
-            self.interrupt_enabled = old_state;
+            self.interrupts_enabled = old_state;
         }
         self.num_off += 1;
         InterruptLock
@@ -53,7 +54,7 @@ impl Cpu {
         assert!(self.num_off >= 1, "cpu unlock");
 
         self.num_off -= 1;
-        if self.num_off == 0 && self.interrupt_enabled {
+        if self.num_off == 0 && self.interrupts_enabled {
             interrupts::enable();
         }
     }
@@ -118,7 +119,7 @@ impl Drop for InterruptLock {
 }
 
 /// Saved registers for kernel context switches.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Context {
     pub ra: usize,
@@ -524,43 +525,71 @@ pub fn scheduler() {
 // intena because intena is a property of this kernel thread, not this CPU. It should be
 // proc->intena and proc->noff, but that would break in the few places where a lock is held but
 // there's no process.
-pub fn sched() {
-    todo!()
+pub fn sched<'a>(
+    guard: MutexGuard<'a, ProcInner>,
+    context: &mut Context,
+) -> MutexGuard<'a, ProcInner> {
+    let mycpu = unsafe { &mut *Cpus::mycpu() };
+
+    // might not be needed since we are passing the guard
+    // assert!(!guard.holding(), "sched proc lock");
+
+    // make sure that interrupts are disabled and there are no nested locks.
+    assert_eq!(mycpu.num_off, 1, "sched locks");
+    // make sure the process is not running before switch.
+    assert_ne!(guard.state, ProcState::Running, "sched running");
+
+    // make sure that interrupts are disabled in the hardware.
+    // this is to verify the software check done with num_off.
+    assert!(!interrupts::get(), "sched interruptable");
+
+    let interrupts_enabled = mycpu.interrupts_enabled;
+    unsafe { swtch(context, &mycpu.context) };
+    mycpu.interrupts_enabled = interrupts_enabled;
+
+    guard
 }
 
 // Give up the cpu for one scheduling round.
 pub fn r#yield() {
     let proc = Cpus::myproc().unwrap();
+
+    // proc lock will be held until after the call to the sched.
     let mut inner = proc.inner.lock();
     inner.state = ProcState::Runnable;
-    sched();
+
+    let context = unsafe { &mut proc.data_mut().context };
+    sched(inner, context);
 }
 
-// Atomically release lock and sleep on chan. Reacquires lock when awakened.
-pub fn sleep<T>(chan: usize, mut lock: MutexGuard<'_, T>) -> MutexGuard<'_, T> {
-    // Must acquire p->lock in order to change p->state and then call sched.
-    // Once we hold p->lock, we can be guaranteed that we won't miss any wakeup (wakeup locks
-    // p->lock), so it's okay to release lk.
+// Atomically releases a condition's lock and sleeps on chan.
+// Reacquires the condition's lock when awakened.
+pub fn sleep<T>(chan: usize, mut condition_lock: MutexGuard<'_, T>) -> MutexGuard<'_, T> {
+    // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
+    // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
+    // the condition, which it cannot do before we release it.
 
-    let mutex;
+    let condition_mutex;
     {
         let proc = Cpus::myproc().unwrap();
         let mut inner = proc.inner.lock();
 
-        mutex = Mutex::unlock(lock);
+        condition_mutex = Mutex::unlock(condition_lock);
 
         // go to sleep.
         inner.chan = chan;
         inner.state = ProcState::Sleeping;
 
-        sched();
+        // this is where we switch to scheduler (to another proc).
+        let context = unsafe { &mut proc.data_mut().context };
+        inner = sched(inner, context);
+        // this is where we switch back to the original proc.
 
-        // tidy up.
         inner.chan = 0;
     } // drop inner lock
 
     // reacquire original lock.
-    mutex.lock()
+    condition_mutex.lock()
 }
 
 // Wake up all processes sleeping on chan. Must be called without any p->lock.

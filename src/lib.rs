@@ -22,6 +22,7 @@ pub mod proc;
 pub mod riscv;
 pub mod spinlock;
 pub mod start;
+pub mod swtch;
 pub mod sync;
 pub mod trampoline;
 pub mod trap;
