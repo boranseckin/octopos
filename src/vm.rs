@@ -297,7 +297,7 @@ impl Uvm {
     /// `va` must be page-aligned and the mapping must exist.
     /// Optionally, free the physical memory.
     pub fn unmap(&mut self, va: VA, npages: usize, free: bool) {
-        assert!(va.0 % PGSIZE == 0, "uvmunmap: not aligned");
+        assert!(va.0.is_multiple_of(PGSIZE), "uvmunmap: not aligned");
 
         for i in (va.0..va.0 + (npages * PGSIZE)).step_by(PGSIZE) {
             match self.0.walk(va, false) {
