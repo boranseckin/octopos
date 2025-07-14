@@ -15,7 +15,7 @@ use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
 use crate::spinlock::{Mutex, MutexGuard, SpinLock};
 use crate::swtch::swtch;
-use crate::sync::LazyLock;
+use crate::sync::{LazyLock, OnceLock};
 use crate::trampoline::trampoline;
 use crate::vm::{KVM, PageTable, Uvm, VA};
 
@@ -228,7 +228,7 @@ impl TrapFrame {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PID(pub usize);
 
 impl PID {
@@ -239,8 +239,14 @@ impl PID {
 }
 
 pub static PROCS: LazyLock<Procs> = LazyLock::new(Procs::new);
+pub static INIT_PROC: OnceLock<Arc<Proc>> = OnceLock::new();
 
-pub struct Procs(pub Vec<Arc<Proc>>);
+pub struct Procs {
+    pub pool: Vec<Arc<Proc>>,
+    // instead of having a global mutex and individual parent fields on each proc, combining all
+    // parents to one vector guarded by a mutex is better.
+    pub parents: Mutex<Vec<Option<Arc<Proc>>>>,
+}
 
 impl Procs {
     pub fn new() -> Self {
@@ -250,11 +256,15 @@ impl Procs {
             .enumerate()
             .map(|(i, _)| Arc::new(Proc::new(i)))
             .collect::<Vec<_>>();
-        Self(pool)
+
+        let parents = [(); NPROC].iter().map(|_| None).collect::<Vec<_>>();
+        let parents = Mutex::new(parents, "parents");
+
+        Self { pool, parents }
     }
 
     pub unsafe fn map_stacks(&self) {
-        for (i, _) in self.0.iter().enumerate() {
+        for (i, _) in self.pool.iter().enumerate() {
             // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
             // initializer works for now. It would be better to create a new struct called Stack...
             let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
@@ -271,7 +281,7 @@ impl Procs {
     /// If found, initialize state required to run in the kernel,
     /// and return both proc and its inner mutex guard.
     pub fn alloc(&self) -> Result<(&Arc<Proc>, MutexGuard<'_, ProcInner>), KernelError> {
-        for proc in &self.0 {
+        for proc in &self.pool {
             let mut inner = proc.inner.lock();
             if inner.state == ProcState::Unused {
                 inner.pid = PID::alloc();
@@ -318,7 +328,7 @@ unsafe impl Sync for Procs {}
 
 pub fn init() {
     unsafe {
-        for p in PROCS.0.iter() {
+        for p in PROCS.pool.iter() {
             p.data_mut().kstack = VA(kstack(p.id));
         }
     }
@@ -330,7 +340,6 @@ pub struct Proc {
     id: usize,
     pub inner: Mutex<ProcInner>,
     data: UnsafeCell<ProcData>,
-    // TODO: parent
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -475,7 +484,6 @@ impl Proc {
 
         data.size = 0;
         inner.pid = PID(0);
-        // TODO: parent
         data.name.clear();
         inner.chan = 0;
         inner.killed = false;
@@ -505,9 +513,73 @@ pub unsafe extern "C" fn fork_ret() {
 // Exit the current process. Does not return. An exited process remains in the zombie state until
 // its parent calls wait().
 pub fn exit(status: i32) -> ! {
-    let proc = Cpus::myproc().unwrap();
+    let myproc = Cpus::myproc().unwrap();
+    let data = unsafe { myproc.data_mut() };
 
-    todo!()
+    assert!(
+        !Arc::ptr_eq(&myproc, INIT_PROC.get().unwrap()),
+        "init exiting"
+    );
+
+    // Close all open files.
+    todo!();
+
+    // Give any children to init.
+    todo!("reparent");
+
+    // Parent might be sleeping in wait().
+    todo!("wakeup");
+
+    let inner = myproc.inner.lock();
+    inner.xstate = status;
+    inner.state = ProcState::Zombie;
+
+    sched(inner, &mut data.context);
+
+    unreachable!("zombie exit");
+}
+
+// Wait for a child process to exit and return its pid or error if there are no children.
+pub fn wait(addr: VA) -> Option<usize> {
+    let myproc = Cpus::myproc().unwrap();
+    let mut have_kids = false;
+
+    // analogous to wait_lock
+    let mut parents = PROCS.parents.lock();
+
+    loop {
+        // Scan through table looking for exited children.
+        for proc in PROCS.pool.iter() {
+            if let Some(ref parent) = parents[proc.id]
+                && Arc::ptr_eq(parent, &myproc)
+            {
+                // make sure the child isn't still in exit() or swtch().
+                let inner = proc.inner.lock();
+
+                have_kids = true;
+
+                if inner.state == ProcState::Zombie {
+                    let pid = inner.pid.0;
+
+                    if (addr.0 != 0) {
+                        todo!("copyout");
+                    }
+
+                    proc.free(inner);
+
+                    return Some(pid);
+                }
+            }
+        }
+
+        // No point waiting if we don't have any children.
+        if !have_kids || myproc.inner.lock().killed {
+            return None;
+        }
+
+        // Wait for a child to exit.
+        parents = sleep(Arc::as_ptr(&myproc) as usize, parents);
+    }
 }
 
 // Per-CPU process scheduler.
@@ -594,7 +666,7 @@ pub fn sleep<T>(chan: usize, mut condition_lock: MutexGuard<'_, T>) -> MutexGuar
 
 // Wake up all processes sleeping on chan. Must be called without any proc.lock.
 pub fn wakeup(chan: usize) {
-    for p in PROCS.0.iter() {
+    for p in PROCS.pool.iter() {
         if let Some(myproc) = Cpus::myproc()
             && !Arc::ptr_eq(p, &myproc)
         {
@@ -608,6 +680,20 @@ pub fn wakeup(chan: usize) {
 
 // Kill the process with the given pid. The victim won't exit until it tries to return to user space
 // (see usertrap() in trap.rs).
-pub fn kill(pid: PID) {
-    todo!()
+pub fn kill(pid: PID) -> bool {
+    for p in PROCS.pool.iter() {
+        let mut inner = p.inner.lock();
+        if inner.pid == pid {
+            inner.killed = true;
+
+            if inner.state == ProcState::Sleeping {
+                // Wake process from sleep().
+                inner.state = ProcState::Runnable;
+            }
+
+            return true;
+        }
+    }
+
+    false
 }
