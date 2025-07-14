@@ -2,9 +2,11 @@
 
 use alloc::boxed::Box;
 use core::cell::UnsafeCell;
+use core::cmp::min;
 use core::iter::Once;
 use core::mem::MaybeUninit;
 use core::ops::{Add, Deref, DerefMut, Index, IndexMut, Sub};
+use core::slice;
 
 use crate::error::KernelError;
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
@@ -61,6 +63,11 @@ impl PageTableEntry {
     /// Check if the PTE is accessible by user mode instructions.
     fn is_u(&self) -> bool {
         self.0 & PTE_U != 0
+    }
+
+    /// Check if the PTE is writable.
+    fn is_w(&self) -> bool {
+        self.0 & PTE_W != 0
     }
 
     /// Return flags of the PTE (least significant 10 bits).
@@ -158,7 +165,7 @@ impl PageTable {
                     pagetable = pte.as_pa().0 as *mut RawPageTable;
                 } else {
                     if !alloc {
-                        return Err(KernelError::InvalidPageError);
+                        return Err(KernelError::InvalidPage);
                     }
 
                     pagetable = RawPageTable::try_new()?;
@@ -168,6 +175,22 @@ impl PageTable {
 
             Ok((*pagetable).get_mut(px(0, va.0)).unwrap())
         }
+    }
+
+    // Look up a virtual address, return the physical address, or err if not mapped.
+    // Can only be used to look up user pages.
+    fn walk_addr(&mut self, va: VA) -> Result<PA, KernelError> {
+        if va.0 > MAXVA {
+            return Err(KernelError::InvalidAddress);
+        }
+
+        let pte = self.walk(va, false)?;
+
+        if !pte.is_v() || !pte.is_u() {
+            return Err(KernelError::InvalidPte);
+        }
+
+        Ok(pte.as_pa())
     }
 
     // Create PTEs for virtual addresses starting at va that refer to physical addresses starting
@@ -390,6 +413,64 @@ impl Uvm {
         self.unmap(TRAMPOLINE.into(), 1, false);
         self.unmap(TRAPFRAME.into(), 1, false);
         self.free(size);
+    }
+
+    // Copy from kernel to user.
+    // Copy bytes from src to virtual address dstva in the current page table.
+    pub fn copy_out(&mut self, dstva: VA, mut src: &[u8]) -> Result<(), KernelError> {
+        let mut dstva = dstva.0;
+
+        while !src.is_empty() {
+            let mut va0 = pg_round_down(dstva);
+
+            if va0 > MAXVA {
+                return Err(KernelError::InvalidAddress);
+            }
+
+            let pte = self.walk(va0.into(), false)?;
+
+            if pte.is_v() && pte.is_u() && pte.is_w() {
+                return Err(KernelError::InvalidPte);
+            }
+
+            let pa0 = pte.as_pa();
+            let n = min(PGSIZE - (dstva - va0), src.len());
+
+            unsafe {
+                let src_ptr = src[..n].as_ptr();
+                let dst_ptr = (pa0.0 + (dstva - va0)) as *mut u8;
+                core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, n);
+            }
+
+            src = &src[n..];
+            dstva = va0 + PGSIZE;
+        }
+
+        Ok(())
+    }
+
+    // Copy from user to kernel.
+    // Copy bytes from virtual address srcva to dst in the current page table.
+    pub fn copy_in(&mut self, mut dst: &mut [u8], srcva: VA) -> Result<(), KernelError> {
+        let mut srcva = srcva.0;
+
+        while !dst.is_empty() {
+            let va0 = pg_round_down(srcva);
+            let pa0 = self.walk_addr(va0.into())?;
+
+            let n = min(PGSIZE - (srcva - va0), dst.len());
+
+            unsafe {
+                let src_ptr = (pa0.0 + (srcva - va0)) as *const u8;
+                let dst_ptr = dst.as_mut_ptr();
+                core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, n);
+            }
+
+            dst = &mut dst[n..];
+            srcva = va0 + PGSIZE;
+        }
+
+        Ok(())
     }
 }
 

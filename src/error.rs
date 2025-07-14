@@ -1,21 +1,25 @@
 #[repr(isize)]
 #[derive(Debug)]
 pub enum KernelError {
-    AllocError = -1,
-    InvalidPageError = -2,
+    Alloc = -1,
+    InvalidPage = -2,
+    InvalidAddress = -3,
+    InvalidPte = -4,
 }
 
 impl From<core::alloc::AllocError> for KernelError {
     fn from(value: core::alloc::AllocError) -> Self {
-        Self::AllocError
+        Self::Alloc
     }
 }
 
 impl KernelError {
     pub fn as_str(&self) -> &'static str {
         match self {
-            KernelError::AllocError => "alloc error",
-            KernelError::InvalidPageError => "invalid page",
+            KernelError::Alloc => "alloc error",
+            KernelError::InvalidPage => "invalid page",
+            KernelError::InvalidAddress => "invalid address",
+            KernelError::InvalidPte => "invalid pte",
         }
     }
 }

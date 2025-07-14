@@ -320,7 +320,7 @@ impl Procs {
         }
 
         // TODO: change this error to "out of free proc"
-        Err(KernelError::AllocError)
+        Err(KernelError::Alloc)
     }
 }
 
@@ -550,7 +550,7 @@ pub fn wait(addr: VA) -> Option<usize> {
     loop {
         // Scan through table looking for exited children.
         for proc in PROCS.pool.iter() {
-            if let Some(ref parent) = parents[proc.id]
+            if let Some(ref mut parent) = parents[proc.id]
                 && Arc::ptr_eq(parent, &myproc)
             {
                 // make sure the child isn't still in exit() or swtch().
@@ -562,7 +562,16 @@ pub fn wait(addr: VA) -> Option<usize> {
                     let pid = inner.pid.0;
 
                     if (addr.0 != 0) {
-                        todo!("copyout");
+                        unsafe {
+                            let xstate_bytes = &inner.xstate.to_le_bytes();
+                            myproc
+                                .data_mut()
+                                .pagetable
+                                .as_mut()
+                                .unwrap()
+                                .copy_out(addr, xstate_bytes)
+                                .expect("wait copy out xstate");
+                        }
                     }
 
                     proc.free(inner);
