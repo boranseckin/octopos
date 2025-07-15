@@ -1,3 +1,4 @@
+use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::mem::{MaybeUninit, transmute};
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -598,8 +599,42 @@ pub fn wait(addr: VA) -> Option<usize> {
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
-pub fn scheduler() {
-    todo!()
+pub fn scheduler() -> ! {
+    let mycpu = unsafe { &mut *Cpus::mycpu() };
+
+    mycpu.proc.take();
+
+    loop {
+        // The most recent process to run may have had interrupts turned off; enable them to avoid
+        // a deadlock if all processes are waiting.
+        interrupts::enable();
+
+        let mut found = false;
+
+        for proc in PROCS.pool.iter() {
+            let mut inner = proc.inner.lock();
+
+            if inner.state == ProcState::Runnable {
+                // Switch to chosen process. It is the process's job to release its lock and then
+                // reacquire it before jumping back to us.
+                inner.state = ProcState::Running;
+                mycpu.proc.replace(Arc::clone(proc));
+                unsafe { swtch(&mut mycpu.context, &proc.data().context) };
+
+                // Process is done running for now.
+                // It should have changed its p->state before coming back.
+                mycpu.proc.take();
+                found = true;
+            }
+        }
+
+        if !found {
+            // nothing to run; stop running on this core until an interrupt.
+            interrupts::enable();
+
+            unsafe { asm!("wfi") };
+        }
+    }
 }
 
 // Switch to scheduler. Must hold only p->lock and have changed proc->state. Saves and restores
