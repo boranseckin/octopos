@@ -313,7 +313,7 @@ impl Procs {
                 }
 
                 // Set up new context to start executing at forkret, which return to user space.
-                data.context.ra = fork_ret as usize;
+                data.context.ra = fork_ret as *const () as usize;
                 data.context.sp = data.kstack.0 + PGSIZE;
 
                 return Ok((proc, inner));
@@ -446,7 +446,7 @@ impl Proc {
         // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
         if let Err(err) = uvm.map_pages(
             TRAMPOLINE.into(),
-            (trampoline as usize).into(),
+            (trampoline as *const () as usize).into(),
             PGSIZE,
             PTE_R | PTE_X,
         ) {

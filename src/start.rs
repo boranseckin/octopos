@@ -23,7 +23,7 @@ pub unsafe fn start() -> ! {
         // set the exception return instruction address to main
         // when `mret` is called at the end of this function,
         // this is the address we are going "back" to
-        mepc::write(main as usize);
+        mepc::write(main as *const () as usize);
 
         // disable virtual address translation in supervisor mode
         satp::write(0);

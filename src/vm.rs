@@ -282,22 +282,22 @@ impl Kvm {
         self.map(
             VA(KERNBASE),
             PA(KERNBASE),
-            (etext as usize) - KERNBASE,
+            (etext as *const () as usize) - KERNBASE,
             PTE_R | PTE_X,
         );
 
         // kernel data and the physical RAM
         self.map(
-            VA(etext as usize),
-            PA(etext as usize),
-            PHYSTOP - (etext as usize),
+            VA(etext as *const () as usize),
+            PA(etext as *const () as usize),
+            PHYSTOP - (etext as *const () as usize),
             PTE_R | PTE_W,
         );
 
         // trampoline for trap entry/exit mapped to the highest virtual address in the kernel
         self.map(
             VA(TRAMPOLINE),
-            PA(trampoline as usize),
+            PA(trampoline as *const () as usize),
             PGSIZE,
             PTE_R | PTE_X,
         );

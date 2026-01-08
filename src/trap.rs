@@ -24,7 +24,7 @@ pub fn init() {
 
 // Set up to take exceptions and traps while in the kernel.
 pub fn init_hart() {
-    unsafe { stvec::write(kernelvec as usize) };
+    unsafe { stvec::write(kernelvec as *const () as usize) };
 }
 
 // Handles an interrupt, exception, or system call from user space.
@@ -39,7 +39,7 @@ pub unsafe extern "C" fn usertrap() {
         );
 
         // send subsequent interrupts and exceptions to kerneltrap, since we are in kernel mode now
-        stvec::write(kernelvec as usize);
+        stvec::write(kernelvec as *const () as usize);
 
         let proc = Cpus::myproc().unwrap();
         let data = proc.data_mut();
@@ -119,7 +119,8 @@ pub unsafe extern "C" fn usertrapret() {
     interrupts::disable();
 
     // send syscalls, interrupts, and exceptions to uservec in trampoline.S
-    let trampoline_uservec = TRAMPOLINE + (uservec as usize - trampoline as usize);
+    let trampoline_uservec =
+        TRAMPOLINE + (uservec as *const () as usize - trampoline as *const () as usize);
     unsafe { stvec::write(trampoline_uservec) };
 
     // set up trapframe values that uservec will need when
@@ -128,7 +129,7 @@ pub unsafe extern "C" fn usertrapret() {
     let trapframe = data.trapframe.as_mut().unwrap();
     trapframe.kernel_satp = unsafe { satp::read() };
     trapframe.kernel_sp = data.kstack.0 + PGSIZE;
-    trapframe.kernel_trap = usertrap as usize;
+    trapframe.kernel_trap = usertrap as *const () as usize;
     trapframe.kernel_hartid = unsafe { tp::read() };
 
     // set up the registers that trampoline.S's sret will use to get to user space.
@@ -149,7 +150,8 @@ pub unsafe extern "C" fn usertrapret() {
     // switches to the user page table, restores user registers,
     // and switches to user mode with sret.
     unsafe {
-        let trampoline_userret: usize = TRAMPOLINE + (userret as usize - trampoline as usize);
+        let trampoline_userret: usize =
+            TRAMPOLINE + (userret as *const () as usize - trampoline as *const () as usize);
         let trampoline_userret: extern "C" fn(usize) -> ! =
             core::mem::transmute(trampoline_userret);
         trampoline_userret(user_satp);
