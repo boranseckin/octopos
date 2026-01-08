@@ -13,14 +13,14 @@ use crate::memlayout::TRAPFRAME;
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = "trampsec")]
-#[align(4)]
+#[rustc_align(4)]
 pub unsafe extern "C" fn trampoline() {
     unreachable!();
 
     #[unsafe(no_mangle)]
     #[unsafe(naked)]
     #[unsafe(link_section = "trampsec")]
-    unsafe extern "C" fn uservec() -> ! {
+    unsafe extern "C" fn uservec() {
         unsafe {
             // trap.rs sets stvec to point here, so traps from user space start here in supervisor
             // mode but with a user page table. To continue handling the interrupt in supervisor
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn trampoline() {
     #[unsafe(no_mangle)]
     #[unsafe(naked)]
     #[unsafe(link_section = "trampsec")]
-    unsafe extern "C" fn userret(page_table: usize) -> ! {
+    unsafe extern "C" fn userret(page_table: usize) {
         unsafe {
             // called by usertrapret() in trap.rs to switch from kernel to user
             // a0 includes the user page table base, passed as the only argument
