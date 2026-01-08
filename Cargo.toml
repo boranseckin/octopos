@@ -13,10 +13,16 @@ keywords = ["riscv", "xv6"]
 [[bin]]
 name = "octopos"
 path = "src/main.rs"
+test = false
+doctest = false
+bench = false
 
 [lib]
 name = "kernel"
 path = "src/lib.rs"
+test = false
+doctest = false
+bench = false
 
 [dependencies]
 buddy-alloc = "0.6"
