@@ -12,6 +12,7 @@ pub enum OnceLockState {
     Complete,
 }
 
+/// A synchronization primitive which can be initialized exactly once.
 #[derive(Debug)]
 pub struct OnceLock<T> {
     state: SpinLock<OnceLockState>,
@@ -37,6 +38,9 @@ impl<T> OnceLock<T> {
         F: FnOnce() -> Result<T, E>,
     {
         let mut state = self.state.lock();
+
+        // if incomplete, initialize.
+        // otherwise, another thread must have initialized it, do nothing.
         if *state == OnceLockState::Incomplete {
             match f() {
                 Ok(value) => {
@@ -45,8 +49,6 @@ impl<T> OnceLock<T> {
                 }
                 Err(e) => panic!("failed to init once lock"),
             }
-        } else {
-            panic!("double init sync lock");
         }
     }
 
@@ -70,6 +72,8 @@ impl<T> OnceLock<T> {
     where
         F: FnOnce() -> T,
     {
+        // between `get` and `initialize`, the lock is released,
+        // so another thread may have initialized it.
         match self.get() {
             Some(value) => value,
             None => {
@@ -99,6 +103,10 @@ impl<T> Drop for OnceLock<T> {
 unsafe impl<T: Sync + Send> Sync for OnceLock<T> {}
 unsafe impl<T: Send> Send for OnceLock<T> {}
 
+/// A lazyly initialized value.
+///
+/// The value is initialized on the first access using the provided function.
+/// This implementation is prone to poisoning if the initialization function panics.
 pub struct LazyLock<T, F = fn() -> T> {
     once: OnceLock<T>,
     // Use option since F does not have a default after Cell::take()
