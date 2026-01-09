@@ -7,7 +7,7 @@ use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
 };
-use crate::spinlock::Mutex;
+use crate::spinlock::SpinLock;
 use crate::uart::UART;
 
 unsafe extern "C" {
@@ -16,7 +16,7 @@ unsafe extern "C" {
     fn userret();
 }
 
-static TICKS_LOCK: Mutex<usize> = Mutex::new(0, "time");
+static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
 
 pub fn init() {
     // No work since lock is already initialized
@@ -240,7 +240,7 @@ fn dev_intr(intr: scause::Interrupt) -> Option<InterruptType> {
             match irq as usize {
                 UART0_IRQ => UART.handle_interrupt(),
                 VIRTIO0_IRQ => todo!("virtio_disk_intr()"),
-                _ => println!("unexpected interrupt irq = {irq}"),
+                _ => println!("unexpected interrupt irq = {}", irq),
             }
 
             if irq != 0 {

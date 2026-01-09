@@ -35,7 +35,8 @@ extern "C" fn main() -> ! {
         plic::init();
         plic::init_hart();
 
-        println!("hart {cpu_id} is starting");
+        println!("hart {} is starting", cpu_id);
+
         STARTED.store(true, Ordering::SeqCst);
 
         loop {
@@ -46,7 +47,7 @@ extern "C" fn main() -> ! {
             core::hint::spin_loop()
         }
 
-        println!("hart {cpu_id} is starting");
+        println!("hart {} is starting", cpu_id);
 
         vm::init_hart();
         trap::init_hart();
@@ -60,5 +61,5 @@ extern "C" fn main() -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    printf::handle_panic(info)
+    printf::panic(info)
 }

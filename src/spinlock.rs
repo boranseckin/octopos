@@ -2,157 +2,80 @@ use core::cell::UnsafeCell;
 use core::hint;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::proc::InterruptLock;
-use crate::proc::{Cpu, Cpus};
-use crate::riscv::interrupts;
+use crate::proc::{Cpu, Cpus, InterruptLock};
 
-pub struct SpinLock {
-    pub name: &'static str,
-    pub locked: AtomicBool,
-    pub cpu: *mut Cpu,
-}
-
-unsafe impl Sync for SpinLock {}
-
-impl SpinLock {
-    pub const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            locked: AtomicBool::new(false),
-            cpu: ptr::null_mut(),
-        }
-    }
-
-    pub fn acquire(&mut self) {
-        push_off();
-
-        unsafe {
-            assert!(!holding(self), "acquire {}", self.name);
-
-            loop {
-                if self
-                    .locked
-                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    self.cpu = Cpus::mycpu();
-                    break;
-                }
-
-                hint::spin_loop()
-            }
-        }
-    }
-
-    pub fn release(&mut self) {
-        unsafe {
-            assert!(holding(self), "release {}", self.name);
-
-            self.cpu = ptr::null_mut();
-            self.locked.store(false, Ordering::Relaxed);
-
-            pop_off();
-        }
-    }
-}
-
-unsafe fn holding(lock: &SpinLock) -> bool {
-    lock.locked.load(Ordering::Relaxed) && core::ptr::eq(lock.cpu, unsafe { Cpus::mycpu() })
-}
-
-pub fn push_off() {
-    let old = interrupts::get();
-    interrupts::disable();
-    unsafe {
-        let c = &mut *Cpus::mycpu();
-        if c.num_off == 0 {
-            c.interrupts_enabled = old;
-        }
-        c.num_off += 1;
-    }
-}
-
-pub fn pop_off() {
-    assert!(!interrupts::get(), "pop_off - interruptable");
-
-    unsafe {
-        let c = &mut *Cpus::mycpu();
-        assert!(c.num_off >= 1, "pop_off");
-
-        c.num_off -= 1;
-        if c.num_off == 0 && c.interrupts_enabled {
-            interrupts::enable();
-        }
-    }
-}
-
-// Locked when CPU pointer is not null.
+/// A mutual exclusion primitive useful for protecting shared data.
+/// It uses a spinlock to achieve mutual exclusion.
 #[derive(Debug)]
-pub struct Mutex<T> {
+pub struct SpinLock<T> {
     name: &'static str,
     cpu: AtomicPtr<Cpu>,
     data: UnsafeCell<T>,
 }
 
-// Safety: UnsafeCell is not Sync but it can only be consumed with a guard
-// or an exclusive reference. So Mutex is safe to sync, if the inner type T is.
-unsafe impl<T> Sync for Mutex<T> where T: Send {}
-
-pub struct MutexGuard<'a, T: 'a> {
-    mutex: &'a Mutex<T>,
-    _intr_lock: InterruptLock,
+/// A guard that releases the lock when dropped.
+pub struct SpinLockGuard<'a, T: 'a> {
+    lock: &'a SpinLock<T>,
+    intr_lock: InterruptLock,
 }
 
-// Safety: UnsafeCell inside Mutex is not Sync but only one thread can hold this guard.
-// So MutexGuard is safe to sync as long as the inner type T is.
-unsafe impl<T> Sync for MutexGuard<'_, T> where T: Sync {}
-
-impl<T> Mutex<T> {
+impl<T> SpinLock<T> {
     pub const fn new(value: T, name: &'static str) -> Self {
-        Mutex {
+        SpinLock {
             name,
             cpu: AtomicPtr::new(ptr::null_mut()),
             data: UnsafeCell::new(value),
         }
     }
 
-    // Safety: must be called with interrupts disabled.
+    /// Returns true if the current CPU is holding the lock.
+    /// # Safety: must be called with interrupts disabled.
     unsafe fn holding(&self) -> bool {
         self.cpu.load(Ordering::Relaxed) == unsafe { Cpus::mycpu() }
     }
 
-    pub fn lock(&self) -> MutexGuard<'_, T> {
-        let _intr_lock = Cpus::lock_mycpu();
+    /// Acquires the mutex, blocking the current thread until it is able to do so.
+    ///
+    /// Returns a guard that releases the lock when dropped.
+    ///
+    /// Current thread's interrupts will be disabled while holding the lock.
+    pub fn lock(&self) -> SpinLockGuard<'_, T> {
+        let intr_lock = Cpus::lock_mycpu();
 
+        // Safety: interrupts are disabled
         unsafe {
-            assert!(!self.holding(), "acquire lock {}", self.name);
+            assert!(!self.holding(), "acquire spinlock {}", self.name);
+        }
 
-            loop {
-                if self
-                    .cpu
-                    .compare_exchange(
-                        ptr::null_mut(),
-                        Cpus::mycpu(),
-                        Ordering::Acquire,
-                        Ordering::Relaxed,
-                    )
-                    .is_ok()
-                {
-                    break MutexGuard {
-                        mutex: self,
-                        _intr_lock,
-                    };
-                }
-
-                hint::spin_loop()
+        loop {
+            if self
+                .cpu
+                .compare_exchange(
+                    ptr::null_mut(),
+                    // Safety: interrupts are disabled
+                    unsafe { Cpus::mycpu() },
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                break SpinLockGuard {
+                    lock: self,
+                    intr_lock,
+                };
             }
+
+            hint::spin_loop()
         }
     }
 
-    pub fn unlock(guard: MutexGuard<'_, T>) -> &'_ Mutex<T> {
-        guard.mutex
+    /// Releases the lock on the mutex.
+    ///
+    /// Interrupt lock held by the guard will also be released, restoring the previous interrupt state.
+    pub fn unlock(guard: SpinLockGuard<'_, T>) -> &'_ SpinLock<T> {
+        guard.lock
     }
 
     /// Used by `fork_ret` to unlock after returning from scheduler.
@@ -163,45 +86,58 @@ impl<T> Mutex<T> {
         }
     }
 
-    // Since this call consumes self, we can guarentee no one else is holding a reference.
+    /// Consumes the mutex and returns the inner data.
     pub fn into_inner(self) -> T {
         self.data.into_inner()
     }
 
-    // Since this call mutably borrows self, we can guarentee no one else is holding a reference.
+    /// Returns a mutable reference to the inner data.
     pub fn get_mut(&mut self) -> &mut T {
         self.data.get_mut()
     }
 
-    // Use this over `get_mut` when you need unsafe mutable access.
+    /// Returns a reference to the inner data from a shared reference to the mutex.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut_unchecked(&self) -> &mut T {
         unsafe { &mut *self.data.get() }
     }
 }
 
-// Dropping the guard will release the lock on the mutex and also release the interrupt lock.
-impl<'a, T: 'a> Drop for MutexGuard<'a, T> {
+/// Dropping the guard will release the lock on the mutex and also release the interrupt lock.
+impl<'a, T: 'a> Drop for SpinLockGuard<'a, T> {
     fn drop(&mut self) {
-        // Safety: mutex guard has an interrupt lock, it is safe to call holding
-        unsafe {
-            assert!(self.mutex.holding(), "release lock {}", self.mutex.name);
-        }
+        assert!(
+            // Safety: mutex guard has an interrupt lock, it is safe to call holding
+            unsafe { self.lock.holding() },
+            "release lock {}",
+            self.lock.name
+        );
 
-        self.mutex.cpu.store(ptr::null_mut(), Ordering::Release);
+        self.lock.cpu.store(ptr::null_mut(), Ordering::Release);
     }
 }
 
-impl<T> Deref for MutexGuard<'_, T> {
+impl<T> Deref for SpinLockGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.mutex.data.get() }
+        unsafe { &*self.lock.data.get() }
     }
 }
 
-impl<T> DerefMut for MutexGuard<'_, T> {
+impl<T> DerefMut for SpinLockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.mutex.data.get() }
+        unsafe { &mut *self.lock.data.get() }
     }
 }
+
+// Safety: Since the holder can call `into_inner`, if we are sharing a reference, the inner type
+// must also be thread safe to Send.
+unsafe impl<T> Sync for SpinLock<T> where T: Send {}
+
+// Safety: SpinLock can be sent to another thread if T can be sent.
+unsafe impl<T> Send for SpinLock<T> where T: Send {}
+
+// Safety: Since the holder can call `Deref`, if we are sharing a reference, the inner type must
+// also be thread safe to Sync.
+unsafe impl<T> Sync for SpinLockGuard<'_, T> where T: Sync {}

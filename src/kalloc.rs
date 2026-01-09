@@ -4,7 +4,7 @@ use buddy_alloc::{BuddyAllocParam, buddy_alloc::BuddyAlloc};
 
 use crate::memlayout::PHYSTOP;
 use crate::println;
-use crate::spinlock::Mutex;
+use crate::spinlock::SpinLock;
 
 // first address after kernel, defined by kernel.ld
 unsafe extern "C" {
@@ -12,9 +12,9 @@ unsafe extern "C" {
 }
 
 #[global_allocator]
-static KMEM: Kmem = Kmem(Mutex::new(None, "kmem"));
+static KMEM: Kmem = Kmem(SpinLock::new(None, "kmem"));
 
-struct Kmem(Mutex<Option<BuddyAlloc>>);
+struct Kmem(SpinLock<Option<BuddyAlloc>>);
 unsafe impl Sync for Kmem {}
 
 unsafe impl GlobalAlloc for Kmem {

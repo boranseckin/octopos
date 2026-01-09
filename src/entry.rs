@@ -1,5 +1,6 @@
-use crate::start::start;
 use core::arch::asm;
+
+use crate::start::start;
 
 #[unsafe(link_section = ".entry")]
 #[unsafe(no_mangle)]

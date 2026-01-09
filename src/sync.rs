@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 
-use crate::spinlock::Mutex;
+use crate::spinlock::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnceLockState {
@@ -13,7 +13,7 @@ pub enum OnceLockState {
 
 #[derive(Debug)]
 pub struct OnceLock<T> {
-    state: Mutex<OnceLockState>,
+    state: SpinLock<OnceLockState>,
     value: UnsafeCell<MaybeUninit<T>>,
     _marker: PhantomData<T>,
 }
@@ -21,7 +21,7 @@ pub struct OnceLock<T> {
 impl<T> OnceLock<T> {
     pub const fn new() -> Self {
         Self {
-            state: Mutex::new(OnceLockState::Incomplete, "oncecell"),
+            state: SpinLock::new(OnceLockState::Incomplete, "oncecell"),
             value: UnsafeCell::new(MaybeUninit::uninit()),
             _marker: PhantomData,
         }

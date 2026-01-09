@@ -14,7 +14,7 @@ use crate::param::{NCPU, NPROC};
 use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
-use crate::spinlock::{Mutex, MutexGuard, SpinLock};
+use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::swtch::swtch;
 use crate::sync::{LazyLock, OnceLock};
 use crate::trampoline::trampoline;
@@ -83,8 +83,7 @@ impl Cpus {
 
     /// Returns a mutable pointer to this CPU's [`Cpu`] struct.
     ///
-    /// # Safety: must be called with interrupts disabled,
-    /// to prevent race with process being moved to a different CPU.
+    /// # Safety: must be called with interrupts disabled, to prevent race with process being moved to a different CPU.
     pub unsafe fn mycpu() -> *mut Cpu {
         unsafe {
             assert!(!interrupts::get(), "mycpu interrupts enabled");
@@ -246,7 +245,7 @@ pub struct Procs {
     pub pool: Vec<Arc<Proc>>,
     // instead of having a global mutex and individual parent fields on each proc, combining all
     // parents to one vector guarded by a mutex is better.
-    pub parents: Mutex<Vec<Option<Arc<Proc>>>>,
+    pub parents: SpinLock<Vec<Option<Arc<Proc>>>>,
 }
 
 impl Procs {
@@ -259,7 +258,7 @@ impl Procs {
             .collect::<Vec<_>>();
 
         let parents = [(); NPROC].iter().map(|_| None).collect::<Vec<_>>();
-        let parents = Mutex::new(parents, "parents");
+        let parents = SpinLock::new(parents, "parents");
 
         Self { pool, parents }
     }
@@ -281,7 +280,7 @@ impl Procs {
     /// Look in the process table for an `ProcState::Unused` proc.
     /// If found, initialize state required to run in the kernel,
     /// and return both proc and its inner mutex guard.
-    pub fn alloc(&self) -> Result<(&Arc<Proc>, MutexGuard<'_, ProcInner>), KernelError> {
+    pub fn alloc(&self) -> Result<(&Arc<Proc>, SpinLockGuard<'_, ProcInner>), KernelError> {
         for proc in &self.pool {
             let mut inner = proc.inner.lock();
             if inner.state == ProcState::Unused {
@@ -339,7 +338,7 @@ pub fn init() {
 #[derive(Debug)]
 pub struct Proc {
     id: usize,
-    pub inner: Mutex<ProcInner>,
+    pub inner: SpinLock<ProcInner>,
     data: UnsafeCell<ProcData>,
 }
 
@@ -423,7 +422,7 @@ impl Proc {
     fn new(id: usize) -> Self {
         Self {
             id,
-            inner: Mutex::new(ProcInner::new(), "proc"),
+            inner: SpinLock::new(ProcInner::new(), "proc"),
             data: UnsafeCell::new(ProcData::new()),
         }
     }
@@ -472,7 +471,7 @@ impl Proc {
     }
 
     /// Free the process and the data attached to it (including user pages).
-    pub fn free(&self, mut inner: MutexGuard<'_, ProcInner>) {
+    pub fn free(&self, mut inner: SpinLockGuard<'_, ProcInner>) {
         let data = unsafe { self.data_mut() };
 
         if let Some(trapframe) = data.trapframe.take() {
@@ -642,9 +641,9 @@ pub fn scheduler() -> ! {
 // proc->intena and proc->noff, but that would break in the few places where a lock is held but
 // there's no process.
 pub fn sched<'a>(
-    guard: MutexGuard<'a, ProcInner>,
+    guard: SpinLockGuard<'a, ProcInner>,
     context: &mut Context,
-) -> MutexGuard<'a, ProcInner> {
+) -> SpinLockGuard<'a, ProcInner> {
     let mycpu = unsafe { &mut *Cpus::mycpu() };
 
     // might not be needed since we are passing the guard
@@ -680,7 +679,7 @@ pub fn r#yield() {
 
 // Atomically releases a condition's lock and sleeps on chan.
 // Reacquires the condition's lock when awakened.
-pub fn sleep<T>(chan: usize, mut condition_lock: MutexGuard<'_, T>) -> MutexGuard<'_, T> {
+pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
     // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
     // the condition, which it cannot do before we release it.
@@ -690,7 +689,7 @@ pub fn sleep<T>(chan: usize, mut condition_lock: MutexGuard<'_, T>) -> MutexGuar
         let proc = Cpus::myproc().unwrap();
         let mut inner = proc.inner.lock();
 
-        condition_mutex = Mutex::unlock(condition_lock);
+        condition_mutex = SpinLock::unlock(condition_lock);
 
         // go to sleep.
         inner.chan = chan;
