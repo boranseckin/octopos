@@ -51,5 +51,7 @@ pub fn init() {
         println!("size {:#X}\n", alloc.available_bytes());
 
         *guard = Some(alloc);
+
+        println!("kmem init");
     }
 }

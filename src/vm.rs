@@ -10,7 +10,8 @@ use core::slice;
 
 use crate::error::KernelError;
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
-use crate::proc::PROCS;
+use crate::println;
+use crate::proc::PROC_POOL;
 use crate::riscv::{
     self, MAXVA, PGSIZE, PTE_R, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pte_to_pa, px,
     registers::{satp, vma},
@@ -302,7 +303,7 @@ impl Kvm {
             PTE_R | PTE_X,
         );
 
-        unsafe { PROCS.map_stacks() };
+        unsafe { PROC_POOL.map_stacks() };
     }
 }
 
@@ -337,6 +338,12 @@ impl Uvm {
                 }
             }
         }
+    }
+
+    pub fn first(&mut self, src: &[u8], size: usize) {
+        assert!(size < PGSIZE, "uvmfirst: more than a page");
+
+        todo!()
     }
 
     /// Allocate PTEs and physical memory to grow process from `old_size` to `new_size`,
@@ -494,6 +501,8 @@ pub fn kinit() {
         KVM.initialize(Kvm::new);
         KVM.get_mut().expect("kvm to be init").make();
     }
+
+    println!("kvm  init");
 }
 
 // Switch hardware page table register to the kernel's page table and enable paging

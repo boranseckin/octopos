@@ -20,19 +20,17 @@ use crate::sync::{LazyLock, OnceLock};
 use crate::trampoline::trampoline;
 use crate::vm::{KVM, PageTable, Uvm, VA};
 
-pub static CPUS: Cpus = Cpus::new();
+pub static CPU_POOL: CPUPool = CPUPool::new();
 
-pub struct Cpus([UnsafeCell<Cpu>; NCPU]);
-unsafe impl Sync for Cpus {}
-
-pub struct Cpu {
+/// Per-CPU state
+pub struct CPU {
     pub proc: Option<Arc<Proc>>,
     pub context: Context,
     pub num_off: isize,
     pub interrupts_enabled: bool,
 }
 
-impl Cpu {
+impl CPU {
     const fn new() -> Self {
         Self {
             proc: None,
@@ -42,6 +40,7 @@ impl Cpu {
         }
     }
 
+    /// Locks this CPU by disabling interrupts.
     fn lock(&mut self, old_state: bool) -> InterruptLock {
         if self.num_off == 0 {
             self.interrupts_enabled = old_state;
@@ -50,6 +49,7 @@ impl Cpu {
         InterruptLock
     }
 
+    /// Unlocks this CPU by enabling interrupts if appropriate.
     fn unlock(&mut self) {
         assert!(!interrupts::get(), "cpu unlock - interruptible");
         assert!(self.num_off >= 1, "cpu unlock");
@@ -61,60 +61,67 @@ impl Cpu {
     }
 }
 
-impl Cpus {
+/// Pool of CPUs.
+pub struct CPUPool([UnsafeCell<CPU>; NCPU]);
+
+impl CPUPool {
+    /// Creates a new CPU pool.
     const fn new() -> Self {
         let mut array: [MaybeUninit<_>; NCPU] = unsafe { MaybeUninit::uninit().assume_init() };
         let mut i = 0;
         while i < NCPU {
-            array[i] = MaybeUninit::new(UnsafeCell::new(Cpu::new()));
+            array[i] = MaybeUninit::new(UnsafeCell::new(CPU::new()));
             i += 1;
         }
         unsafe { transmute(array) }
     }
 
-    /// Return the hart id of this CPU.
+    /// Returns the hart id of the current CPU.
     ///
-    /// # Safety: must be called with interrupts disabled,
-    /// to prevent race with process being moved to a different CPU.
+    /// # Safety: must be called with interrupts disabled to prevent race with process being moved to a different CPU.
     #[inline]
-    pub unsafe fn get_id() -> usize {
+    pub unsafe fn current_id(&self) -> usize {
         unsafe { tp::read() }
     }
 
-    /// Returns a mutable pointer to this CPU's [`Cpu`] struct.
+    /// Returns a mutable pointer to the current CPU's [`CPU`] struct.
     ///
-    /// # Safety: must be called with interrupts disabled, to prevent race with process being moved to a different CPU.
-    pub unsafe fn mycpu() -> *mut Cpu {
+    /// # Safety: must be called with interrupts disabled to prevent race with process being moved to a different CPU.
+    pub unsafe fn current(&self) -> &'static mut CPU {
         unsafe {
             assert!(!interrupts::get(), "mycpu interrupts enabled");
-            let id = Self::get_id();
-            CPUS.0[id].get()
+            let id = self.current_id();
+            &mut *CPU_POOL.0[id].get()
         }
     }
 
     /// Locks this CPU by disabling interrupts.
     /// Returns an [`InterruptLock`] as the ownership and lifetime of the lock.
-    pub fn lock_mycpu() -> InterruptLock {
+    pub fn lock_current(&self) -> InterruptLock {
         let old_state = interrupts::get();
         interrupts::disable();
 
-        unsafe { (*Self::mycpu()).lock(old_state) }
+        unsafe { self.current().lock(old_state) }
     }
 
     /// Returns an arc pointer to this CPU's [`Proc`].
-    pub fn myproc() -> Option<Arc<Proc>> {
-        let _lock = Self::lock_mycpu();
+    pub fn current_proc(&self) -> Option<Arc<Proc>> {
+        let _lock = self.lock_current();
 
-        let cpu = unsafe { &*Self::mycpu() };
+        let cpu = unsafe { &*self.current() };
         cpu.proc.as_ref().map(Arc::clone)
     }
 }
 
+unsafe impl Sync for CPUPool {}
+
+/// A lock that releases the CPU lock when dropped.
+#[derive(Debug)]
 pub struct InterruptLock;
 
 impl Drop for InterruptLock {
     fn drop(&mut self) {
-        unsafe { (*Cpus::mycpu()).unlock() }
+        unsafe { (*CPU_POOL.current()).unlock() }
     }
 }
 
@@ -228,8 +235,9 @@ impl TrapFrame {
     }
 }
 
+/// Wrapper around usize to represent process IDs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PID(pub usize);
+pub struct PID(usize);
 
 impl PID {
     pub fn alloc() -> Self {
@@ -238,17 +246,32 @@ impl PID {
     }
 }
 
-pub static PROCS: LazyLock<Procs> = LazyLock::new(Procs::new);
+impl core::ops::Deref for PID {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for PID {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+pub static PROC_POOL: LazyLock<ProcPool> = LazyLock::new(ProcPool::new);
 pub static INIT_PROC: OnceLock<Arc<Proc>> = OnceLock::new();
 
-pub struct Procs {
+pub struct ProcPool {
+    // TODO: change to slice
     pub pool: Vec<Arc<Proc>>,
     // instead of having a global mutex and individual parent fields on each proc, combining all
     // parents to one vector guarded by a mutex is better.
     pub parents: SpinLock<Vec<Option<Arc<Proc>>>>,
 }
 
-impl Procs {
+impl ProcPool {
     pub fn new() -> Self {
         // don't like how this turned out
         let pool = [(); NPROC]
@@ -324,14 +347,16 @@ impl Procs {
     }
 }
 
-unsafe impl Sync for Procs {}
+unsafe impl Sync for ProcPool {}
 
 pub fn init() {
     unsafe {
-        for p in PROCS.pool.iter() {
+        for p in PROC_POOL.pool.iter() {
             p.data_mut().kstack = VA(kstack(p.id));
         }
     }
+
+    println!("proc init");
 }
 
 // Per-process state
@@ -494,12 +519,19 @@ impl Proc {
 
 unsafe impl Sync for Proc {}
 
+pub fn user_init() {
+    let (proc, inner) = PROC_POOL.alloc().unwrap();
+    INIT_PROC.initialize(|| Ok::<_, ()>(Arc::clone(proc)));
+
+    // allocate one user page and copy initcode's instructions and data into it.
+}
+
 pub unsafe extern "C" fn fork_ret() {
     unsafe {
         static mut FIRST: bool = true;
 
         // Still holding process lock from scheduler.
-        Cpus::myproc().unwrap().inner.force_unlock();
+        CPU_POOL.current_proc().unwrap().inner.force_unlock();
 
         if FIRST {
             FIRST = false;
@@ -513,7 +545,7 @@ pub unsafe extern "C" fn fork_ret() {
 // Exit the current process. Does not return. An exited process remains in the zombie state until
 // its parent calls wait().
 pub fn exit(status: i32) -> ! {
-    let myproc = Cpus::myproc().unwrap();
+    let myproc = CPU_POOL.current_proc().unwrap();
     let data = unsafe { myproc.data_mut() };
 
     assert!(
@@ -541,15 +573,15 @@ pub fn exit(status: i32) -> ! {
 
 // Wait for a child process to exit and return its pid or error if there are no children.
 pub fn wait(addr: VA) -> Option<usize> {
-    let myproc = Cpus::myproc().unwrap();
+    let myproc = CPU_POOL.current_proc().unwrap();
     let mut have_kids = false;
 
     // analogous to wait_lock
-    let mut parents = PROCS.parents.lock();
+    let mut parents = PROC_POOL.parents.lock();
 
     loop {
         // Scan through table looking for exited children.
-        for proc in PROCS.pool.iter() {
+        for proc in PROC_POOL.pool.iter() {
             if let Some(ref mut parent) = parents[proc.id]
                 && Arc::ptr_eq(parent, &myproc)
             {
@@ -599,7 +631,7 @@ pub fn wait(addr: VA) -> Option<usize> {
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 pub fn scheduler() -> ! {
-    let mycpu = unsafe { &mut *Cpus::mycpu() };
+    let mycpu = unsafe { &mut *CPU_POOL.current() };
 
     mycpu.proc.take();
 
@@ -610,7 +642,7 @@ pub fn scheduler() -> ! {
 
         let mut found = false;
 
-        for proc in PROCS.pool.iter() {
+        for proc in PROC_POOL.pool.iter() {
             let mut inner = proc.inner.lock();
 
             if inner.state == ProcState::Runnable {
@@ -644,7 +676,7 @@ pub fn sched<'a>(
     guard: SpinLockGuard<'a, ProcInner>,
     context: &mut Context,
 ) -> SpinLockGuard<'a, ProcInner> {
-    let mycpu = unsafe { &mut *Cpus::mycpu() };
+    let mycpu = unsafe { &mut *CPU_POOL.current() };
 
     // might not be needed since we are passing the guard
     // assert!(!guard.holding(), "sched proc lock");
@@ -667,7 +699,7 @@ pub fn sched<'a>(
 
 // Give up the cpu for one scheduling round.
 pub fn r#yield() {
-    let proc = Cpus::myproc().unwrap();
+    let proc = CPU_POOL.current_proc().unwrap();
 
     // proc lock will be held until after the call to the sched.
     let mut inner = proc.inner.lock();
@@ -686,7 +718,7 @@ pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLo
 
     let condition_mutex;
     {
-        let proc = Cpus::myproc().unwrap();
+        let proc = CPU_POOL.current_proc().unwrap();
         let mut inner = proc.inner.lock();
 
         condition_mutex = SpinLock::unlock(condition_lock);
@@ -709,8 +741,8 @@ pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLo
 
 // Wake up all processes sleeping on chan. Must be called without any proc.lock.
 pub fn wakeup(chan: usize) {
-    for p in PROCS.pool.iter() {
-        if let Some(myproc) = Cpus::myproc()
+    for p in PROC_POOL.pool.iter() {
+        if let Some(myproc) = CPU_POOL.current_proc()
             && !Arc::ptr_eq(p, &myproc)
         {
             let mut inner = p.inner.lock();
@@ -724,7 +756,7 @@ pub fn wakeup(chan: usize) {
 // Kill the process with the given pid. The victim won't exit until it tries to return to user space
 // (see usertrap() in trap.rs).
 pub fn kill(pid: PID) -> bool {
-    for p in PROCS.pool.iter() {
+    for p in PROC_POOL.pool.iter() {
         let mut inner = p.inner.lock();
         if inner.pid == pid {
             inner.killed = true;

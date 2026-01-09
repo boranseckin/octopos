@@ -3,6 +3,7 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 
+use crate::println;
 use crate::spinlock::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,11 +29,10 @@ impl<T> OnceLock<T> {
     }
 
     fn is_init(&self) -> bool {
-        // deref mutex_guard to access inner
         *self.state.lock() == OnceLockState::Complete
     }
 
-    pub fn initialize<F, E>(&self, f: F) -> Result<(), E>
+    pub fn initialize<F, E>(&self, f: F)
     where
         F: FnOnce() -> Result<T, E>,
     {
@@ -42,9 +42,8 @@ impl<T> OnceLock<T> {
                 Ok(value) => {
                     unsafe { (*self.value.get()).write(value) };
                     *state = OnceLockState::Complete;
-                    Ok(())
                 }
-                Err(e) => Err(e),
+                Err(e) => panic!("failed to init once lock"),
             }
         } else {
             panic!("double init sync lock");
@@ -67,7 +66,10 @@ impl<T> OnceLock<T> {
         }
     }
 
-    pub fn get_or_init(&self, f: impl FnOnce() -> T) -> &T {
+    pub fn get_or_init<F>(&self, f: F) -> &T
+    where
+        F: FnOnce() -> T,
+    {
         match self.get() {
             Some(value) => value,
             None => {
@@ -129,5 +131,4 @@ impl<T, F: FnOnce() -> T> Deref for LazyLock<T, F> {
     }
 }
 
-// unsafe impl<T: Sync + Send, F: Send> Sync for LazyLock<T, F> {}
-unsafe impl<T, F: Send> Sync for LazyLock<T, F> where OnceLock<T>: Sync {}
+unsafe impl<T: Sync + Send, F: Send> Sync for LazyLock<T, F> {}

@@ -2,7 +2,7 @@ use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::plic;
 use crate::println;
-use crate::proc::{self, Cpus};
+use crate::proc::{self, CPU_POOL};
 use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
@@ -20,6 +20,7 @@ static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
 
 pub fn init() {
     // No work since lock is already initialized
+    println!("trap init");
 }
 
 // Set up to take exceptions and traps while in the kernel.
@@ -41,7 +42,7 @@ pub unsafe extern "C" fn usertrap() {
         // send subsequent interrupts and exceptions to kerneltrap, since we are in kernel mode now
         stvec::write(kernelvec as *const () as usize);
 
-        let proc = Cpus::myproc().unwrap();
+        let proc = CPU_POOL.current_proc().unwrap();
         let data = proc.data_mut();
         let trapframe = data.trapframe.as_mut().unwrap();
 
@@ -111,7 +112,7 @@ pub unsafe extern "C" fn usertrap() {
 // Return to user space.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrapret() {
-    let proc = Cpus::myproc().unwrap();
+    let proc = CPU_POOL.current_proc().unwrap();
 
     // we're about to switch the destination of traps from
     // kerneltrap() to usertrap(), so turn off interrupts until
@@ -197,7 +198,7 @@ pub unsafe extern "C" fn kerneltrap() {
         }
 
         // If we got a timer interrupt, give up the cpu for another process
-        if Some(InterruptType::Timer) == which_dev && Cpus::myproc().is_some() {
+        if Some(InterruptType::Timer) == which_dev && CPU_POOL.current_proc().is_some() {
             proc::r#yield();
         }
 
@@ -209,8 +210,8 @@ pub unsafe extern "C" fn kerneltrap() {
 }
 
 pub fn clock_intr() {
-    let _lock = Cpus::lock_mycpu();
-    let hart = unsafe { Cpus::get_id() };
+    let _lock = CPU_POOL.lock_current();
+    let hart = unsafe { CPU_POOL.current_id() };
 
     if hart == 0 {
         let mut ticks = unsafe { TICKS_LOCK.lock() };

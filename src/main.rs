@@ -10,7 +10,7 @@ use kernel::kalloc;
 use kernel::plic;
 use kernel::printf;
 use kernel::println;
-use kernel::proc::{self, Cpus};
+use kernel::proc::{self, CPU_POOL};
 use kernel::trap;
 use kernel::vm;
 
@@ -18,7 +18,7 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(export_name = "main")]
 extern "C" fn main() -> ! {
-    let cpu_id = unsafe { Cpus::get_id() };
+    let cpu_id = unsafe { CPU_POOL.current_id() };
     if cpu_id == 0 {
         console::init();
 
@@ -34,6 +34,8 @@ extern "C" fn main() -> ! {
         trap::init_hart();
         plic::init();
         plic::init_hart();
+
+        println!("");
 
         println!("hart {} is starting", cpu_id);
 
