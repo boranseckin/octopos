@@ -109,7 +109,7 @@ pub unsafe extern "C" fn usertrap() {
     }
 }
 
-// Return to user space.
+/// Returns to user space.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrapret() {
     let proc = CPU_POOL.current_proc().unwrap();

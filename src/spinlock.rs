@@ -73,7 +73,8 @@ impl<T> SpinLock<T> {
 
     /// Releases the lock on the mutex.
     ///
-    /// Interrupt lock held by the guard will also be released, restoring the previous interrupt state.
+    /// Interrupt lock held by the guard will also be released, restoring the previous interrupt
+    /// state.
     pub fn unlock(guard: SpinLockGuard<'_, T>) -> &'_ SpinLock<T> {
         guard.lock
     }

@@ -1,11 +1,11 @@
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::mem::{MaybeUninit, transmute};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::ptr;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::error::KernelError;
@@ -18,13 +18,14 @@ use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::swtch::swtch;
 use crate::sync::{LazyLock, OnceLock};
 use crate::trampoline::trampoline;
+use crate::trap::usertrapret;
 use crate::vm::{KVM, PageTable, Uvm, VA};
 
 pub static CPU_POOL: CPUPool = CPUPool::new();
 
 /// Per-CPU state
 pub struct CPU {
-    pub proc: Option<Arc<Proc>>,
+    pub proc: Option<&'static Proc>,
     pub context: Context,
     pub num_off: isize,
     pub interrupts_enabled: bool,
@@ -104,12 +105,12 @@ impl CPUPool {
         unsafe { self.current().lock(old_state) }
     }
 
-    /// Returns an arc pointer to this CPU's [`Proc`].
-    pub fn current_proc(&self) -> Option<Arc<Proc>> {
+    /// Returns a reference to this CPU's [`Proc`].
+    pub fn current_proc(&self) -> Option<&'static Proc> {
         let _lock = self.lock_current();
 
         let cpu = unsafe { &*self.current() };
-        cpu.proc.as_ref().map(Arc::clone)
+        cpu.proc
     }
 }
 
@@ -260,113 +261,15 @@ impl core::ops::DerefMut for PID {
     }
 }
 
-pub static PROC_POOL: LazyLock<ProcPool> = LazyLock::new(ProcPool::new);
-pub static INIT_PROC: OnceLock<Arc<Proc>> = OnceLock::new();
-
-pub struct ProcPool {
-    // TODO: change to slice
-    pub pool: Vec<Arc<Proc>>,
-    // instead of having a global mutex and individual parent fields on each proc, combining all
-    // parents to one vector guarded by a mutex is better.
-    pub parents: SpinLock<Vec<Option<Arc<Proc>>>>,
-}
-
-impl ProcPool {
-    pub fn new() -> Self {
-        // don't like how this turned out
-        let pool = [(); NPROC]
-            .iter()
-            .enumerate()
-            .map(|(i, _)| Arc::new(Proc::new(i)))
-            .collect::<Vec<_>>();
-
-        let parents = [(); NPROC].iter().map(|_| None).collect::<Vec<_>>();
-        let parents = SpinLock::new(parents, "parents");
-
-        Self { pool, parents }
-    }
-
-    pub unsafe fn map_stacks(&self) {
-        for (i, _) in self.pool.iter().enumerate() {
-            // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
-            // initializer works for now. It would be better to create a new struct called Stack...
-            let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
-            // Cannot get va from proc.data.kstack since init function is not called yet.
-            let va = VA(kstack(i));
-            unsafe {
-                #[allow(static_mut_refs)]
-                KVM.get_mut().unwrap().map(va, pa, PGSIZE, PTE_R | PTE_W)
-            };
-        }
-    }
-
-    /// Look in the process table for an `ProcState::Unused` proc.
-    /// If found, initialize state required to run in the kernel,
-    /// and return both proc and its inner mutex guard.
-    pub fn alloc(&self) -> Result<(&Arc<Proc>, SpinLockGuard<'_, ProcInner>), KernelError> {
-        for proc in &self.pool {
-            let mut inner = proc.inner.lock();
-            if inner.state == ProcState::Unused {
-                inner.pid = PID::alloc();
-                inner.state = ProcState::Used;
-
-                let data = unsafe { proc.data_mut() };
-
-                // Allocate a trapframe page.
-                match Box::<TrapFrame>::try_new_zeroed() {
-                    Ok(trapframe) => {
-                        data.trapframe.replace(unsafe { trapframe.assume_init() });
-                    }
-                    Err(err) => {
-                        proc.free(inner);
-                        return Err(err.into());
-                    }
-                }
-
-                // Allocate an empty user page table.
-                match proc.create_pagetable() {
-                    Ok(uvm) => {
-                        data.pagetable = Some(uvm);
-                    }
-                    Err(err) => {
-                        proc.free(inner);
-                        return Err(err);
-                    }
-                }
-
-                // Set up new context to start executing at forkret, which return to user space.
-                data.context.ra = fork_ret as *const () as usize;
-                data.context.sp = data.kstack.0 + PGSIZE;
-
-                return Ok((proc, inner));
-            }
-        }
-
-        // TODO: change this error to "out of free proc"
-        Err(KernelError::Alloc)
-    }
-}
-
-unsafe impl Sync for ProcPool {}
-
-pub fn init() {
-    unsafe {
-        for p in PROC_POOL.pool.iter() {
-            p.data_mut().kstack = VA(kstack(p.id));
-        }
-    }
-
-    println!("proc init");
-}
-
-// Per-process state
+/// Process control block
 #[derive(Debug)]
 pub struct Proc {
-    id: usize,
+    pub id: usize,
     pub inner: SpinLock<ProcInner>,
     data: UnsafeCell<ProcData>,
 }
 
+/// The state of a process.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProcState {
     Unused,
@@ -377,7 +280,9 @@ pub enum ProcState {
     Zombie,
 }
 
-// Public fields for Proc, lock must be held when using these
+/// Public fields for Proc
+///
+/// Process lock must be held when accessing these.
 #[derive(Debug)]
 pub struct ProcInner {
     // Process state
@@ -393,7 +298,7 @@ pub struct ProcInner {
 }
 
 impl ProcInner {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             state: ProcState::Unused,
             chan: 0,
@@ -426,7 +331,7 @@ pub struct ProcData {
 }
 
 impl ProcData {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             kstack: VA(0),
             size: 0,
@@ -435,7 +340,7 @@ impl ProcData {
             context: Context::new(),
             open_files: (),
             cwd: (),
-            name: Default::default(),
+            name: String::new(),
         }
     }
 }
@@ -444,7 +349,7 @@ unsafe impl Sync for ProcData {}
 unsafe impl Send for ProcData {}
 
 impl Proc {
-    fn new(id: usize) -> Self {
+    const fn new(id: usize) -> Self {
         Self {
             id,
             inner: SpinLock::new(ProcInner::new(), "proc"),
@@ -459,6 +364,10 @@ impl Proc {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut ProcData {
         unsafe { &mut *self.data.get() }
+    }
+
+    pub fn is_init_proc(&self) -> bool {
+        ptr::eq(&self, INIT_PROC.get().unwrap())
     }
 
     /// Create a user page table using a given process's trapframe address, with no user memory,
@@ -519,39 +428,127 @@ impl Proc {
 
 unsafe impl Sync for Proc {}
 
-pub fn user_init() {
-    let (proc, inner) = PROC_POOL.alloc().unwrap();
-    INIT_PROC.initialize(|| Ok::<_, ()>(Arc::clone(proc)));
+pub static PROC_POOL: ProcPool = ProcPool::new();
+pub static INIT_PROC: OnceLock<&Proc> = OnceLock::new();
 
-    // allocate one user page and copy initcode's instructions and data into it.
+/// Pool of processes.
+pub struct ProcPool {
+    pub pool: [UnsafeCell<Proc>; NPROC],
+    // instead of having a global mutex and individual parent fields on each proc, combining all
+    // parents to one vector guarded by a mutex is better.
+    // parents[child.id] == Some(parent.id)
+    pub parents: SpinLock<[Option<usize>; NPROC]>,
 }
 
-pub unsafe extern "C" fn fork_ret() {
-    unsafe {
-        static mut FIRST: bool = true;
+impl ProcPool {
+    pub const fn new() -> Self {
+        let mut pool: [MaybeUninit<UnsafeCell<Proc>>; NPROC] =
+            unsafe { MaybeUninit::uninit().assume_init() };
 
-        // Still holding process lock from scheduler.
-        CPU_POOL.current_proc().unwrap().inner.force_unlock();
-
-        if FIRST {
-            FIRST = false;
-            todo!("fsinit");
+        let mut i = 0;
+        while i < NPROC {
+            pool[i] = MaybeUninit::new(UnsafeCell::new(Proc::new(i)));
+            i += 1;
         }
 
-        todo!("usertrapret")
+        Self {
+            pool: unsafe { transmute(pool) },
+            parents: SpinLock::new([None; NPROC], "parents"),
+        }
+    }
+
+    /// Returns a reference to the process at the given index.
+    pub fn get(&self, index: usize) -> &Proc {
+        unsafe { &*self.pool[index].get() }
+    }
+
+    /// Returns an iterator over all processes.
+    pub fn iter(&self) -> impl Iterator<Item = &Proc> {
+        (0..NPROC).map(|i| self.get(i))
+    }
+
+    /// Allocates a page for each process's kernel stack and maps it into the kernel page table.
+    ///
+    /// The page is mapped high in memory and followed by an invalid guard page.
+    pub unsafe fn map_stacks(&self) {
+        for (i, _) in self.pool.iter().enumerate() {
+            // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
+            // initializer works for now. It would be better to create a new struct called Stack...
+            let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
+            // Cannot get va from proc.data.kstack since init function is not called yet.
+            let va = VA(kstack(i));
+            unsafe {
+                #[allow(static_mut_refs)]
+                KVM.get_mut().unwrap().map(va, pa, PGSIZE, PTE_R | PTE_W)
+            };
+        }
+    }
+
+    /// Searches the process table for an `ProcState::Unused` proc.
+    /// If found, initialize state required to run in the kernel, and return both proc and its
+    /// inner mutex guard.
+    pub fn alloc(&self) -> Result<(&Proc, SpinLockGuard<'_, ProcInner>), KernelError> {
+        for proc in self.iter() {
+            let mut inner = proc.inner.lock();
+            if inner.state == ProcState::Unused {
+                inner.pid = PID::alloc();
+                inner.state = ProcState::Used;
+
+                let data = unsafe { proc.data_mut() };
+
+                // Allocate a trapframe page.
+                match Box::<TrapFrame>::try_new_zeroed() {
+                    Ok(trapframe) => {
+                        data.trapframe.replace(unsafe { trapframe.assume_init() });
+                    }
+                    Err(err) => {
+                        proc.free(inner);
+                        return Err(err.into());
+                    }
+                }
+
+                // Allocate an empty user page table.
+                match proc.create_pagetable() {
+                    Ok(uvm) => {
+                        data.pagetable = Some(uvm);
+                    }
+                    Err(err) => {
+                        proc.free(inner);
+                        return Err(err);
+                    }
+                }
+
+                // Set up new context to start executing at forkret, which return to user space.
+                data.context.ra = fork_ret as *const () as usize;
+                data.context.sp = data.kstack.0 + PGSIZE;
+
+                return Ok((proc, inner));
+            }
+        }
+
+        // TODO: change this error to "out of free proc"
+        Err(KernelError::Alloc)
     }
 }
 
-// Exit the current process. Does not return. An exited process remains in the zombie state until
-// its parent calls wait().
-pub fn exit(status: i32) -> ! {
-    let myproc = CPU_POOL.current_proc().unwrap();
-    let data = unsafe { myproc.data_mut() };
+unsafe impl Sync for ProcPool {}
 
-    assert!(
-        !Arc::ptr_eq(&myproc, INIT_PROC.get().unwrap()),
-        "init exiting"
-    );
+pub fn user_init() {
+    let (proc, inner) = PROC_POOL.alloc().unwrap();
+    INIT_PROC.initialize(|| Ok::<_, ()>(proc));
+
+    // allocate one user page and copy initcode's instructions and data into it.
+    todo!()
+}
+
+/// Exits the current process and does not return.
+///
+/// An exited process remains in the zombie state until its parent calls `wait`.
+pub fn exit(status: i32) -> ! {
+    let proc = CPU_POOL.current_proc().unwrap();
+    assert!(proc.is_init_proc(), "init exiting");
+
+    let data = unsafe { proc.data_mut() };
 
     // Close all open files.
     todo!();
@@ -562,7 +559,7 @@ pub fn exit(status: i32) -> ! {
     // Parent might be sleeping in wait().
     todo!("wakeup");
 
-    let inner = myproc.inner.lock();
+    let inner = proc.inner.lock();
     inner.xstate = status;
     inner.state = ProcState::Zombie;
 
@@ -571,20 +568,20 @@ pub fn exit(status: i32) -> ! {
     unreachable!("zombie exit");
 }
 
-// Wait for a child process to exit and return its pid or error if there are no children.
+/// Waits for a child process to exit and return its pid or None if there are no children.
 pub fn wait(addr: VA) -> Option<usize> {
-    let myproc = CPU_POOL.current_proc().unwrap();
-    let mut have_kids = false;
+    let current_proc = CPU_POOL.current_proc().unwrap();
+    let current_id = current_proc.id;
 
     // analogous to wait_lock
     let mut parents = PROC_POOL.parents.lock();
 
     loop {
+        let mut have_kids = false;
+
         // Scan through table looking for exited children.
-        for proc in PROC_POOL.pool.iter() {
-            if let Some(ref mut parent) = parents[proc.id]
-                && Arc::ptr_eq(parent, &myproc)
-            {
+        for proc in PROC_POOL.iter() {
+            if parents[proc.id] == Some(current_id) {
                 // make sure the child isn't still in exit() or swtch().
                 let inner = proc.inner.lock();
 
@@ -596,7 +593,7 @@ pub fn wait(addr: VA) -> Option<usize> {
                     if (addr.0 != 0) {
                         unsafe {
                             let xstate_bytes = &inner.xstate.to_le_bytes();
-                            myproc
+                            current_proc
                                 .data_mut()
                                 .pagetable
                                 .as_mut()
@@ -606,6 +603,9 @@ pub fn wait(addr: VA) -> Option<usize> {
                         }
                     }
 
+                    // clear the parent relationship
+                    parents[proc.id] = None;
+
                     proc.free(inner);
 
                     return Some(pid);
@@ -614,26 +614,25 @@ pub fn wait(addr: VA) -> Option<usize> {
         }
 
         // No point waiting if we don't have any children.
-        if !have_kids || myproc.inner.lock().killed {
+        if !have_kids || current_proc.inner.lock().killed {
             return None;
         }
 
         // Wait for a child to exit.
-        parents = sleep(Arc::as_ptr(&myproc) as usize, parents);
+        parents = sleep(current_proc as *const _ as usize, parents);
     }
 }
 
-// Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
-//  - swtch to start running that process.
-//  - eventually that process transfers control
-//    via swtch back to the scheduler.
+/// Per-CPU process scheduler.
+/// Each CPU calls `scheduler` after setting itself up.
+/// Scheduler never returns.  It loops, doing:
+///  - choose a process to run.
+///  - swtch to start running that process.
+///  - eventually that process transfers control via swtch back to the scheduler.
 pub fn scheduler() -> ! {
-    let mycpu = unsafe { &mut *CPU_POOL.current() };
+    let cpu = unsafe { &mut *CPU_POOL.current() };
 
-    mycpu.proc.take();
+    cpu.proc.take();
 
     loop {
         // The most recent process to run may have had interrupts turned off; enable them to avoid
@@ -642,19 +641,19 @@ pub fn scheduler() -> ! {
 
         let mut found = false;
 
-        for proc in PROC_POOL.pool.iter() {
+        for proc in PROC_POOL.iter() {
             let mut inner = proc.inner.lock();
 
             if inner.state == ProcState::Runnable {
                 // Switch to chosen process. It is the process's job to release its lock and then
                 // reacquire it before jumping back to us.
                 inner.state = ProcState::Running;
-                mycpu.proc.replace(Arc::clone(proc));
-                unsafe { swtch(&mut mycpu.context, &proc.data().context) };
+                cpu.proc.replace(proc);
+                unsafe { swtch(&mut cpu.context, &proc.data().context) };
 
                 // Process is done running for now.
                 // It should have changed its p->state before coming back.
-                mycpu.proc.take();
+                cpu.proc.take();
                 found = true;
             }
         }
@@ -668,36 +667,41 @@ pub fn scheduler() -> ! {
     }
 }
 
-// Switch to scheduler. Must hold only p->lock and have changed proc->state. Saves and restores
-// intena because intena is a property of this kernel thread, not this CPU. It should be
-// proc->intena and proc->noff, but that would break in the few places where a lock is held but
-// there's no process.
+/// Switch to scheduler.
+///
+/// Must hold only `proc.inner` lock and have changed `proc.inner.state`.
+///
+/// Saves and restores `interrupts_enabled` because `interrupts_enabled` is a property of this
+/// kernel thread, not this CPU.
+/// It should be proc->intena and proc->noff, but that would break in the few places where a lock is
+/// held but there's no process.
 pub fn sched<'a>(
-    guard: SpinLockGuard<'a, ProcInner>,
+    proc_inner: SpinLockGuard<'a, ProcInner>,
     context: &mut Context,
 ) -> SpinLockGuard<'a, ProcInner> {
-    let mycpu = unsafe { &mut *CPU_POOL.current() };
+    let cpu = unsafe { &mut *CPU_POOL.current() };
 
     // might not be needed since we are passing the guard
     // assert!(!guard.holding(), "sched proc lock");
 
     // make sure that interrupts are disabled and there are no nested locks.
-    assert_eq!(mycpu.num_off, 1, "sched locks");
+    assert_eq!(cpu.num_off, 1, "sched locks");
     // make sure the process is not running before switch.
-    assert_ne!(guard.state, ProcState::Running, "sched running");
+    assert_ne!(proc_inner.state, ProcState::Running, "sched running");
 
     // make sure that interrupts are disabled in the hardware.
     // this is to verify the software check done with num_off.
     assert!(!interrupts::get(), "sched interruptable");
 
-    let interrupts_enabled = mycpu.interrupts_enabled;
-    unsafe { swtch(context, &mycpu.context) };
-    mycpu.interrupts_enabled = interrupts_enabled;
+    let interrupts_enabled = cpu.interrupts_enabled;
+    unsafe { swtch(context, &cpu.context) };
 
-    guard
+    cpu.interrupts_enabled = interrupts_enabled;
+
+    proc_inner
 }
 
-// Give up the cpu for one scheduling round.
+/// Gives up the CPU for one scheduling round.
 pub fn r#yield() {
     let proc = CPU_POOL.current_proc().unwrap();
 
@@ -709,8 +713,30 @@ pub fn r#yield() {
     sched(inner, context);
 }
 
-// Atomically releases a condition's lock and sleeps on chan.
-// Reacquires the condition's lock when awakened.
+/// Entry point for forked child process.
+pub unsafe extern "C" fn fork_ret() {
+    static FIRST: AtomicBool = AtomicBool::new(true);
+
+    unsafe {
+        // Still holding process lock from scheduler.
+        CPU_POOL.current_proc().unwrap().inner.force_unlock();
+    }
+
+    // TODO: not sure if atomic is needed
+    if FIRST
+        .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+        .is_ok()
+    {
+        todo!("fsinit");
+    }
+
+    unsafe {
+        usertrapret();
+    }
+}
+
+/// Atomically releases a condition's lock and sleeps on chan.
+/// Reacquires the condition's lock when awakened.
 pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
     // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
@@ -739,13 +765,13 @@ pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLo
     condition_mutex.lock()
 }
 
-// Wake up all processes sleeping on chan. Must be called without any proc.lock.
+/// Wakes up all processes sleeping on chan. Must be called without any proc lock.
 pub fn wakeup(chan: usize) {
-    for p in PROC_POOL.pool.iter() {
-        if let Some(myproc) = CPU_POOL.current_proc()
-            && !Arc::ptr_eq(p, &myproc)
+    for proc in PROC_POOL.iter() {
+        if let Some(current_proc) = CPU_POOL.current_proc()
+            && ptr::eq(proc, current_proc)
         {
-            let mut inner = p.inner.lock();
+            let mut inner = proc.inner.lock();
             if inner.state == ProcState::Sleeping && inner.chan == chan {
                 inner.state = ProcState::Runnable;
             }
@@ -753,16 +779,17 @@ pub fn wakeup(chan: usize) {
     }
 }
 
-// Kill the process with the given pid. The victim won't exit until it tries to return to user space
-// (see usertrap() in trap.rs).
+/// Kills the process with the given pid.
+///
+/// The victim won't exit until it tries to return to user space (see `usertrap` in trap.rs).
 pub fn kill(pid: PID) -> bool {
-    for p in PROC_POOL.pool.iter() {
-        let mut inner = p.inner.lock();
+    for proc in PROC_POOL.iter() {
+        let mut inner = proc.inner.lock();
         if inner.pid == pid {
             inner.killed = true;
 
             if inner.state == ProcState::Sleeping {
-                // Wake process from sleep().
+                // Wake process from `sleep()`.
                 inner.state = ProcState::Runnable;
             }
 
@@ -771,4 +798,14 @@ pub fn kill(pid: PID) -> bool {
     }
 
     false
+}
+
+pub fn init() {
+    unsafe {
+        for p in PROC_POOL.iter() {
+            p.data_mut().kstack = VA(kstack(p.id));
+        }
+    }
+
+    println!("proc init");
 }
