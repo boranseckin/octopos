@@ -27,7 +27,7 @@ extern "C" fn main() -> ! {
         println!("");
 
         kalloc::init();
-        vm::kinit();
+        vm::init();
         vm::init_hart();
         proc::init();
         trap::init();
@@ -59,6 +59,8 @@ extern "C" fn main() -> ! {
             core::hint::spin_loop()
         }
     }
+
+    proc::scheduler();
 }
 
 #[panic_handler]

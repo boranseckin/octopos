@@ -6,7 +6,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 use crate::error::KernelError;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
@@ -16,10 +15,10 @@ use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::swtch::swtch;
-use crate::sync::{LazyLock, OnceLock};
+use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
-use crate::vm::{KVM, PageTable, Uvm, VA};
+use crate::vm::{Kvm, PageTable, Uvm, VA};
 
 pub static CPU_POOL: CPUPool = CPUPool::new();
 
@@ -367,7 +366,7 @@ impl Proc {
     }
 
     pub fn is_init_proc(&self) -> bool {
-        ptr::eq(&self, INIT_PROC.get().unwrap())
+        ptr::eq(self, *INIT_PROC.get().unwrap())
     }
 
     /// Create a user page table using a given process's trapframe address, with no user memory,
@@ -452,7 +451,9 @@ impl ProcPool {
         }
 
         Self {
-            pool: unsafe { transmute(pool) },
+            pool: unsafe {
+                transmute::<[MaybeUninit<UnsafeCell<Proc>>; 64], [UnsafeCell<Proc>; 64]>(pool)
+            },
             parents: SpinLock::new([None; NPROC], "parents"),
         }
     }
@@ -470,17 +471,18 @@ impl ProcPool {
     /// Allocates a page for each process's kernel stack and maps it into the kernel page table.
     ///
     /// The page is mapped high in memory and followed by an invalid guard page.
-    pub unsafe fn map_stacks(&self) {
+    ///
+    /// This is only called during KVM initialization, so the mutable reference is passed by the
+    /// callee (`Kvm::make`).
+    pub unsafe fn map_stacks(&self, kvm: &mut Kvm) {
         for (i, _) in self.pool.iter().enumerate() {
             // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
             // initializer works for now. It would be better to create a new struct called Stack...
             let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
             // Cannot get va from proc.data.kstack since init function is not called yet.
             let va = VA(kstack(i));
-            unsafe {
-                #[allow(static_mut_refs)]
-                KVM.get_mut().unwrap().map(va, pa, PGSIZE, PTE_R | PTE_W)
-            };
+
+            kvm.map(va, pa, PGSIZE, PTE_R | PTE_W);
         }
     }
 
@@ -533,6 +535,7 @@ impl ProcPool {
 
 unsafe impl Sync for ProcPool {}
 
+/// Sets up first user process.
 pub fn user_init() {
     let (proc, inner) = PROC_POOL.alloc().unwrap();
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
@@ -546,20 +549,22 @@ pub fn user_init() {
 /// An exited process remains in the zombie state until its parent calls `wait`.
 pub fn exit(status: i32) -> ! {
     let proc = CPU_POOL.current_proc().unwrap();
-    assert!(proc.is_init_proc(), "init exiting");
+    assert!(!proc.is_init_proc(), "init exiting");
 
     let data = unsafe { proc.data_mut() };
 
     // Close all open files.
     todo!();
 
+    // TODO: wait_lock
+
     // Give any children to init.
     todo!("reparent");
 
-    // Parent might be sleeping in wait().
-    todo!("wakeup");
+    // Parent might be sleeping in `wait`.
+    wakeup(PROC_POOL.parents.lock()[proc.id].expect("exit no parent"));
 
-    let inner = proc.inner.lock();
+    let mut inner = proc.inner.lock();
     inner.xstate = status;
     inner.state = ProcState::Zombie;
 
@@ -767,14 +772,16 @@ pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLo
 
 /// Wakes up all processes sleeping on chan. Must be called without any proc lock.
 pub fn wakeup(chan: usize) {
+    let current_proc = CPU_POOL.current_proc();
+
     for proc in PROC_POOL.iter() {
-        if let Some(current_proc) = CPU_POOL.current_proc()
-            && ptr::eq(proc, current_proc)
-        {
-            let mut inner = proc.inner.lock();
-            if inner.state == ProcState::Sleeping && inner.chan == chan {
-                inner.state = ProcState::Runnable;
-            }
+        if current_proc.is_some_and(|p| ptr::eq(p, proc)) {
+            continue;
+        }
+
+        let mut inner = proc.inner.lock();
+        if inner.state == ProcState::Sleeping && inner.chan == chan {
+            inner.state = ProcState::Runnable;
         }
     }
 }
@@ -802,8 +809,8 @@ pub fn kill(pid: PID) -> bool {
 
 pub fn init() {
     unsafe {
-        for p in PROC_POOL.iter() {
-            p.data_mut().kstack = VA(kstack(p.id));
+        for proc in PROC_POOL.iter() {
+            proc.data_mut().kstack = VA(kstack(proc.id));
         }
     }
 
