@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 
 use core::cmp::min;
 use core::mem::MaybeUninit;
+use core::ops::*;
 use core::ptr::{self, NonNull};
 
 use crate::error::KernelError;
@@ -21,8 +22,70 @@ unsafe extern "C" {
     fn etext();
 }
 
+macro_rules! impl_ops {
+    ($target:ident, $trait:ident, $func:ident, $trait_assign:ident, $func_assign:ident) => {
+        impl core::ops::$trait for $target {
+            type Output = Self;
+            #[inline]
+            fn $func(self, rhs: Self) -> Self::Output {
+                Self(self.0.$func(rhs.0))
+            }
+        }
+
+        impl core::ops::$trait<usize> for $target {
+            type Output = Self;
+            #[inline]
+            fn $func(self, rhs: usize) -> Self::Output {
+                Self(self.0.$func(rhs))
+            }
+        }
+
+        impl core::ops::$trait_assign for $target {
+            #[inline]
+            fn $func_assign(&mut self, rhs: Self) {
+                self.0.$func_assign(rhs.0);
+            }
+        }
+
+        impl core::ops::$trait_assign<usize> for $target {
+            #[inline]
+            fn $func_assign(&mut self, rhs: usize) {
+                self.0.$func_assign(rhs);
+            }
+        }
+    };
+}
+
+macro_rules! impl_cmp {
+    ($target:ident) => {
+        impl core::cmp::PartialEq<usize> for $target {
+            fn eq(&self, other: &usize) -> bool {
+                self.0.eq(other)
+            }
+        }
+
+        impl core::cmp::PartialEq<$target> for usize {
+            fn eq(&self, other: &$target) -> bool {
+                self.eq(&other.0)
+            }
+        }
+
+        impl core::cmp::PartialOrd<usize> for $target {
+            fn partial_cmp(&self, other: &usize) -> core::option::Option<core::cmp::Ordering> {
+                self.0.partial_cmp(other)
+            }
+        }
+
+        impl core::cmp::PartialOrd<$target> for usize {
+            fn partial_cmp(&self, other: &$target) -> core::option::Option<core::cmp::Ordering> {
+                self.partial_cmp(&other.0)
+            }
+        }
+    };
+}
+
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PA(pub usize);
 
 impl From<usize> for PA {
@@ -31,8 +94,16 @@ impl From<usize> for PA {
     }
 }
 
+impl_ops!(PA, Add, add, AddAssign, add_assign);
+impl_ops!(PA, Sub, sub, SubAssign, sub_assign);
+impl_ops!(PA, Rem, rem, RemAssign, rem_assign);
+impl_ops!(PA, BitAnd, bitand, BitAndAssign, bitand_assign);
+impl_ops!(PA, BitOr, bitor, BitOrAssign, bitor_assign);
+impl_ops!(PA, BitXor, bitxor, BitXorAssign, bitxor_assign);
+impl_cmp!(PA);
+
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VA(pub usize);
 
 impl From<usize> for VA {
@@ -41,28 +112,41 @@ impl From<usize> for VA {
     }
 }
 
+impl_ops!(VA, Add, add, AddAssign, add_assign);
+impl_ops!(VA, Sub, sub, SubAssign, sub_assign);
+impl_ops!(VA, Rem, rem, RemAssign, rem_assign);
+impl_ops!(VA, BitAnd, bitand, BitAndAssign, bitand_assign);
+impl_ops!(VA, BitOr, bitor, BitOrAssign, bitor_assign);
+impl_ops!(VA, BitXor, bitxor, BitXorAssign, bitxor_assign);
+impl_cmp!(VA);
+
 #[repr(C, align(4096))]
 #[derive(Debug, Clone)]
 struct Page([u8; 4096]);
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct PageTableEntry(usize);
+
+impl_ops!(PageTableEntry, BitAnd, bitand, BitAndAssign, bitand_assign);
+impl_ops!(PageTableEntry, BitOr, bitor, BitOrAssign, bitor_assign);
+impl_ops!(PageTableEntry, BitXor, bitxor, BitXorAssign, bitxor_assign);
+impl_cmp!(PageTableEntry);
 
 impl PageTableEntry {
     /// Check if the PTE is valid.
     fn is_v(&self) -> bool {
-        self.0 & PTE_V != 0
+        *self & PTE_V != 0
     }
 
     /// Check if the PTE is accessible by user mode instructions.
     fn is_u(&self) -> bool {
-        self.0 & PTE_U != 0
+        *self & PTE_U != 0
     }
 
     /// Check if the PTE is writable.
     fn is_w(&self) -> bool {
-        self.0 & PTE_W != 0
+        *self & PTE_W != 0
     }
 
     /// Return flags of the PTE (least significant 10 bits).
@@ -73,7 +157,7 @@ impl PageTableEntry {
     /// Check if the PTE is a leaf (pointing to a PA).
     fn is_leaf(&self) -> bool {
         // If the PTE is a leaf, it should have at least one of the permission bits set.
-        (self.0 & (PTE_X | PTE_W | PTE_R)) != 0
+        (*self & (PTE_X | PTE_W | PTE_R)) != 0
     }
 
     fn from_pa(pa: PA) -> Self {
@@ -167,7 +251,7 @@ impl PageTable {
     /// If `alloc` is true, create any required page-table pages.
     /// Otherwise, return an error if any required page-table page doesn't exist.
     fn walk(&mut self, va: VA, alloc: bool) -> Result<&mut PageTableEntry, KernelError> {
-        assert!(va.0 < MAXVA, "walk");
+        assert!(va < MAXVA, "walk");
 
         let mut pagetable = self.ptr;
 
@@ -198,7 +282,7 @@ impl PageTable {
     ///
     /// Can only be used to look up user pages.
     fn walk_addr(&mut self, va: VA) -> Result<PA, KernelError> {
-        if va.0 > MAXVA {
+        if va > MAXVA {
             return Err(KernelError::InvalidAddress);
         }
 
@@ -222,26 +306,26 @@ impl PageTable {
         size: usize,
         perm: usize,
     ) -> Result<(), KernelError> {
-        assert_eq!(va.0 % PGSIZE, 0, "mappages: va not aligned");
+        assert_eq!(va % PGSIZE, 0, "mappages: va not aligned");
         assert_eq!(size % PGSIZE, 0, "mappages: size not aligned");
 
         assert_ne!(size, 0, "map_pages: size");
 
-        let last = va.0 + size - PGSIZE;
+        let last = va + size - PGSIZE;
         let mut va = va;
-        let mut pa = pa.0;
+        let mut pa = pa;
 
         loop {
             let pte = self.walk(va, true)?;
             assert!(!pte.is_v(), "map_pages: remap");
 
-            pte.0 = pa_to_pte(pa) | perm | PTE_V;
+            pte.0 = pa_to_pte(pa.0) | perm | PTE_V;
 
-            if va.0 == last {
+            if va == last {
                 break;
             }
 
-            va.0 += PGSIZE;
+            va += PGSIZE;
             pa += PGSIZE;
         }
 
@@ -371,10 +455,22 @@ impl Uvm {
         }
     }
 
-    pub fn first(&mut self, src: &[u8], size: usize) {
-        assert!(size < PGSIZE, "uvmfirst: more than a page");
+    pub fn first(&mut self, src: &[u8]) {
+        assert!(src.len() < PGSIZE, "uvmfirst: more than a page");
 
-        todo!()
+        let mem = match Box::<Page>::try_new_zeroed() {
+            Ok(mem) => unsafe { mem.assume_init() },
+            Err(_) => panic!("uvmfirst: out of memory"),
+        };
+
+        self.map_pages(
+            VA(0),
+            PA(Box::into_raw(mem) as usize),
+            PGSIZE,
+            PTE_W | PTE_R | PTE_X | PTE_U,
+        );
+
+        todo!("mem move")
     }
 
     /// Allocates PTEs and physical memory to grow process from `old_size` to `new_size`,
@@ -446,7 +542,7 @@ impl Uvm {
     /// Underlying physical memory is dropped.
     pub fn free(mut self, size: usize) {
         if size > 0 {
-            self.unmap(0.into(), pg_round_up(size) / PGSIZE, true);
+            self.unmap(VA(0), pg_round_up(size) / PGSIZE, true);
         }
         self.0.free_walk();
     }
@@ -455,8 +551,8 @@ impl Uvm {
     ///
     /// Underlying physical memory is dropped.
     pub fn proc_free(mut self, size: usize) {
-        self.unmap(TRAMPOLINE.into(), 1, false);
-        self.unmap(TRAPFRAME.into(), 1, false);
+        self.unmap(VA(TRAMPOLINE), 1, false);
+        self.unmap(VA(TRAPFRAME), 1, false);
         self.free(size);
     }
 
