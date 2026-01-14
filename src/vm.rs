@@ -88,6 +88,12 @@ macro_rules! impl_cmp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PA(pub usize);
 
+impl PA {
+    fn as_mut_ptr<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
 impl From<usize> for PA {
     fn from(value: usize) -> Self {
         Self(value)
@@ -237,7 +243,7 @@ impl PageTable {
     /// # Safety: The caller must ensure that `pa` is a valid physical address pointing to a page table.
     unsafe fn from_pa(pa: PA) -> Self {
         Self {
-            ptr: NonNull::new(pa.0 as *mut RawPageTable).expect("physical address to be non null"),
+            ptr: NonNull::new(pa.as_mut_ptr()).expect("physical address to be non null"),
         }
     }
 
@@ -263,7 +269,7 @@ impl PageTable {
                     .expect("walk: valid pagetable");
 
                 if pte.is_v() {
-                    pagetable = NonNull::new(pte.as_pa().0 as *mut RawPageTable).unwrap();
+                    pagetable = NonNull::new(pte.as_pa().as_mut_ptr()).unwrap();
                 } else {
                     if !alloc {
                         return Err(KernelError::InvalidPage);
@@ -447,7 +453,7 @@ impl Uvm {
                     if free {
                         let pa = pte.as_pa();
                         // free page
-                        let _pa = unsafe { Box::from_raw(pa.0 as *mut Page) };
+                        let _pa = unsafe { Box::from_raw(pa.as_mut_ptr::<Page>()) };
                     }
                     *pte = PageTableEntry(0);
                 }
@@ -568,7 +574,7 @@ impl Uvm {
                 return Err(KernelError::InvalidAddress);
             }
 
-            let pte = self.walk(va0.into(), false)?;
+            let pte = self.walk(VA(va0), false)?;
 
             if !pte.is_v() || !pte.is_u() || !pte.is_w() {
                 return Err(KernelError::InvalidPte);
