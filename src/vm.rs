@@ -92,6 +92,10 @@ impl PA {
     fn as_mut_ptr<T>(&self) -> *mut T {
         self.0 as *mut T
     }
+
+    fn as_pte(&self) -> PageTableEntry {
+        PageTableEntry::from_pa(*self)
+    }
 }
 
 impl From<usize> for PA {
@@ -111,6 +115,16 @@ impl_cmp!(PA);
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VA(pub usize);
+
+impl VA {
+    fn as_mut_ptr<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    fn px(&self, level: usize) -> usize {
+        px(level, self.0)
+    }
+}
 
 impl From<usize> for VA {
     fn from(value: usize) -> Self {
@@ -265,7 +279,7 @@ impl PageTable {
             for level in (1..=2).rev() {
                 let pte = pagetable
                     .as_mut()
-                    .get_mut(px(level, va.0))
+                    .get_mut(va.px(level))
                     .expect("walk: valid pagetable");
 
                 if pte.is_v() {
@@ -276,11 +290,11 @@ impl PageTable {
                     }
 
                     pagetable = RawPageTable::try_new()?;
-                    pte.0 = pa_to_pte(pagetable.as_ptr() as usize) | PTE_V;
+                    *pte = PA(pagetable.as_ptr() as usize).as_pte() | PTE_V;
                 }
             }
 
-            Ok(pagetable.as_mut().get_mut(px(0, va.0)).unwrap())
+            Ok(pagetable.as_mut().get_mut(va.px(0)).unwrap())
         }
     }
 
@@ -325,7 +339,7 @@ impl PageTable {
             let pte = self.walk(va, true)?;
             assert!(!pte.is_v(), "map_pages: remap");
 
-            pte.0 = pa_to_pte(pa.0) | perm | PTE_V;
+            *pte = pa.as_pte() | perm | PTE_V;
 
             if va == last {
                 break;
