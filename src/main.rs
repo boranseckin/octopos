@@ -20,22 +20,24 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 extern "C" fn main() -> ! {
     let cpu_id = unsafe { CPU_POOL.current_id() };
     if cpu_id == 0 {
-        console::init();
+        unsafe {
+            console::init();
 
-        println!("");
-        println!("octopos kernel is booting");
-        println!("");
+            println!("");
+            println!("octopos kernel is booting");
+            println!("");
 
-        kalloc::init();
-        vm::init();
-        vm::init_hart();
-        proc::init();
-        trap::init();
-        trap::init_hart();
-        plic::init();
-        plic::init_hart();
+            kalloc::init();
+            vm::init();
+            vm::init_hart();
+            proc::init();
+            trap::init();
+            trap::init_hart();
+            plic::init();
+            plic::init_hart();
 
-        proc::user_init();
+            proc::user_init();
+        }
 
         println!("");
 
@@ -49,9 +51,11 @@ extern "C" fn main() -> ! {
 
         println!("hart {} is starting", cpu_id);
 
-        vm::init_hart();
-        trap::init_hart();
-        plic::init_hart();
+        unsafe {
+            vm::init_hart();
+            trap::init_hart();
+            plic::init_hart();
+        }
 
         loop {
             core::hint::spin_loop()

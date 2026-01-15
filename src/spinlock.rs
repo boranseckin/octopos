@@ -18,7 +18,7 @@ pub struct SpinLock<T> {
 /// A guard that releases the lock when dropped.
 pub struct SpinLockGuard<'a, T: 'a> {
     lock: &'a SpinLock<T>,
-    intr_lock: InterruptLock,
+    _intr_lock: InterruptLock,
 }
 
 impl<T> SpinLock<T> {
@@ -63,7 +63,7 @@ impl<T> SpinLock<T> {
             {
                 break SpinLockGuard {
                     lock: self,
-                    intr_lock,
+                    _intr_lock: intr_lock,
                 };
             }
 
@@ -79,8 +79,10 @@ impl<T> SpinLock<T> {
         guard.lock
     }
 
+    /// Unlocks the mutex without a guard and manually releases the `InterruptLock`.
+    ///
+    /// # Safety
     /// Used by `fork_ret` to unlock after returning from scheduler.
-    /// This manually releases InterruptLock as well.
     pub unsafe fn force_unlock(&self) {
         unsafe {
             assert!(self.holding(), "force_unlock: not locked {}", self.name);
@@ -101,6 +103,9 @@ impl<T> SpinLock<T> {
     }
 
     /// Returns a reference to the inner data from a shared reference to the mutex.
+    ///
+    /// # Safety
+    /// The caller must ensure that the mutex is locked.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut_unchecked(&self) -> &mut T {
         unsafe { &mut *self.data.get() }

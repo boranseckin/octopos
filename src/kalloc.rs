@@ -6,8 +6,8 @@ use crate::memlayout::PHYSTOP;
 use crate::println;
 use crate::spinlock::SpinLock;
 
-// first address after kernel, defined by kernel.ld
 unsafe extern "C" {
+    /// First address after kernel, defined by kernel.ld.
     static end: [u8; 0];
 }
 
@@ -36,7 +36,11 @@ fn handle_alloc_error(layout: Layout) -> ! {
     panic!("alloc error: {:?}", layout)
 }
 
-pub fn init() {
+/// Initialize kernel memory allocator.
+///
+/// # Safety
+/// Must be called only once during kernel initialization.
+pub unsafe fn init() {
     unsafe {
         println!("kmem");
 

@@ -78,7 +78,8 @@ impl CPUPool {
 
     /// Returns the hart id of the current CPU.
     ///
-    /// # Safety: must be called with interrupts disabled to prevent race with process being moved to a different CPU.
+    /// # Safety
+    /// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
     #[inline]
     pub unsafe fn current_id(&self) -> usize {
         unsafe { tp::read() }
@@ -86,7 +87,8 @@ impl CPUPool {
 
     /// Returns a mutable pointer to the current CPU's [`CPU`] struct.
     ///
-    /// # Safety: must be called with interrupts disabled to prevent race with process being moved to a different CPU.
+    /// # Safety
+    /// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
     pub unsafe fn current(&self) -> &'static mut CPU {
         unsafe {
             assert!(!interrupts::get(), "mycpu interrupts enabled");
@@ -360,6 +362,8 @@ impl Proc {
         unsafe { &*self.data.get() }
     }
 
+    /// # Safety
+    /// The caller must ensure exclusive access to the returned mutable reference.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut ProcData {
         unsafe { &mut *self.data.get() }
@@ -411,7 +415,7 @@ impl Proc {
             let _tf = trapframe;
         }
 
-        if let Some(mut uvm) = data.pagetable.take() {
+        if let Some(uvm) = data.pagetable.take() {
             uvm.free(data.size);
         }
 
@@ -474,6 +478,10 @@ impl ProcPool {
     ///
     /// This is only called during KVM initialization, so the mutable reference is passed by the
     /// callee (`Kvm::make`).
+    ///
+    /// # Safety
+    /// The caller must ensure that the kernel page table is not used concurrently.
+    /// Which should be the case when initializing the page.
     pub unsafe fn map_stacks(&self, kvm: &mut Kvm) {
         for (i, _) in self.pool.iter().enumerate() {
             // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
@@ -530,6 +538,12 @@ impl ProcPool {
 
         // TODO: change this error to "out of free proc"
         Err(KernelError::Alloc)
+    }
+}
+
+impl Default for ProcPool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -618,7 +632,7 @@ pub fn wait(addr: VA) -> Option<usize> {
                 if inner.state == ProcState::Zombie {
                     let pid = inner.pid.0;
 
-                    if (addr != 0) {
+                    if addr != 0 {
                         unsafe {
                             let xstate_bytes = &inner.xstate.to_le_bytes();
                             current_proc
@@ -742,6 +756,9 @@ pub fn r#yield() {
 }
 
 /// Entry point for forked child process.
+///
+/// # Safety
+/// This function is not called directly, but used as the return address for context switch.
 pub unsafe extern "C" fn fork_ret() {
     static FIRST: AtomicBool = AtomicBool::new(true);
 
@@ -765,7 +782,7 @@ pub unsafe extern "C" fn fork_ret() {
 
 /// Atomically releases a condition's lock and sleeps on chan.
 /// Reacquires the condition's lock when awakened.
-pub fn sleep<T>(chan: usize, mut condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
+pub fn sleep<T>(chan: usize, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
     // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
     // the condition, which it cannot do before we release it.
@@ -830,7 +847,11 @@ pub fn kill(pid: PID) -> bool {
     false
 }
 
-pub fn init() {
+/// Initializes the process table.
+///
+/// # Safety
+/// Must be called only once during kernel initialization.
+pub unsafe fn init() {
     unsafe {
         for proc in PROC_POOL.iter() {
             proc.data_mut().kstack = VA::from(kstack(proc.id));

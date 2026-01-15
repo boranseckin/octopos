@@ -2,7 +2,6 @@ use alloc::boxed::Box;
 
 use core::cmp::min;
 use core::mem::MaybeUninit;
-use core::ops::*;
 use core::ptr::{self, NonNull};
 
 use crate::error::KernelError;
@@ -398,7 +397,7 @@ impl PageTable {
 
                 // if this PTE points to a lower-level page tabel
                 let child = pte.as_pa();
-                let mut child = unsafe { PageTable::from_pa(child) };
+                let child = unsafe { PageTable::from_pa(child) };
                 child.free_walk();
                 *pte = PageTableEntry(0);
             }
@@ -526,7 +525,8 @@ impl Uvm {
             PA::from(ptr as usize),
             PGSIZE,
             PTE_W | PTE_R | PTE_X | PTE_U,
-        );
+        )
+        .unwrap();
 
         unsafe {
             ptr::copy_nonoverlapping(initcode.as_ptr(), ptr as *mut u8, initcode.len());
@@ -692,7 +692,10 @@ impl core::ops::DerefMut for Uvm {
 /// Initializes the kernel page table.
 ///
 /// Since KVM is static, the non-const initialization is done here.
-pub fn init() {
+///
+/// # Safety
+/// Must be called only once during kernel initialization.
+pub unsafe fn init() {
     unsafe {
         KVM.initialize(|| {
             let mut kvm = Kvm::try_new()?;
@@ -705,7 +708,10 @@ pub fn init() {
 }
 
 /// Switches hardware page table register to the kernel's page table and enables paging.
-pub fn init_hart() {
+///
+/// # Safety
+/// Must be called only once per hart during kernel initialization.
+pub unsafe fn init_hart() {
     unsafe {
         // wait for any previous writes to the page table memory to finish
         vma::sfence();

@@ -1,11 +1,10 @@
 use core::num::Wrapping;
 use core::ptr;
-use core::sync::atomic::Ordering;
 
 use crate::memlayout::UART0;
 use crate::printf::PRINTF;
 use crate::proc::{self, CPU_POOL};
-use crate::spinlock::{SpinLock, SpinLockGuard};
+use crate::spinlock::SpinLock;
 
 // UART control registers are memory-mapped at address UART0.
 // http://byterunner.com/16550.html
@@ -169,7 +168,7 @@ impl SpinLock<Uart> {
     /// Handles a UART interrupt.
     /// It is raised because input has arrived, UART is ready for more output, or both.
     pub fn handle_interrupt(&self) {
-        while let Some(c) = self.getc() {
+        while let Some(_c) = self.getc() {
             todo!("console interrupt with c");
         }
 
@@ -198,6 +197,10 @@ pub fn putc_sync(c: u8) {
     uart.write(THR, c);
 }
 
+/// Initializes the UART.
+///
+/// # Safety
+/// This function must be called only once during system initialization.
 pub unsafe fn init() {
     unsafe { UART.get_mut_unchecked().init() }
 }

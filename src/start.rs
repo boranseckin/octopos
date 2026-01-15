@@ -13,6 +13,27 @@ unsafe extern "C" {
     fn main() -> !;
 }
 
+/// Ask each hart to generate timer interrupts.
+unsafe fn timer_init() {
+    unsafe {
+        // enable supervisor-mode timer interrupts.
+        mie::write(mie::read() | mie::STIE);
+
+        // enable the sstc extension (i.e. stimecmp).
+        menvcfg::write(menvcfg::read() | (1 << 63));
+
+        // allow supervisor to use stimecmp and time.
+        mcounteren::write(mcounteren::read() | 2);
+
+        // ask for the very first timer interrupt.
+        stimecmp::write(time::read() + 1000000);
+    }
+}
+
+/// Entry point for each hart.
+///
+/// # Safety
+/// This function is called from `entry.rs`.
 pub unsafe fn start() -> ! {
     unsafe {
         // set previous privilege mode to supervisor
@@ -44,22 +65,5 @@ pub unsafe fn start() -> ! {
         tp::write(id);
 
         asm!("mret", options(noreturn));
-    }
-}
-
-// Ask each hart to generate timer interrupts.
-unsafe fn timer_init() {
-    unsafe {
-        // enable supervisor-mode timer interrupts.
-        mie::write(mie::read() | mie::STIE);
-
-        // enable the sstc extension (i.e. stimecmp).
-        menvcfg::write(menvcfg::read() | (1 << 63));
-
-        // allow supervisor to use stimecmp and time.
-        mcounteren::write(mcounteren::read() | 2);
-
-        // ask for the very first timer interrupt.
-        stimecmp::write(time::read() + 1000000);
     }
 }

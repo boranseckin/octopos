@@ -8,31 +8,15 @@ use crate::riscv::{
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
 };
 use crate::spinlock::SpinLock;
+use crate::trampoline::{trampoline, userret, uservec};
 use crate::uart::UART;
-
-unsafe extern "C" {
-    // use `_trampoline` symbol from linker instead of `trampoline()`.
-    // Rust does not guarentee nested functions are placed after the outer function in memory.
-    // `_trampoline` is guarenteed to be before `uservec` and `userret`.
-    static _trampoline: u8;
-    fn uservec();
-    fn userret();
-}
 
 static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
 
-pub fn init() {
-    // No work since lock is already initialized
-    println!("trap init");
-}
-
-// Set up to take exceptions and traps while in the kernel.
-pub fn init_hart() {
-    unsafe { stvec::write(kernelvec as *const () as usize) };
-}
-
-// Handles an interrupt, exception, or system call from user space.
-// Called from trampoline.S
+/// Handles an interrupt, exception, or system call from user space.
+///
+/// # Safety
+/// Called from `trampoline.rs`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrap() {
     unsafe {
@@ -113,6 +97,9 @@ pub unsafe extern "C" fn usertrap() {
 }
 
 /// Returns to user space.
+///
+/// # Safety
+/// Called from `usertrap()`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrapret() {
     let proc = CPU_POOL.current_proc().unwrap();
@@ -123,8 +110,8 @@ pub unsafe extern "C" fn usertrapret() {
     interrupts::disable();
 
     // send syscalls, interrupts, and exceptions to uservec in trampoline.S
-    let trampoline_uservec = TRAMPOLINE
-        + (uservec as *const () as usize - unsafe { &_trampoline as *const u8 as usize });
+    let trampoline_uservec =
+        TRAMPOLINE + (uservec as *const () as usize - trampoline as *const () as usize);
     unsafe { stvec::write(trampoline_uservec) };
 
     // set up trapframe values that uservec will need when
@@ -154,16 +141,19 @@ pub unsafe extern "C" fn usertrapret() {
     // switches to the user page table, restores user registers,
     // and switches to user mode with sret.
     unsafe {
-        let trampoline_userret: usize = TRAMPOLINE
-            + (userret as *const () as usize - unsafe { &_trampoline as *const u8 as usize });
+        let trampoline_userret: usize =
+            TRAMPOLINE + (userret as *const () as usize - trampoline as *const () as usize);
         let trampoline_userret: extern "C" fn(usize) -> ! =
             core::mem::transmute(trampoline_userret);
         trampoline_userret(user_satp);
     }
 }
 
-// Interrupts and exceptions from the kernel code go here via kernelvec, on whatever the current
-// kernel stack is.
+/// Interrupts and exceptions from the kernel code go here via `kernelvec`, on whatever the current
+/// kernel stack is.
+///
+/// # Safety
+/// Called from `kernelvec.rs`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kerneltrap() {
     unsafe {
@@ -212,12 +202,13 @@ pub unsafe extern "C" fn kerneltrap() {
     }
 }
 
+/// Handle clock interrupts.
 pub fn clock_intr() {
     let _lock = CPU_POOL.lock_current();
     let hart = unsafe { CPU_POOL.current_id() };
 
     if hart == 0 {
-        let mut ticks = unsafe { TICKS_LOCK.lock() };
+        let mut ticks = TICKS_LOCK.lock();
         *ticks += 1;
         proc::wakeup(&(*ticks) as *const _ as usize);
     }
@@ -228,13 +219,13 @@ pub fn clock_intr() {
     unsafe { stimecmp::write(time::read() + 1_000_000) };
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InterruptType {
     Device,
     Timer,
 }
 
-// Check if interrupt is from an external device or software timer.
+/// Check if interrupt is from an external device or software timer.
 fn dev_intr(intr: scause::Interrupt) -> Option<InterruptType> {
     match intr {
         // Supervisor external interrupt via PLIC
@@ -263,4 +254,18 @@ fn dev_intr(intr: scause::Interrupt) -> Option<InterruptType> {
         // some other interrupt, we don't recognize
         _ => None,
     }
+}
+
+/// Initializes the trap handling code.
+pub fn init() {
+    // No work since lock is already initialized
+    println!("trap init");
+}
+
+/// Sets up to take exceptions and traps while in the kernel.
+///
+/// # Safety
+/// This function must be called only once per hart during system initialization.
+pub unsafe fn init_hart() {
+    unsafe { stvec::write(kernelvec as *const () as usize) };
 }

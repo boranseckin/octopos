@@ -2,6 +2,10 @@ use core::arch::asm;
 
 use crate::start::start;
 
+/// Entry point for the kernel.
+///
+/// # Safety
+/// This function is called from the assembly startup code.
 #[unsafe(link_section = ".entry")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _entry() -> ! {

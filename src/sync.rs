@@ -3,7 +3,6 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 
-use crate::println;
 use crate::spinlock::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +46,7 @@ impl<T> OnceLock<T> {
                     unsafe { (*self.value.get()).write(value) };
                     *state = OnceLockState::Complete;
                 }
-                Err(e) => panic!("failed to init once lock"),
+                Err(_e) => panic!("failed to init once lock"),
             }
         }
     }
@@ -97,6 +96,12 @@ impl<T> Drop for OnceLock<T> {
         if self.is_init() {
             unsafe { self.value.get_mut().assume_init_drop() }
         }
+    }
+}
+
+impl<T> Default for OnceLock<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

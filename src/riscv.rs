@@ -1,3 +1,6 @@
+// nothing here is safe, so don't worry about it
+#![allow(clippy::missing_safety_doc)]
+
 pub mod registers {
     // Machine Hart (core) ID register, mhartid
     pub mod mhartid {

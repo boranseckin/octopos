@@ -1,5 +1,6 @@
+/// Kernel error codes.
 #[repr(isize)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelError {
     Alloc = -1,
     InvalidPage = -2,
@@ -8,7 +9,7 @@ pub enum KernelError {
 }
 
 impl From<core::alloc::AllocError> for KernelError {
-    fn from(value: core::alloc::AllocError) -> Self {
+    fn from(_value: core::alloc::AllocError) -> Self {
         Self::Alloc
     }
 }
