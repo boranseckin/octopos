@@ -535,13 +535,36 @@ impl ProcPool {
 
 unsafe impl Sync for ProcPool {}
 
+const INIT_CODE: [u8; 52] = [
+    0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02, 0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,
+    0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00, 0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00,
+    0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69, 0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+];
+
 /// Sets up first user process.
 pub fn user_init() {
-    let (proc, inner) = PROC_POOL.alloc().unwrap();
+    let (proc, mut inner) = PROC_POOL.alloc().unwrap();
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
 
+    // #SAFETY: we are holding inner lock
+    let data = unsafe { proc.data_mut() };
+
     // allocate one user page and copy initcode's instructions and data into it.
-    todo!()
+    data.pagetable.as_mut().unwrap().first(&INIT_CODE);
+    data.size = PGSIZE;
+
+    // prepare for the very first "return" from kernel to user.
+    let trapframe = data.trapframe.as_mut().unwrap();
+    trapframe.epc = 0; // user program counter
+    trapframe.sp = PGSIZE; // user stack pointer
+
+    data.name = String::from("initcode");
+    data.cwd = (); // TODO
+
+    inner.state = ProcState::Runnable;
+
+    // inner lock is dropped
 }
 
 /// Exits the current process and does not return.
@@ -732,7 +755,7 @@ pub unsafe extern "C" fn fork_ret() {
         .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
         .is_ok()
     {
-        todo!("fsinit");
+        // todo!("fsinit");
     }
 
     unsafe {

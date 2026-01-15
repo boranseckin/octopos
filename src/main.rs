@@ -35,15 +35,13 @@ extern "C" fn main() -> ! {
         plic::init();
         plic::init_hart();
 
+        proc::user_init();
+
         println!("");
 
         println!("hart {} is starting", cpu_id);
 
         STARTED.store(true, Ordering::SeqCst);
-
-        loop {
-            core::hint::spin_loop()
-        }
     } else {
         while !STARTED.load(Ordering::SeqCst) {
             core::hint::spin_loop()

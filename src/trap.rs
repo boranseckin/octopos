@@ -11,7 +11,10 @@ use crate::spinlock::SpinLock;
 use crate::uart::UART;
 
 unsafe extern "C" {
-    fn trampoline();
+    // use `_trampoline` symbol from linker instead of `trampoline()`.
+    // Rust does not guarentee nested functions are placed after the outer function in memory.
+    // `_trampoline` is guarenteed to be before `uservec` and `userret`.
+    static _trampoline: u8;
     fn uservec();
     fn userret();
 }
@@ -120,8 +123,8 @@ pub unsafe extern "C" fn usertrapret() {
     interrupts::disable();
 
     // send syscalls, interrupts, and exceptions to uservec in trampoline.S
-    let trampoline_uservec =
-        TRAMPOLINE + (uservec as *const () as usize - trampoline as *const () as usize);
+    let trampoline_uservec = TRAMPOLINE
+        + (uservec as *const () as usize - unsafe { &_trampoline as *const u8 as usize });
     unsafe { stvec::write(trampoline_uservec) };
 
     // set up trapframe values that uservec will need when
@@ -151,8 +154,8 @@ pub unsafe extern "C" fn usertrapret() {
     // switches to the user page table, restores user registers,
     // and switches to user mode with sret.
     unsafe {
-        let trampoline_userret: usize =
-            TRAMPOLINE + (userret as *const () as usize - trampoline as *const () as usize);
+        let trampoline_userret: usize = TRAMPOLINE
+            + (userret as *const () as usize - unsafe { &_trampoline as *const u8 as usize });
         let trampoline_userret: extern "C" fn(usize) -> ! =
             core::mem::transmute(trampoline_userret);
         trampoline_userret(user_satp);
