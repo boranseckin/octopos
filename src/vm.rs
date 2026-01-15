@@ -86,15 +86,27 @@ macro_rules! impl_cmp {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PA(pub usize);
+pub struct PA(usize);
 
 impl PA {
-    fn as_mut_ptr<T>(&self) -> *mut T {
-        self.0 as *mut T
+    /// Creates a new PA.
+    pub const fn new(address: usize) -> Self {
+        Self(address)
     }
 
+    /// Returns the underlying usize value of the PA.
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+
+    /// Returns the PA as a mutable pointer of type T.
+    pub fn as_mut_ptr<T>(&self) -> *mut T {
+        self.as_usize() as *mut T
+    }
+
+    /// Returns the PA as a PageTableEntry.
     fn as_pte(&self) -> PageTableEntry {
-        PageTableEntry::from_pa(*self)
+        PageTableEntry::from(*self)
     }
 }
 
@@ -114,15 +126,27 @@ impl_cmp!(PA);
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct VA(pub usize);
+pub struct VA(usize);
 
 impl VA {
-    fn as_mut_ptr<T>(&self) -> *mut T {
-        self.0 as *mut T
+    /// Creates a new VA.
+    pub const fn new(address: usize) -> Self {
+        Self(address)
     }
 
+    /// Returns the underlying usize value of the VA.
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+
+    /// Returns the VA as a mutable pointer of type T.
+    pub fn as_mut_ptr<T>(&self) -> *mut T {
+        self.as_usize() as *mut T
+    }
+
+    /// Returns the page table index for the given level.
     fn px(&self, level: usize) -> usize {
-        px(level, self.0)
+        px(level, self.as_usize())
     }
 }
 
@@ -148,11 +172,6 @@ struct Page([u8; 4096]);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct PageTableEntry(usize);
 
-impl_ops!(PageTableEntry, BitAnd, bitand, BitAndAssign, bitand_assign);
-impl_ops!(PageTableEntry, BitOr, bitor, BitOrAssign, bitor_assign);
-impl_ops!(PageTableEntry, BitXor, bitxor, BitXorAssign, bitxor_assign);
-impl_cmp!(PageTableEntry);
-
 impl PageTableEntry {
     /// Check if the PTE is valid.
     fn is_v(&self) -> bool {
@@ -171,7 +190,7 @@ impl PageTableEntry {
 
     /// Return flags of the PTE (least significant 10 bits).
     fn flags(&self) -> usize {
-        pte_flags(self.0)
+        pte_flags(self.as_usize())
     }
 
     /// Check if the PTE is a leaf (pointing to a PA).
@@ -180,14 +199,27 @@ impl PageTableEntry {
         (*self & (PTE_X | PTE_W | PTE_R)) != 0
     }
 
-    fn from_pa(pa: PA) -> Self {
-        Self(pa_to_pte(pa.0))
+    /// Returns the underlying usize value of the PTE.
+    fn as_usize(&self) -> usize {
+        self.0
     }
 
+    /// Returns the PA that this PTE points to.
     fn as_pa(&self) -> PA {
-        PA(pte_to_pa(self.0))
+        PA::from(pte_to_pa(self.0))
     }
 }
+
+impl From<PA> for PageTableEntry {
+    fn from(value: PA) -> Self {
+        Self(pa_to_pte(value.as_usize()))
+    }
+}
+
+impl_ops!(PageTableEntry, BitAnd, bitand, BitAndAssign, bitand_assign);
+impl_ops!(PageTableEntry, BitOr, bitor, BitOrAssign, bitor_assign);
+impl_ops!(PageTableEntry, BitXor, bitxor, BitXorAssign, bitxor_assign);
+impl_cmp!(PageTableEntry);
 
 /// Raw Page Table structure, used by `PageTable`.
 #[repr(C, align(4096))]
@@ -290,7 +322,7 @@ impl PageTable {
                     }
 
                     pagetable = RawPageTable::try_new()?;
-                    *pte = PA(pagetable.as_ptr() as usize).as_pte() | PTE_V;
+                    *pte = PA::from(pagetable.as_ptr() as usize).as_pte() | PTE_V;
                 }
             }
 
@@ -326,9 +358,8 @@ impl PageTable {
         size: usize,
         perm: usize,
     ) -> Result<(), KernelError> {
-        assert_eq!(va % PGSIZE, 0, "mappages: va not aligned");
-        assert_eq!(size % PGSIZE, 0, "mappages: size not aligned");
-
+        assert_eq!(va % PGSIZE, 0, "map_pages: va not aligned");
+        assert_eq!(size % PGSIZE, 0, "map_pages: size not aligned");
         assert_ne!(size, 0, "map_pages: size");
 
         let last = va + size - PGSIZE;
@@ -400,34 +431,34 @@ impl Kvm {
     /// Sets up the kernel page table by mapping the necessary kernel regions.
     unsafe fn make(&mut self) {
         // uart registers
-        self.map(VA(UART0), PA(UART0), PGSIZE, PTE_R | PTE_W);
+        self.map(VA::from(UART0), PA::from(UART0), PGSIZE, PTE_R | PTE_W);
 
         // virtio mmio disk interface
-        self.map(VA(VIRTIO0), PA(VIRTIO0), PGSIZE, PTE_R | PTE_W);
+        self.map(VA::from(VIRTIO0), PA::from(VIRTIO0), PGSIZE, PTE_R | PTE_W);
 
         // PLIC
-        self.map(VA(PLIC), PA(PLIC), 0x40_0000, PTE_R | PTE_W);
+        self.map(VA::from(PLIC), PA::from(PLIC), 0x40_0000, PTE_R | PTE_W);
 
         // kernel text executable and read-only
         self.map(
-            VA(KERNBASE),
-            PA(KERNBASE),
+            VA::from(KERNBASE),
+            PA::from(KERNBASE),
             (etext as *const () as usize) - KERNBASE,
             PTE_R | PTE_X,
         );
 
         // kernel data and the physical RAM
         self.map(
-            VA(etext as *const () as usize),
-            PA(etext as *const () as usize),
+            VA::from(etext as *const () as usize),
+            PA::from(etext as *const () as usize),
             PHYSTOP - (etext as *const () as usize),
             PTE_R | PTE_W,
         );
 
         // trampoline for trap entry/exit mapped to the highest virtual address in the kernel
         self.map(
-            VA(TRAMPOLINE),
-            PA(trampoline as *const () as usize),
+            VA::from(TRAMPOLINE),
+            PA::from(trampoline as *const () as usize),
             PGSIZE,
             PTE_R | PTE_X,
         );
@@ -459,7 +490,7 @@ impl Uvm {
         assert!(va.0.is_multiple_of(PGSIZE), "uvmunmap: not aligned");
 
         for i in (va.0..va.0 + (npages * PGSIZE)).step_by(PGSIZE) {
-            match self.0.walk(VA(i), false) {
+            match self.0.walk(VA::from(i), false) {
                 Err(_) => panic!("uvmunmap: walk"),
                 Ok(pte) if !pte.is_v() => panic!("uvmunmap: not mapped"),
                 Ok(pte) if !pte.is_leaf() => panic!("uvmunmap: not a leaf"),
@@ -484,8 +515,8 @@ impl Uvm {
         };
 
         self.map_pages(
-            VA(0),
-            PA(Box::into_raw(mem) as usize),
+            VA::from(0),
+            PA::from(Box::into_raw(mem) as usize),
             PGSIZE,
             PTE_W | PTE_R | PTE_X | PTE_U,
         );
@@ -562,7 +593,7 @@ impl Uvm {
     /// Underlying physical memory is dropped.
     pub fn free(mut self, size: usize) {
         if size > 0 {
-            self.unmap(VA(0), pg_round_up(size) / PGSIZE, true);
+            self.unmap(VA::from(0), pg_round_up(size) / PGSIZE, true);
         }
         self.0.free_walk();
     }
@@ -571,8 +602,8 @@ impl Uvm {
     ///
     /// Underlying physical memory is dropped.
     pub fn proc_free(mut self, size: usize) {
-        self.unmap(VA(TRAMPOLINE), 1, false);
-        self.unmap(VA(TRAPFRAME), 1, false);
+        self.unmap(VA::from(TRAMPOLINE), 1, false);
+        self.unmap(VA::from(TRAPFRAME), 1, false);
         self.free(size);
     }
 
@@ -588,7 +619,7 @@ impl Uvm {
                 return Err(KernelError::InvalidAddress);
             }
 
-            let pte = self.walk(VA(va0), false)?;
+            let pte = self.walk(VA::from(va0), false)?;
 
             if !pte.is_v() || !pte.is_u() || !pte.is_w() {
                 return Err(KernelError::InvalidPte);
@@ -671,7 +702,7 @@ pub fn init_hart() {
         vma::sfence();
 
         // set kvm as the page table address
-        satp::write(satp::make(KVM.get().unwrap().0.as_pa().0));
+        satp::write(satp::make(KVM.get().unwrap().0.as_pa().as_usize()));
 
         // flush stale entries from the TLB
         vma::sfence();

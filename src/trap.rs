@@ -129,7 +129,7 @@ pub unsafe extern "C" fn usertrapret() {
     let data = unsafe { proc.data_mut() };
     let trapframe = data.trapframe.as_mut().unwrap();
     trapframe.kernel_satp = unsafe { satp::read() };
-    trapframe.kernel_sp = data.kstack.0 + PGSIZE;
+    trapframe.kernel_sp = (data.kstack + PGSIZE).as_usize();
     trapframe.kernel_trap = usertrap as *const () as usize;
     trapframe.kernel_hartid = unsafe { tp::read() };
 
@@ -145,7 +145,7 @@ pub unsafe extern "C" fn usertrapret() {
     unsafe { sepc::write(trapframe.epc) };
 
     // tell trampoline.S the user page table to switch to.
-    let user_satp = satp::make(data.pagetable.as_ref().unwrap().0.as_pa().0);
+    let user_satp = satp::make(data.pagetable.as_ref().unwrap().0.as_pa().as_usize());
 
     // jump to userret in trampoline.S at the top of memory, which
     // switches to the user page table, restores user registers,

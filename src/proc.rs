@@ -332,7 +332,7 @@ pub struct ProcData {
 impl ProcData {
     const fn new() -> Self {
         Self {
-            kstack: VA(0),
+            kstack: VA::new(0),
             size: 0,
             pagetable: None,
             trapframe: None,
@@ -480,7 +480,7 @@ impl ProcPool {
             // initializer works for now. It would be better to create a new struct called Stack...
             let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
             // Cannot get va from proc.data.kstack since init function is not called yet.
-            let va = VA(kstack(i));
+            let va = VA::from(kstack(i));
 
             kvm.map(va, pa, PGSIZE, PTE_R | PTE_W);
         }
@@ -522,7 +522,7 @@ impl ProcPool {
 
                 // Set up new context to start executing at forkret, which return to user space.
                 data.context.ra = fork_ret as *const () as usize;
-                data.context.sp = data.kstack.0 + PGSIZE;
+                data.context.sp = (data.kstack + PGSIZE).as_usize();
 
                 return Ok((proc, inner));
             }
@@ -595,7 +595,7 @@ pub fn wait(addr: VA) -> Option<usize> {
                 if inner.state == ProcState::Zombie {
                     let pid = inner.pid.0;
 
-                    if (addr.0 != 0) {
+                    if (addr != 0) {
                         unsafe {
                             let xstate_bytes = &inner.xstate.to_le_bytes();
                             current_proc
@@ -810,7 +810,7 @@ pub fn kill(pid: PID) -> bool {
 pub fn init() {
     unsafe {
         for proc in PROC_POOL.iter() {
-            proc.data_mut().kstack = VA(kstack(proc.id));
+            proc.data_mut().kstack = VA::from(kstack(proc.id));
         }
     }
 
