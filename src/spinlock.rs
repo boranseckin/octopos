@@ -80,10 +80,13 @@ impl<T> SpinLock<T> {
     }
 
     /// Used by `fork_ret` to unlock after returning from scheduler.
+    /// This manually releases InterruptLock as well.
     pub unsafe fn force_unlock(&self) {
         unsafe {
             assert!(self.holding(), "force_unlock: not locked {}", self.name);
             self.cpu.store(ptr::null_mut(), Ordering::Release);
+            // also release interrupt lock (decrement num_off)
+            CPU_POOL.current().unlock();
         }
     }
 

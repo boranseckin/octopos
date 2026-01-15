@@ -50,7 +50,7 @@ impl CPU {
     }
 
     /// Unlocks this CPU by enabling interrupts if appropriate.
-    fn unlock(&mut self) {
+    pub fn unlock(&mut self) {
         assert!(!interrupts::get(), "cpu unlock - interruptible");
         assert!(self.num_off >= 1, "cpu unlock");
 
