@@ -248,6 +248,12 @@ impl PID {
     }
 }
 
+impl From<usize> for PID {
+    fn from(value: usize) -> Self {
+        PID(value)
+    }
+}
+
 impl core::ops::Deref for PID {
     type Target = usize;
 
@@ -293,7 +299,7 @@ pub struct ProcInner {
     // If Some, have been killed
     pub killed: bool,
     // Exit status to be returned to parent's wait
-    pub xstate: i32,
+    pub xstate: isize,
     // Process ID
     pub pid: PID,
 }
@@ -581,10 +587,14 @@ pub fn user_init() {
     // inner lock is dropped
 }
 
+pub fn fork() -> PID {
+    unimplemented!()
+}
+
 /// Exits the current process and does not return.
 ///
 /// An exited process remains in the zombie state until its parent calls `wait`.
-pub fn exit(status: i32) -> ! {
+pub fn exit(status: isize) -> ! {
     let proc = CPU_POOL.current_proc().unwrap();
     assert!(!proc.is_init_proc(), "init exiting");
 
@@ -611,7 +621,7 @@ pub fn exit(status: i32) -> ! {
 }
 
 /// Waits for a child process to exit and return its pid or None if there are no children.
-pub fn wait(addr: VA) -> Option<usize> {
+pub fn wait(addr: VA) -> Option<PID> {
     let current_proc = CPU_POOL.current_proc().unwrap();
     let current_id = current_proc.id;
 
@@ -650,7 +660,7 @@ pub fn wait(addr: VA) -> Option<usize> {
 
                     proc.free(inner);
 
-                    return Some(pid);
+                    return Some(PID(pid));
                 }
             }
         }

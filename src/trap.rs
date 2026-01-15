@@ -8,10 +8,11 @@ use crate::riscv::{
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
 };
 use crate::spinlock::SpinLock;
+use crate::syscall::syscall;
 use crate::trampoline::{trampoline, userret, uservec};
 use crate::uart::UART;
 
-static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
+pub static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
 
 /// Handles an interrupt, exception, or system call from user space.
 ///
@@ -54,7 +55,7 @@ pub unsafe extern "C" fn usertrap() {
                 // done with those registers.
                 interrupts::enable();
 
-                todo!("syscall()")
+                syscall(trapframe);
             }
 
             // device interrupt
