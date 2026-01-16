@@ -616,6 +616,43 @@ impl Uvm {
         self.free(size);
     }
 
+    /// Copies this prcoess's (parent's) page table and its memory into a child's page table.
+    ///
+    /// TODO: this is taking `&mut self` because `walk` requires `&mut` but it should not.
+    pub fn copy(&mut self, child: &mut Uvm, size: usize) -> Result<(), KernelError> {
+        for i in (0..size).step_by(PGSIZE) {
+            let pte = self.walk(VA::from(i), false)?;
+
+            assert!(pte.is_v(), "uvmcopy: page not present");
+
+            let pa = pte.as_pa();
+            let flags = pte.flags();
+
+            let mem = match Box::<Page>::try_new_zeroed() {
+                Ok(mem) => unsafe { mem.assume_init() },
+                Err(err) => {
+                    child.unmap(VA::from(0), i / PGSIZE, true);
+                    return Err(err.into());
+                }
+            };
+
+            let mem_ptr = Box::into_raw(mem);
+            // # Safety: pa is valid and mapped in parent's pagetable. mem and pa are
+            // non-overlapping.
+            unsafe {
+                ptr::copy_nonoverlapping(pa.as_mut_ptr::<u8>(), mem_ptr as *mut u8, PGSIZE);
+            }
+
+            if let Err(err) = child.map_pages(VA::from(i), pa, PGSIZE, flags) {
+                // # Safety: mem_ptr was allocated above and is not mapped in child's pagetable.
+                drop(unsafe { Box::from_raw(mem_ptr) });
+                return Err(err);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Copies from kernel to user.
     /// Copies bytes from src to virtual address dstva in the current page table.
     pub fn copy_out(&mut self, dstva: VA, mut src: &[u8]) -> Result<(), KernelError> {

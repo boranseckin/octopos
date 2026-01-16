@@ -9,6 +9,9 @@ use crate::vm::VA;
 
 pub enum SyscallError {
     Unknown(usize),
+    ForkError,
+    WaitError,
+    SbrkError,
 }
 
 /// Wrapper for extracting typed syscall arguments from trapframe.
@@ -136,7 +139,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Wait => sys_wait(&args),
             Syscall::Pipe => sys_pipe(&args),
             Syscall::Read => sys_read(&args),
-            Syscall::Kill => sys_exit(&args),
+            Syscall::Kill => sys_kill(&args),
             Syscall::Exec => sys_exec(&args),
             Syscall::Fstat => sys_fstat(&args),
             Syscall::Chdir => sys_chdir(&args),

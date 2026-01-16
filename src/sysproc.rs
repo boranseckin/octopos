@@ -13,17 +13,28 @@ pub fn sys_getpid(args: &SyscallArgs) -> Result<usize, SyscallError> {
 }
 
 pub fn sys_fork(_args: &SyscallArgs) -> Result<usize, SyscallError> {
-    Ok(*proc::fork())
+    match proc::fork() {
+        Ok(pid) => Ok(*pid),
+        Err(_) => Err(SyscallError::ForkError),
+    }
 }
 
 pub fn sys_wait(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let addr = args.get_addr(0);
-    let pid = proc::wait(addr).unwrap_or(PID::from(usize::MAX));
-    Ok(*pid)
+    match proc::wait(addr) {
+        Some(pid) => Ok(*pid),
+        None => Err(SyscallError::WaitError),
+    }
 }
 
 pub fn sys_sbrk(args: &SyscallArgs) -> Result<usize, SyscallError> {
-    unimplemented!()
+    let size = args.get_int(0);
+    let addr = args.proc().data().size;
+
+    match unsafe { proc::grow(size) } {
+        Ok(_) => Ok(addr),
+        Err(_) => Err(SyscallError::SbrkError),
+    }
 }
 
 pub fn sys_sleep(args: &SyscallArgs) -> Result<usize, SyscallError> {
@@ -31,7 +42,9 @@ pub fn sys_sleep(args: &SyscallArgs) -> Result<usize, SyscallError> {
 }
 
 pub fn sys_kill(args: &SyscallArgs) -> Result<usize, SyscallError> {
-    unimplemented!()
+    let pid = args.get_int(0);
+
+    Ok(proc::kill(PID::from(pid as usize)).into())
 }
 
 pub fn sys_uptime(_args: &SyscallArgs) -> Result<usize, SyscallError> {

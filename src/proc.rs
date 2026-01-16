@@ -188,7 +188,7 @@ impl Default for Context {
 // the trapframe includes callee-saved user registers like s0-s11 because the
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C, align(4096))]
 pub struct TrapFrame {
     /*   0 */ pub kernel_satp: usize, // kernel page table
@@ -587,8 +587,100 @@ pub fn user_init() {
     // inner lock is dropped
 }
 
-pub fn fork() -> PID {
-    unimplemented!()
+/// Grows or shrinks user memory by `n` bytes.
+/// The new size is reflected in `proc.data.size` and return.
+///
+/// # Safety
+/// The caller must ensure exclusive access to the process's memory.
+pub unsafe fn grow(n: isize) -> Result<usize, KernelError> {
+    let proc = CPU_POOL.current_proc().unwrap();
+    let data = unsafe { proc.data_mut() };
+
+    let mut size = data.size;
+
+    if n > 0 {
+        size = data
+            .pagetable
+            .as_mut()
+            .unwrap()
+            .alloc(size, size + (n as usize), PTE_W)?;
+    } else if n < 0 {
+        let shrink = (-n) as usize;
+        if shrink > size {
+            return Err(KernelError::InvalidArgument);
+        }
+
+        size = data
+            .pagetable
+            .as_mut()
+            .unwrap()
+            .dealloc(size, size - shrink);
+    }
+
+    data.size = size;
+    Ok(size)
+}
+
+/// Crates a new process, copying the parent.
+/// Sets up the child kernel stack to return as if from `fork()` system call.
+pub fn fork() -> Result<PID, KernelError> {
+    let proc = CPU_POOL.current_proc().unwrap();
+    let data = unsafe { proc.data_mut() };
+
+    // allocate process
+    let (new_proc, new_inner) = PROC_POOL.alloc()?;
+    let new_data = unsafe { new_proc.data_mut() };
+
+    // copy user memory from parent to child
+    let new_pagetable = new_data.pagetable.as_mut().unwrap();
+    if let Err(err) = data
+        .pagetable
+        .as_mut()
+        .unwrap()
+        .copy(new_pagetable, data.size)
+    {
+        new_proc.free(new_inner);
+        return Err(err);
+    };
+    new_data.size = data.size;
+
+    // copy saved user registers
+    let new_trapframe = new_data.trapframe.as_mut().unwrap();
+    let trapframe = data.trapframe.as_ref().unwrap();
+    *new_trapframe = (*trapframe).clone();
+
+    // cause fork to return 0 in the child
+    new_trapframe.a0 = 0;
+
+    // TODO: increment reference counts on open file descriptors
+
+    new_data.name = data.name.clone();
+
+    let pid = new_inner.pid;
+
+    // drop new proc's lock here
+    drop(new_inner);
+
+    {
+        let mut parents = PROC_POOL.parents.lock();
+        parents[new_proc.id] = Some(proc.id);
+    }
+
+    // re-acquire new proc's lock
+    let mut new_inner = new_proc.inner.lock();
+    new_inner.state = ProcState::Runnable;
+
+    Ok(pid)
+}
+
+/// Pass `original`'s abandoned children to init.
+pub fn reparent(original: &Proc, parents: &mut SpinLockGuard<'_, [Option<usize>; NPROC]>) {
+    for proc in parents.iter_mut() {
+        if *proc == Some(original.id) {
+            *proc = Some(INIT_PROC.get().unwrap().id);
+            wakeup(*INIT_PROC.get().unwrap() as *const _ as usize);
+        }
+    }
 }
 
 /// Exits the current process and does not return.
@@ -600,20 +692,23 @@ pub fn exit(status: isize) -> ! {
 
     let data = unsafe { proc.data_mut() };
 
-    // Close all open files.
-    todo!();
+    // TODO: Close all open files.
 
-    // TODO: wait_lock
+    let inner = {
+        // parents lock is dropped at the end of this scope
+        let mut parents = PROC_POOL.parents.lock();
 
-    // Give any children to init.
-    todo!("reparent");
+        // give any children to init
+        reparent(proc, &mut parents);
 
-    // Parent might be sleeping in `wait`.
-    wakeup(PROC_POOL.parents.lock()[proc.id].expect("exit no parent"));
+        // parent might be sleeping in `wait`
+        wakeup(parents[proc.id].expect("exit no parent"));
 
-    let mut inner = proc.inner.lock();
-    inner.xstate = status;
-    inner.state = ProcState::Zombie;
+        let mut inner = proc.inner.lock();
+        inner.xstate = status;
+        inner.state = ProcState::Zombie;
+        inner
+    };
 
     sched(inner, &mut data.context);
 

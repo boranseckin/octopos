@@ -6,6 +6,7 @@ pub enum KernelError {
     InvalidPage = -2,
     InvalidAddress = -3,
     InvalidPte = -4,
+    InvalidArgument = -5,
 }
 
 impl From<core::alloc::AllocError> for KernelError {
@@ -21,6 +22,7 @@ impl KernelError {
             KernelError::InvalidPage => "invalid page",
             KernelError::InvalidAddress => "invalid address",
             KernelError::InvalidPte => "invalid pte",
+            KernelError::InvalidArgument => "invalid argument",
         }
     }
 }
