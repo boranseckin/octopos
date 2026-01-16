@@ -61,7 +61,7 @@ pub unsafe extern "C" fn usertrap() {
             // device interrupt
             scause::Trap::Interrupt(intr)
                 if {
-                    which_dev = dev_intr(intr);
+                    which_dev = device_interrupt(intr);
                     which_dev.is_some()
                 } =>
             {
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn kerneltrap() {
         match scause.cause() {
             scause::Trap::Interrupt(intr)
                 if {
-                    which_dev = dev_intr(intr);
+                    which_dev = device_interrupt(intr);
                     which_dev.is_some()
                 } => {}
 
@@ -227,7 +227,7 @@ enum InterruptType {
 }
 
 /// Check if interrupt is from an external device or software timer.
-fn dev_intr(intr: scause::Interrupt) -> Option<InterruptType> {
+fn device_interrupt(intr: scause::Interrupt) -> Option<InterruptType> {
     match intr {
         // Supervisor external interrupt via PLIC
         scause::Interrupt::SupervisorExternal => {

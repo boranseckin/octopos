@@ -689,7 +689,8 @@ impl Uvm {
 
     /// Copies from user to kernel.
     /// Copy bytes from virtual address srcva to dst in the current page table.
-    pub fn copy_in(&mut self, mut dst: &mut [u8], srcva: VA) -> Result<(), KernelError> {
+    pub fn copy_in(&mut self, dst: &mut [u8], srcva: VA) -> Result<(), KernelError> {
+        let mut dst = dst;
         let mut srcva = srcva.0;
 
         while !dst.is_empty() {

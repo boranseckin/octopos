@@ -13,6 +13,7 @@ pub enum SyscallError {
     WaitError,
     SbrkError,
     SleepError,
+    FetchError,
 }
 
 /// Wrapper for extracting typed syscall arguments from trapframe.
@@ -57,13 +58,55 @@ impl<'a> SyscallArgs<'a> {
     }
 
     /// Fetches a null-terminated string from user space.
-    pub fn get_string(&self, index: usize, max: usize) -> Result<String, SyscallError> {
-        unimplemented!()
+    pub fn fetch_string(&self, addr: VA, max: usize) -> Result<String, SyscallError> {
+        let proc = CPU_POOL.current_proc().unwrap();
+        let data = unsafe { proc.data_mut() };
+
+        let mut result = String::with_capacity(max);
+
+        let mut buf = [0u8; 1];
+        for i in 0..max {
+            if data
+                .pagetable
+                .as_mut()
+                .unwrap()
+                .copy_in(&mut buf, VA::from(addr.as_usize() + i))
+                .is_err()
+            {
+                return Err(SyscallError::FetchError);
+            }
+
+            if buf[0] == 0 {
+                return Ok(result);
+            }
+
+            result.push(buf[0] as char);
+        }
+
+        Ok(result)
     }
 
     /// Fetches a byte array from user space.
-    pub fn get_bytes(&self, index: usize, len: usize) -> Result<Vec<u8>, SyscallError> {
-        unimplemented!()
+    pub fn fetch_bytes(&self, addr: VA, len: usize) -> Result<Vec<u8>, SyscallError> {
+        let proc = CPU_POOL.current_proc().unwrap();
+        let data = unsafe { proc.data_mut() };
+
+        if addr >= data.size || addr + 64 > data.size {
+            return Err(SyscallError::FetchError);
+        }
+
+        let mut result = Vec::with_capacity(len);
+        if data
+            .pagetable
+            .as_mut()
+            .unwrap()
+            .copy_in(&mut result, addr)
+            .is_err()
+        {
+            return Err(SyscallError::FetchError);
+        }
+
+        Ok(result)
     }
 }
 

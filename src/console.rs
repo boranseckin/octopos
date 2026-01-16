@@ -47,7 +47,7 @@ impl Console {
 
     /// User `write()`s to the console are handled here.
     /// Currently only handles user addresses.
-    fn write(src: VA, len: usize) -> Result<usize, ()> {
+    pub fn write(src: VA, len: usize) -> Result<usize, ()> {
         // TODO: avoid byte to byte copy_in and use chunks
         for i in 0..len {
             let src = VA::from(src.as_usize() + i);
@@ -64,7 +64,7 @@ impl Console {
 
     /// User `read()`s from the console are handled here.
     /// Currently only handles user addresses.
-    fn read(dst: VA, len: usize) -> Result<usize, ()> {
+    pub fn read(dst: VA, len: usize) -> Result<usize, ()> {
         let mut console = CONSOLE.lock();
 
         let mut dst = dst;
