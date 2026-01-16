@@ -6,9 +6,11 @@
 
 extern crate alloc;
 
+pub mod buf;
 pub mod console;
 pub mod entry;
 pub mod error;
+pub mod fs;
 pub mod kalloc;
 pub mod kernelvec;
 pub mod memlayout;

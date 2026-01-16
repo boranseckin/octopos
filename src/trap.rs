@@ -11,6 +11,7 @@ use crate::spinlock::SpinLock;
 use crate::syscall::syscall;
 use crate::trampoline::{trampoline, userret, uservec};
 use crate::uart::UART;
+use crate::virtio_disk;
 
 pub static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
 
@@ -235,7 +236,7 @@ fn device_interrupt(intr: scause::Interrupt) -> Option<InterruptType> {
 
             match irq as usize {
                 UART0_IRQ => UART.handle_interrupt(),
-                VIRTIO0_IRQ => todo!("virtio_disk_intr()"),
+                VIRTIO0_IRQ => virtio_disk::handle_interrupt(),
                 _ => println!("unexpected interrupt irq = {}", irq),
             }
 
