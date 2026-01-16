@@ -12,6 +12,7 @@ use kernel::printf;
 use kernel::println;
 use kernel::proc::{self, CPU_POOL};
 use kernel::trap;
+use kernel::virtio_disk;
 use kernel::vm;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -36,6 +37,7 @@ extern "C" fn main() -> ! {
             plic::init();
             plic::init_hart();
 
+            virtio_disk::init();
             proc::user_init();
         }
 

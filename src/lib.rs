@@ -27,4 +27,5 @@ pub mod sysproc;
 pub mod trampoline;
 pub mod trap;
 pub mod uart;
+pub mod virtio_disk;
 pub mod vm;
