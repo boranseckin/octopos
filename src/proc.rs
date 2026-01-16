@@ -975,6 +975,51 @@ pub fn kill(pid: PID) -> bool {
     false
 }
 
+pub enum Addr {
+    User(VA),
+    Kernel(*mut u8),
+}
+
+/// Copies from either a user or a kernel address.
+pub fn copy_out(src: &[u8], dst: Addr) -> Result<(), KernelError> {
+    unsafe {
+        match dst {
+            Addr::User(va) => CPU_POOL
+                .current_proc()
+                .unwrap()
+                .data_mut()
+                .pagetable
+                .as_mut()
+                .unwrap()
+                .copy_out(va, src),
+            Addr::Kernel(ptr) => {
+                ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Copies into either a user or a kernel address.
+pub fn copy_in(src: Addr, dst: &mut [u8]) -> Result<(), KernelError> {
+    unsafe {
+        match src {
+            Addr::User(va) => CPU_POOL
+                .current_proc()
+                .unwrap()
+                .data_mut()
+                .pagetable
+                .as_mut()
+                .unwrap()
+                .copy_in(dst, va),
+            Addr::Kernel(ptr) => {
+                ptr::copy_nonoverlapping(ptr, dst.as_mut_ptr(), dst.len());
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Initializes the process table.
 ///
 /// # Safety

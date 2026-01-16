@@ -1,6 +1,7 @@
 use core::num::Wrapping;
 use core::ptr;
 
+use crate::console::Console;
 use crate::memlayout::UART0;
 use crate::printf::PRINTF;
 use crate::proc::{self, CPU_POOL, Channel};
@@ -168,8 +169,8 @@ impl SpinLock<Uart> {
     /// Handles a UART interrupt.
     /// It is raised because input has arrived, UART is ready for more output, or both.
     pub fn handle_interrupt(&self) {
-        while let Some(_c) = self.getc() {
-            todo!("console interrupt with c");
+        while let Some(c) = self.getc() {
+            Console::handle_interrupt(c);
         }
 
         self.lock().start();

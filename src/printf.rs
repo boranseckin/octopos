@@ -1,7 +1,7 @@
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::console;
+use crate::console::Console;
 use crate::proc::CPU_POOL;
 use crate::spinlock::SpinLock;
 
@@ -12,7 +12,7 @@ struct Writer;
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for byte in s.bytes() {
-            console::putc(byte);
+            Console::putc(byte);
         }
         Ok(())
     }
