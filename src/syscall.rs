@@ -12,6 +12,7 @@ pub enum SyscallError {
     ForkError,
     WaitError,
     SbrkError,
+    SleepError,
 }
 
 /// Wrapper for extracting typed syscall arguments from trapframe.

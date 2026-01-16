@@ -304,15 +304,15 @@ pub enum ProcState {
 /// Process lock must be held when accessing these.
 #[derive(Debug)]
 pub struct ProcInner {
-    // Process state
+    /// Process state
     pub state: ProcState,
-    // If Some, sleeping on chan
+    /// If Some, sleeping on chan
     pub channel: Option<Channel>,
-    // If true, have been killed
+    /// If true, have been killed
     pub killed: bool,
-    // Exit status to be returned to parent's wait
+    /// Exit status to be returned to parent's wait
     pub xstate: isize,
-    // Process ID
+    /// Process ID
     pub pid: PID,
 }
 
@@ -328,24 +328,24 @@ impl ProcInner {
     }
 }
 
-// Private fields for Proc
+/// Private fields for Proc
 #[derive(Debug)]
 pub struct ProcData {
-    // Virtual address of kernel stack
+    /// Virtual address of kernel stack
     pub kstack: VA,
-    // Size of process memory (bytes)
+    /// Size of process memory (bytes)
     pub size: usize,
-    // User page table
+    /// User page table
     pub pagetable: Option<Uvm>,
-    // Data page for trampoline
+    /// Data page for trampoline
     pub trapframe: Option<Box<TrapFrame>>,
-    // swtch() here to run process
+    /// swtch() here to run process
     pub context: Context,
-    // Open files
+    /// Open files
     pub open_files: (),
-    // Current directory
+    /// Current directory
     pub cwd: (),
-    // Process name
+    /// Process name
     pub name: String,
 }
 
@@ -387,8 +387,17 @@ impl Proc {
         unsafe { &mut *self.data.get() }
     }
 
+    /// Returns true if this process is the init process.
     pub fn is_init_proc(&self) -> bool {
         ptr::eq(self, *INIT_PROC.get().unwrap())
+    }
+
+    /// Returns true if this process has been killed.
+    ///
+    /// Acquires and releases the proc lock.
+    pub fn is_killed(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.killed
     }
 
     /// Create a user page table using a given process's trapframe address, with no user memory,
@@ -898,9 +907,9 @@ pub unsafe extern "C" fn fork_ret() {
     }
 }
 
-/// Atomically releases a condition's lock and sleeps on chan.
+/// Atomically releases a condition's lock and sleeps on channel.
 /// Reacquires the condition's lock when awakened.
-pub fn sleep<T>(chan: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
+pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
     // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
     // the condition, which it cannot do before we release it.
@@ -913,7 +922,7 @@ pub fn sleep<T>(chan: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLock
         condition_mutex = SpinLock::unlock(condition_lock);
 
         // go to sleep.
-        inner.channel = Some(chan);
+        inner.channel = Some(channel);
         inner.state = ProcState::Sleeping;
 
         // this is where we switch to scheduler (to another proc).
@@ -928,8 +937,9 @@ pub fn sleep<T>(chan: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLock
     condition_mutex.lock()
 }
 
-/// Wakes up all processes sleeping on chan. Must be called without any proc lock.
-pub fn wakeup(chan: Channel) {
+/// Wakes up all processes sleeping on channel.
+/// Must be called without any proc lock.
+pub fn wakeup(channel: Channel) {
     let current_proc = CPU_POOL.current_proc();
 
     for proc in PROC_POOL.iter() {
@@ -938,7 +948,7 @@ pub fn wakeup(chan: Channel) {
         }
 
         let mut inner = proc.inner.lock();
-        if inner.state == ProcState::Sleeping && inner.channel == Some(chan) {
+        if inner.state == ProcState::Sleeping && inner.channel == Some(channel) {
             inner.state = ProcState::Runnable;
         }
     }
