@@ -2,7 +2,7 @@ use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::plic;
 use crate::println;
-use crate::proc::{self, CPU_POOL};
+use crate::proc::{self, CPU_POOL, Channel};
 use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
@@ -211,7 +211,7 @@ pub fn clock_intr() {
     if hart == 0 {
         let mut ticks = TICKS_LOCK.lock();
         *ticks += 1;
-        proc::wakeup(&(*ticks) as *const _ as usize);
+        proc::wakeup(Channel::Ticks);
     }
 
     // Ask for the next timer interrupt.

@@ -243,7 +243,7 @@ pub struct PID(usize);
 
 impl PID {
     pub fn alloc() -> Self {
-        static PID_COUNT: AtomicUsize = AtomicUsize::new(0);
+        static PID_COUNT: AtomicUsize = AtomicUsize::new(1);
         PID(PID_COUNT.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -268,9 +268,21 @@ impl core::ops::DerefMut for PID {
     }
 }
 
+/// Channel type for sleep/wakeup
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// `proc.id` for `sleep()` / `wakeup()`.
+    Proc(usize),
+    /// System ticks
+    Ticks,
+    /// I/O buffer
+    Buffer(usize),
+}
+
 /// Process control block
 #[derive(Debug)]
 pub struct Proc {
+    /// NOT PID. Used for indexing in PROC_POOL and matching parent-child relationships.
     pub id: usize,
     pub inner: SpinLock<ProcInner>,
     data: UnsafeCell<ProcData>,
@@ -294,9 +306,9 @@ pub enum ProcState {
 pub struct ProcInner {
     // Process state
     pub state: ProcState,
-    // If Some, sleeping on chan (any const pointer to a struct)
-    pub chan: usize,
-    // If Some, have been killed
+    // If Some, sleeping on chan
+    pub channel: Option<Channel>,
+    // If true, have been killed
     pub killed: bool,
     // Exit status to be returned to parent's wait
     pub xstate: isize,
@@ -308,7 +320,7 @@ impl ProcInner {
     const fn new() -> Self {
         Self {
             state: ProcState::Unused,
-            chan: 0,
+            channel: None,
             killed: false,
             xstate: 0,
             pid: PID(0),
@@ -428,7 +440,7 @@ impl Proc {
         data.size = 0;
         inner.pid = PID(0);
         data.name.clear();
-        inner.chan = 0;
+        inner.channel = None;
         inner.killed = false;
         inner.xstate = 0;
         inner.state = ProcState::Unused;
@@ -678,7 +690,7 @@ pub fn reparent(original: &Proc, parents: &mut SpinLockGuard<'_, [Option<usize>;
     for proc in parents.iter_mut() {
         if *proc == Some(original.id) {
             *proc = Some(INIT_PROC.get().unwrap().id);
-            wakeup(*INIT_PROC.get().unwrap() as *const _ as usize);
+            wakeup(Channel::Proc(INIT_PROC.get().unwrap().id));
         }
     }
 }
@@ -702,7 +714,8 @@ pub fn exit(status: isize) -> ! {
         reparent(proc, &mut parents);
 
         // parent might be sleeping in `wait`
-        wakeup(parents[proc.id].expect("exit no parent"));
+        let parent_id = parents[proc.id].expect("exit no parent");
+        wakeup(Channel::Proc(parent_id));
 
         let mut inner = proc.inner.lock();
         inner.xstate = status;
@@ -766,7 +779,7 @@ pub fn wait(addr: VA) -> Option<PID> {
         }
 
         // Wait for a child to exit.
-        parents = sleep(current_proc as *const _ as usize, parents);
+        parents = sleep(Channel::Proc(current_id), parents);
     }
 }
 
@@ -887,7 +900,7 @@ pub unsafe extern "C" fn fork_ret() {
 
 /// Atomically releases a condition's lock and sleeps on chan.
 /// Reacquires the condition's lock when awakened.
-pub fn sleep<T>(chan: usize, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
+pub fn sleep<T>(chan: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
     // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
     // the condition, which it cannot do before we release it.
@@ -900,7 +913,7 @@ pub fn sleep<T>(chan: usize, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGu
         condition_mutex = SpinLock::unlock(condition_lock);
 
         // go to sleep.
-        inner.chan = chan;
+        inner.channel = Some(chan);
         inner.state = ProcState::Sleeping;
 
         // this is where we switch to scheduler (to another proc).
@@ -908,7 +921,7 @@ pub fn sleep<T>(chan: usize, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGu
         inner = sched(inner, context);
         // this is where we switch back to the original proc.
 
-        inner.chan = 0;
+        inner.channel = None;
     } // drop inner lock
 
     // reacquire original lock.
@@ -916,7 +929,7 @@ pub fn sleep<T>(chan: usize, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGu
 }
 
 /// Wakes up all processes sleeping on chan. Must be called without any proc lock.
-pub fn wakeup(chan: usize) {
+pub fn wakeup(chan: Channel) {
     let current_proc = CPU_POOL.current_proc();
 
     for proc in PROC_POOL.iter() {
@@ -925,7 +938,7 @@ pub fn wakeup(chan: usize) {
         }
 
         let mut inner = proc.inner.lock();
-        if inner.state == ProcState::Sleeping && inner.chan == chan {
+        if inner.state == ProcState::Sleeping && inner.channel == Some(chan) {
             inner.state = ProcState::Runnable;
         }
     }

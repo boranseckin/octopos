@@ -3,7 +3,7 @@ use core::ptr;
 
 use crate::memlayout::UART0;
 use crate::printf::PRINTF;
-use crate::proc::{self, CPU_POOL};
+use crate::proc::{self, CPU_POOL, Channel};
 use crate::spinlock::SpinLock;
 
 // UART control registers are memory-mapped at address UART0.
@@ -120,7 +120,7 @@ impl Uart {
             let c = *self.tx_buf.get(self.tx_r.0 % UART_TX_BUF_SIZE).unwrap();
             self.tx_r += 1;
 
-            proc::wakeup(&self.tx_r as *const _ as usize);
+            proc::wakeup(Channel::Buffer(&self.tx_r as *const _ as usize));
 
             self.write(THR, c);
         }
@@ -142,7 +142,7 @@ impl SpinLock<Uart> {
 
         // buffer is full, sleep until there is space
         while uart.tx_w == uart.tx_r + Wrapping(UART_TX_BUF_SIZE) {
-            uart = proc::sleep(&uart.tx_r as *const _ as usize, uart)
+            uart = proc::sleep(Channel::Buffer(&uart.tx_r as *const _ as usize), uart)
         }
 
         let index = uart.tx_w.0 % UART_TX_BUF_SIZE;
