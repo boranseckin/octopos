@@ -1,6 +1,6 @@
 use crate::proc::{self, CPU_POOL, Channel, PID};
 use crate::syscall::{SyscallArgs, SyscallError};
-use crate::trap::TICKS_LOCK;
+use crate::trap::TICKS;
 
 pub fn sys_exit(args: &SyscallArgs) -> ! {
     let n = args.get_int(0);
@@ -40,8 +40,8 @@ pub fn sys_sbrk(args: &SyscallArgs) -> Result<usize, SyscallError> {
 pub fn sys_sleep(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let duration = args.get_int(0).max(0) as usize;
 
-    let mut ticks = TICKS_LOCK.lock();
-    let ticks0 = ticks.clone();
+    let mut ticks = TICKS.lock();
+    let ticks0 = *ticks;
 
     while *ticks - ticks0 < duration {
         if CPU_POOL.current_proc().unwrap().is_killed() {
@@ -61,6 +61,6 @@ pub fn sys_kill(args: &SyscallArgs) -> Result<usize, SyscallError> {
 }
 
 pub fn sys_uptime(_args: &SyscallArgs) -> Result<usize, SyscallError> {
-    let ticks = *TICKS_LOCK.lock();
+    let ticks = *TICKS.lock();
     Ok(ticks)
 }

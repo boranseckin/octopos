@@ -7,6 +7,7 @@ use crate::sysfile::*;
 use crate::sysproc::*;
 use crate::vm::VA;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallError {
     Unknown(usize),
     ForkError,
@@ -14,6 +15,7 @@ pub enum SyscallError {
     SbrkError,
     SleepError,
     FetchError,
+    ConsoleError,
 }
 
 /// Wrapper for extracting typed syscall arguments from trapframe.

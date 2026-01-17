@@ -1,6 +1,5 @@
 #![no_std]
 #![feature(fn_align)]
-#![feature(negative_impls)]
 #![feature(allocator_api)]
 #![feature(alloc_error_handler)]
 

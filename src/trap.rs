@@ -13,7 +13,7 @@ use crate::trampoline::{trampoline, userret, uservec};
 use crate::uart::UART;
 use crate::virtio_disk;
 
-pub static TICKS_LOCK: SpinLock<usize> = SpinLock::new(0, "time");
+pub static TICKS: SpinLock<usize> = SpinLock::new(0, "time");
 
 /// Handles an interrupt, exception, or system call from user space.
 ///
@@ -210,7 +210,7 @@ pub fn clock_intr() {
     let hart = unsafe { CPU_POOL.current_id() };
 
     if hart == 0 {
-        let mut ticks = TICKS_LOCK.lock();
+        let mut ticks = TICKS.lock();
         *ticks += 1;
         proc::wakeup(Channel::Ticks);
     }

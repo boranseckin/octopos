@@ -1,3 +1,5 @@
+use crate::syscall::SyscallError;
+
 /// Kernel error codes.
 #[repr(isize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,11 +9,18 @@ pub enum KernelError {
     InvalidAddress = -3,
     InvalidPte = -4,
     InvalidArgument = -5,
+    Syscall = -6,
 }
 
 impl From<core::alloc::AllocError> for KernelError {
     fn from(_value: core::alloc::AllocError) -> Self {
         Self::Alloc
+    }
+}
+
+impl From<SyscallError> for KernelError {
+    fn from(_value: SyscallError) -> Self {
+        Self::Syscall
     }
 }
 
@@ -23,6 +32,7 @@ impl KernelError {
             KernelError::InvalidAddress => "invalid address",
             KernelError::InvalidPte => "invalid pte",
             KernelError::InvalidArgument => "invalid argument",
+            KernelError::Syscall => "syscall error",
         }
     }
 }
