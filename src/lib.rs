@@ -19,6 +19,7 @@ pub mod plic;
 pub mod printf;
 pub mod proc;
 pub mod riscv;
+pub mod sleeplock;
 pub mod spinlock;
 pub mod start;
 pub mod swtch;

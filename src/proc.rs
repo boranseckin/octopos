@@ -277,6 +277,8 @@ pub enum Channel {
     Ticks,
     /// I/O buffer
     Buffer(usize),
+    /// Lock
+    Lock(usize),
 }
 
 /// Process control block
