@@ -5,6 +5,7 @@ extern crate alloc;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use kernel::buf;
 use kernel::console;
 use kernel::kalloc;
 use kernel::plic;
@@ -36,6 +37,7 @@ extern "C" fn main() -> ! {
             trap::init_hart();
             plic::init();
             plic::init_hart();
+            buf::init();
 
             virtio_disk::init();
             proc::user_init();

@@ -7,7 +7,7 @@
 
 use core::ptr;
 
-use crate::buf::Buf;
+use crate::buf::{BCACHE, Buf};
 use crate::fs::BSIZE;
 use crate::memlayout::VIRTIO0;
 use crate::proc::{self, Channel};
@@ -118,11 +118,11 @@ struct BlockReq {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct Info {
-    buf: *mut Buf,
+    buf_id: usize,
     status: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Disk {
     /// A set (not a ring) of DMA descriptors, with which the driver tells the device where to read
     /// and write individual disk operations. there are NUM descriptors. Most commands consist of a
@@ -150,6 +150,7 @@ pub struct Disk {
 }
 
 impl Disk {
+    #[allow(clippy::new_without_default)]
     pub const fn new() -> Self {
         Disk {
             desc: [VirtqDesc {
@@ -172,7 +173,7 @@ impl Disk {
             free: [true; NUM],
             used_idx: 0,
             info: [Info {
-                buf: ptr::null_mut(),
+                buf_id: usize::MAX,
                 status: 0,
             }; NUM],
             ops: [BlockReq {
@@ -259,82 +260,93 @@ impl Disk {
 
         Ok(result.map(|i| i.unwrap()))
     }
+}
 
-    fn rw(buf: &mut Buf, write: bool) {
-        let sector = (buf.block_no * (BSIZE / 512)) as u32;
+pub fn rw(buf: &mut Buf<'_>, write: bool) {
+    let block_no = {
+        let inner = BCACHE.inner.lock();
+        inner.meta[buf.id].block_no
+    };
 
-        let mut disk = VIRTIO_DISK.lock();
+    let sector = block_no * (BSIZE / 512) as u32;
 
-        // the spec's Section 5.2 says that legacy block operations use
-        // three descriptors: one for type/reserved/sector, one for the
-        // data, one for a 1-byte status result.
+    let mut disk = VIRTIO_DISK.lock();
 
-        // allocate the three descriptors
-        let ids = loop {
-            if let Ok(ids) = disk.alloc3_desc() {
-                break ids;
-            }
+    // the spec's Section 5.2 says that legacy block operations use
+    // three descriptors: one for type/reserved/sector, one for the
+    // data, one for a 1-byte status result.
 
-            disk = proc::sleep(Channel::Buffer(&disk.free[0] as *const _ as usize), disk);
+    // allocate the three descriptors
+    let ids = loop {
+        if let Ok(ids) = disk.alloc3_desc() {
+            break ids;
+        }
+
+        disk = proc::sleep(Channel::Buffer(&disk.free[0] as *const _ as usize), disk);
+    };
+
+    // format the three descriptors
+    // qemu's virtio-blk.c reads them
+    let buf0 = &mut disk.ops[ids[0]];
+
+    buf0.r#type = if write {
+        VIRTIO_BLK_T_OUT
+    } else {
+        VIRTIO_BLK_T_IN
+    };
+    buf0.reserved = 0;
+    buf0.sector = sector;
+
+    disk.desc[ids[0]].addr = buf0 as *const _ as u64;
+    disk.desc[ids[0]].len = size_of::<BlockReq>() as u32;
+    disk.desc[ids[0]].flags = VRING_DESC_F_NEXT;
+    disk.desc[ids[0]].next = ids[1] as u16;
+
+    disk.desc[ids[1]].addr = buf.data().as_ptr() as u64;
+    disk.desc[ids[1]].len = BSIZE as u32;
+    disk.desc[ids[1]].flags = if write { 0 } else { VRING_DESC_F_WRITE };
+    disk.desc[ids[1]].flags |= VRING_DESC_F_NEXT;
+    disk.desc[ids[1]].next = ids[2] as u16;
+
+    disk.info[ids[0]].status = 0xFF; // device writes 0 on success
+    disk.desc[ids[2]].addr = &disk.info[ids[0]].status as *const _ as u64;
+    disk.desc[ids[2]].len = 1;
+    disk.desc[ids[2]].flags = VRING_DESC_F_WRITE; //device writes the status
+    disk.desc[ids[2]].next = 0;
+
+    // record struct buf for `handle_interrupt()`
+    disk.info[ids[0]].buf_id = buf.id;
+    {
+        let mut inner = BCACHE.inner.lock();
+        inner.meta[buf.id].disk = true;
+    }
+
+    // tell the device the first index in our chain of descriptors
+    let avail_index = disk.avail.idx as usize % NUM;
+    disk.avail.ring[avail_index] = ids[0] as u16;
+
+    // tell the device another avail ring entry is available
+    disk.avail.idx += 1;
+
+    // value 0 is the queue number
+    unsafe { disk.write(VIRTIO_MMIO_QUEUE_NOTIFY, 0) };
+
+    // wait for `handle_interrupt()` to say request has finished
+    loop {
+        let is_disk = {
+            let inner = BCACHE.inner.lock();
+            inner.meta[buf.id].disk
         };
 
-        // format the three descriptors
-        // qemu's virtio-blk.c reads them
-        let buf0 = &mut disk.ops[ids[0]];
-
-        if write {
-            buf0.r#type = VIRTIO_BLK_T_OUT;
-        } else {
-            buf0.r#type = VIRTIO_BLK_T_IN;
+        if !is_disk {
+            break;
         }
 
-        buf0.reserved = 0;
-        buf0.sector = sector;
-
-        disk.desc[ids[0]].addr = buf0 as *const _ as u64;
-        disk.desc[ids[0]].len = size_of::<BlockReq>() as u32;
-        disk.desc[ids[0]].flags = VRING_DESC_F_NEXT;
-        disk.desc[ids[0]].next = ids[1] as u16;
-
-        disk.desc[ids[1]].addr = &buf.data as *const _ as u64;
-        disk.desc[ids[1]].len = BSIZE as u32;
-        if write {
-            disk.desc[ids[1]].flags = 0; // device reads b->data
-        } else {
-            disk.desc[ids[1]].flags = VRING_DESC_F_WRITE; // device writes b->data
-        }
-        disk.desc[ids[1]].flags |= VRING_DESC_F_NEXT;
-        disk.desc[ids[1]].next = ids[2] as u16;
-
-        disk.info[ids[0]].status = 0xFF; // device writes 0 on success
-        disk.desc[ids[2]].addr = &disk.info[ids[0]].status as *const _ as u64;
-        disk.desc[ids[2]].len = 1;
-        disk.desc[ids[2]].flags = VRING_DESC_F_WRITE; //device writes the status
-        disk.desc[ids[2]].next = 0;
-
-        // record struct buf for `handle_interrupt()`
-        buf.disk = true;
-        disk.info[ids[0]].buf = buf;
-
-        // tell the device the first index in our chain of descriptors
-        let avail_index = disk.avail.idx as usize % NUM;
-        disk.avail.ring[avail_index] = ids[0] as u16;
-
-        // tell the device another avail ring entry is available
-        disk.avail.idx += 1;
-
-        // value 0 is the queue number
-        unsafe { disk.write(VIRTIO_MMIO_QUEUE_NOTIFY, 0) };
-
-        // wait for `handle_interrupt()` to say request has finished
-        #[allow(clippy::while_immutable_condition)]
-        while buf.disk {
-            disk = proc::sleep(Channel::Buffer(buf as *const _ as usize), disk);
-        }
-
-        disk.info[ids[0]].buf = ptr::null_mut();
-        disk.free_chain(ids[0]);
+        disk = proc::sleep(Channel::Buffer(buf.id), disk);
     }
+
+    disk.info[ids[0]].buf_id = usize::MAX;
+    disk.free_chain(ids[0]);
 }
 
 /// Handles a disk interrupt.
@@ -353,10 +365,14 @@ pub fn handle_interrupt() {
     // the device increments disk.used->idx when it adds an entry to the used ring.
     while disk.used_idx != disk.used.idx {
         let id = disk.used.ring[disk.used_idx as usize % NUM].id;
+        let buf_id = disk.info[id as usize].buf_id;
 
-        let b = disk.info[id as usize].buf;
-        unsafe { (*b).disk = false };
-        proc::wakeup(Channel::Buffer(b as usize));
+        {
+            let mut inner = BCACHE.inner.lock();
+            inner.meta[buf_id].disk = false;
+        }
+
+        proc::wakeup(Channel::Buffer(buf_id));
 
         disk.used_idx += 1;
     }
