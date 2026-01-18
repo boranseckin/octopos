@@ -112,7 +112,7 @@ const VIRTIO_BLK_T_OUT: u32 = 1; // write the disk
 struct BlockReq {
     r#type: u32,
     reserved: u32,
-    sector: u32,
+    sector: u64,
 }
 
 #[repr(C)]
@@ -268,7 +268,7 @@ pub fn rw(buf: &mut Buf<'_>, write: bool) {
         inner.meta[buf.id].block_no
     };
 
-    let sector = block_no * (BSIZE / 512) as u32;
+    let sector = block_no as u64 * (BSIZE as u64 / 512);
 
     let mut disk = VIRTIO_DISK.lock();
 
