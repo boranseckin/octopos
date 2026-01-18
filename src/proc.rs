@@ -279,6 +279,7 @@ pub enum Channel {
     Buffer(usize),
     /// Lock
     Lock(usize),
+    Log,
 }
 
 /// Process control block

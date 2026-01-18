@@ -12,6 +12,7 @@ pub mod error;
 pub mod fs;
 pub mod kalloc;
 pub mod kernelvec;
+pub mod log;
 pub mod memlayout;
 pub mod param;
 pub mod plic;

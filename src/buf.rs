@@ -1,13 +1,11 @@
 use core::mem::{self, MaybeUninit};
 
 use crate::fs::BSIZE;
+use crate::param::NBUF;
 use crate::println;
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
 use crate::virtio_disk;
-
-/// Number of buffers in the buffer cache.
-const NBUF: usize = 30;
 
 /// Buffer metadata, protected by `BCache`'s `SpinLock`.
 #[derive(Debug, Clone)]
@@ -48,7 +46,7 @@ impl BufData {
     }
 }
 
-/// A buffer handle returned by `bget`/`bread`.
+/// A buffer handle returned by `get()`/`read()`.
 /// Holds the `SleepLock` guard for the buffer data.
 #[derive(Debug)]
 pub struct Buf<'a> {
@@ -199,6 +197,8 @@ impl BCache {
 
     /// Releases a locked buffer.
     /// Moves to the head of the most-recently-used list.
+    ///
+    // TODO: possibly handle this with Drop
     pub fn release(&self, buf: Buf<'_>) {
         // buf must be locked since it holds the sleep lock guard
 
@@ -230,13 +230,13 @@ impl BCache {
     }
 
     /// Artificially increments the reference count for the buffer so that it is not recycled.
-    pub fn pin(&self, buf: Buf<'_>) {
+    pub fn pin(&self, buf: &Buf<'_>) {
         let mut inner = self.inner.lock();
         inner.meta[buf.id].ref_count += 1;
     }
 
     /// Artificially decrements the reference count for the buffer.
-    pub fn unpin(&self, buf: Buf<'_>) {
+    pub fn unpin(&self, buf: &Buf<'_>) {
         let mut inner = self.inner.lock();
         inner.meta[buf.id].ref_count -= 1;
     }
