@@ -29,7 +29,7 @@ use crate::spinlock::SpinLock;
 #[derive(Debug)]
 pub struct LogHeader {
     n: u32,
-    block: [u32; LOGSIZE],
+    blocks: [u32; LOGSIZE],
 }
 
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl Log {
                     dev: 0,
                     header: LogHeader {
                         n: 0,
-                        block: [0; LOGSIZE],
+                        blocks: [0; LOGSIZE],
                     },
                 },
                 "log",
@@ -71,13 +71,21 @@ impl Log {
 
     /// Copies committed blocks from log to their home location
     fn install_trans(recovering: bool) {
-        let inner = LOG.inner.lock();
+        let (dev, start, n) = {
+            let inner = LOG.inner.lock();
+            (inner.dev, inner.start, inner.header.n)
+        }; // LOG lock dropped here
 
-        for tail in 0..inner.header.n {
+        for tail in 0..n {
+            let block = {
+                let inner = LOG.inner.lock();
+                inner.header.blocks[tail as usize]
+            }; // LOG lock dropped here
+
             // read log block
-            let lbuf = BCACHE.read(inner.dev, inner.start + tail + 1);
+            let lbuf = BCACHE.read(dev, start + tail + 1);
             // read dst
-            let mut dbuf = BCACHE.read(inner.dev, inner.header.block[tail as usize]);
+            let mut dbuf = BCACHE.read(dev, block);
 
             // copy block to dst
             dbuf.data_mut().copy_from_slice(lbuf.data());
@@ -100,15 +108,21 @@ impl Log {
     /// This function performs raw pointer dereferencing. Make sure `start` is pointing to the
     /// location of the `header`.
     unsafe fn read_head() {
-        let mut inner = LOG.inner.lock();
+        let (dev, start) = {
+            let inner = LOG.inner.lock();
+            (inner.dev, inner.start)
+        }; // LOG lock dropped here
 
-        let buf = BCACHE.read(inner.dev, inner.start);
+        let buf = BCACHE.read(dev, start);
         let header = unsafe { &*(buf.data().as_ptr() as *const LogHeader) };
 
-        inner.header.n = header.n;
-        for i in 0..inner.header.n {
-            inner.header.block[i as usize] = header.block[i as usize];
-        }
+        {
+            let mut inner = LOG.inner.lock();
+            inner.header.n = header.n;
+            for i in 0..inner.header.n {
+                inner.header.blocks[i as usize] = header.blocks[i as usize];
+            }
+        } // LOG lock dropped here
 
         BCACHE.release(buf);
     }
@@ -120,15 +134,21 @@ impl Log {
     /// This function performs raw pointer dereferencing. Make sure `start` is pointing to the
     /// location of the `header`.
     unsafe fn write_head() {
-        let inner = LOG.inner.lock();
+        let (dev, start) = {
+            let inner = LOG.inner.lock();
+            (inner.dev, inner.start)
+        }; // LOG lock dropped here
 
-        let mut buf = BCACHE.read(inner.dev, inner.start);
+        let mut buf = BCACHE.read(dev, start);
         let header = unsafe { &mut *(buf.data_mut().as_mut_ptr() as *mut LogHeader) };
 
-        header.n = inner.header.n;
-        for i in 0..inner.header.n {
-            header.block[i as usize] = inner.header.block[i as usize];
-        }
+        {
+            let inner = LOG.inner.lock();
+            header.n = inner.header.n;
+            for i in 0..inner.header.n {
+                header.blocks[i as usize] = inner.header.blocks[i as usize];
+            }
+        } // LOG lock dropped here
 
         BCACHE.write(&mut buf);
         BCACHE.release(buf);
@@ -136,11 +156,19 @@ impl Log {
 
     /// Copies modified blocks from cache to log
     fn write_log() {
-        let inner = LOG.inner.lock();
+        let (dev, start, n) = {
+            let inner = LOG.inner.lock();
+            (inner.dev, inner.start, inner.header.n)
+        }; // LOG lock dropped here
 
-        for tail in 0..inner.header.n {
-            let mut to = BCACHE.read(inner.dev, inner.start + tail + 1); // log block
-            let from = BCACHE.read(inner.dev, inner.header.block[tail as usize]); // cache block
+        for tail in 0..n {
+            let block = {
+                let inner = LOG.inner.lock();
+                inner.header.blocks[tail as usize]
+            }; // LOG lock dropped here
+
+            let mut to = BCACHE.read(dev, start + tail + 1); // log block
+            let from = BCACHE.read(dev, block); // cache block
 
             to.data_mut().copy_from_slice(from.data());
             BCACHE.write(&mut to);
@@ -180,7 +208,12 @@ impl Log {
             let mut inner = LOG.inner.lock();
 
             inner.outstanding -= 1;
-            if !inner.committing {
+
+            if inner.committing {
+                panic!("log committing");
+            }
+
+            if inner.outstanding == 0 {
                 do_commit = true;
                 inner.committing = true;
             } else {
@@ -241,14 +274,14 @@ pub fn log_write(buf: &Buf<'_>) {
         panic!("log_write: outside of trans");
     }
 
+    let block_no = {
+        let bcache = BCACHE.inner.lock();
+        bcache.meta[buf.id].block_no
+    };
+
     let mut i = 0;
     while i < inner.header.n as usize {
-        let block_no = {
-            let bcache = BCACHE.inner.lock();
-            bcache.meta[buf.id].block_no
-        };
-
-        if inner.header.block[i] == block_no {
+        if inner.header.blocks[i] == block_no {
             // log absorption
             break;
         }
@@ -256,11 +289,7 @@ pub fn log_write(buf: &Buf<'_>) {
         i += 1;
     }
 
-    let block_no = {
-        let bcache = BCACHE.inner.lock();
-        bcache.meta[buf.id].block_no
-    };
-    inner.header.block[i] = block_no;
+    inner.header.blocks[i] = block_no;
 
     if i == inner.header.n as usize {
         BCACHE.pin(buf);
