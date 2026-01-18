@@ -8,8 +8,9 @@ use alloc::boxed::Box;
 use alloc::string::String;
 
 use crate::error::KernelError;
+use crate::fs;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
-use crate::param::{NCPU, NPROC};
+use crate::param::{NCPU, NPROC, ROOTDEV};
 use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
@@ -902,7 +903,7 @@ pub unsafe extern "C" fn fork_ret() {
         .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
         .is_ok()
     {
-        // todo!("fsinit");
+        fs::init(ROOTDEV);
     }
 
     unsafe {

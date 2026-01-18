@@ -18,7 +18,7 @@
 // Log appends are synchronous.
 
 use crate::buf::{BCACHE, Buf};
-use crate::fs::BSIZE;
+use crate::fs::{BSIZE, SuperBlock};
 use crate::param::{LOGSIZE, MAXOPBLOCKS};
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
@@ -316,14 +316,15 @@ pub unsafe fn recover_from_log() {
 }
 
 /// Initialize the log system.
-pub fn init(dev: u32, _sb: ()) {
+pub fn init(dev: u32, sb: &SuperBlock) {
     if size_of::<LogHeader>() >= BSIZE {
         panic!("init_log: log header too big");
     }
 
     {
         let mut inner = LOG.inner.lock();
-        // TODO: superblock
+        inner.start = sb.logstart;
+        inner.size = sb.nlogs;
         inner.dev = dev;
     }
 
