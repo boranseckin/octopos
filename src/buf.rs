@@ -158,7 +158,7 @@ impl BCache {
             if meta.ref_count == 0 {
                 meta.dev = dev;
                 meta.block_no = block_no;
-                meta.valid = true;
+                meta.valid = false;
                 meta.ref_count += 1;
                 drop(inner);
 
