@@ -1,13 +1,26 @@
+use core::mem::{self, MaybeUninit};
 use core::ptr;
 
-use crate::buf::BCACHE;
+use crate::buf::{BCACHE, Buf};
+use crate::error::KernelError;
 use crate::log;
+use crate::param::NINODE;
+use crate::sleeplock::{SleepLock, SleepLockGuard};
+use crate::spinlock::SpinLock;
 use crate::sync::OnceLock;
 
 /// Block size
 pub const BSIZE: usize = 1024;
-
+/// File system magic number
 pub const FSMAGIC: u32 = 0x10203040;
+/// Number of direct block addresses in inode
+pub const NDIRECT: usize = 12;
+/// Number of indirect block addresses in inode
+pub const NINDIRECT: usize = BSIZE / size_of::<u32>();
+/// Inodes per block
+pub const IPB: u32 = (BSIZE / size_of::<DiskInode>()) as u32;
+/// Bitmap bits per block
+pub const BPB: u32 = BSIZE as u32 * 8;
 
 pub static SB: OnceLock<SuperBlock> = OnceLock::new();
 
@@ -50,4 +63,481 @@ impl SuperBlock {
 pub fn init(dev: u32) {
     SuperBlock::initialize(dev);
     log::init(dev, SB.get().unwrap());
+}
+
+/// A disk block.
+/// This is a wrapper around the block number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Block(pub u32);
+
+impl Block {
+    /// Zeros out the disk block.
+    fn zero(&mut self, dev: u32) {
+        let mut buf = BCACHE.read(dev, self.0);
+        buf.data_mut().fill(0);
+        log::write(&buf);
+        BCACHE.release(buf);
+    }
+
+    /// Allocates a zeroed disk block.
+    pub fn alloc(dev: u32) -> Result<Self, KernelError> {
+        let sb = SB.get().unwrap();
+        for b in (0..sb.size).step_by(BPB as usize) {
+            let mut buf = BCACHE.read(dev, sb.bmapstart + (b / BPB));
+
+            for bi in 0..BPB {
+                let m = 1u8 << (bi % 8);
+                if buf.data()[bi as usize / 8] & m == 0 {
+                    // block is free
+                    buf.data_mut()[bi as usize / 8] |= m;
+                    log::write(&buf);
+                    BCACHE.release(buf);
+
+                    let mut block = Block(b + bi);
+                    block.zero(dev);
+
+                    return Ok(block);
+                }
+            }
+
+            BCACHE.release(buf);
+        }
+
+        // panic!("balloc: out of blocks");
+        Err(KernelError::Fs)
+    }
+
+    /// Frees a disk block.
+    pub fn free(self, dev: u32) {
+        let sb = SB.get().unwrap();
+        let mut buf = BCACHE.read(dev, sb.bmapstart + (self.0 / BPB));
+        let bi = self.0 % BPB;
+        let m = 1u8 << (bi % 8);
+
+        if buf.data()[bi as usize / 8] & m == 0 {
+            panic!("bfree: block already free");
+        }
+
+        buf.data_mut()[bi as usize / 8] &= !m;
+        log::write(&buf);
+        BCACHE.release(buf);
+    }
+
+    /// Returns the disk block address of the nth block in `inode`.
+    /// If there is no such block, allocates one.
+    pub fn map(inode: &Inode, block_no: u32) -> Result<u32, KernelError> {
+        let mut block_no = block_no as usize;
+
+        let dev = {
+            let meta = INODE_TABLE.meta.lock();
+            meta[inode.id].dev
+        };
+
+        if block_no < NDIRECT {
+            let mut inner = INODE_TABLE.inner[inode.id].lock();
+            let addr = &mut inner.addrs[block_no];
+
+            if *addr == 0 {
+                let block = Block::alloc(dev)?;
+                *addr = block.0;
+            }
+
+            return Ok(*addr);
+        }
+
+        block_no -= NDIRECT;
+
+        if block_no < NINDIRECT {
+            // load indiret block, allocating if necessary
+            let mut inner = INODE_TABLE.inner[inode.id].lock();
+            let indirect_block = &mut inner.addrs[NDIRECT];
+
+            if *indirect_block == 0 {
+                let block = Block::alloc(dev)?;
+                *indirect_block = block.0;
+            }
+
+            let mut buf = BCACHE.read(dev, *indirect_block);
+            let array = unsafe {
+                core::slice::from_raw_parts_mut(buf.data_mut().as_mut_ptr() as *mut u32, NINDIRECT)
+            };
+
+            let addr = &mut array[block_no];
+            if *addr == 0 {
+                let block = Block::alloc(dev)?;
+                *addr = block.0;
+                log::write(&buf);
+            }
+
+            BCACHE.release(buf);
+
+            return Ok(*addr);
+        }
+
+        // panic block out of range
+        Err(KernelError::Fs)
+    }
+}
+
+/// Inode types
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InodeType {
+    Free = 0,
+    Directory = 1,
+    File = 2,
+    Device = 3,
+}
+
+/// On-disk inode structure
+#[repr(C)]
+#[derive(Debug)]
+pub struct DiskInode {
+    /// File type
+    pub r#type: InodeType,
+    /// Major device number
+    pub major: u16,
+    /// Minor device number
+    pub minor: u16,
+    /// Number of links to inode in file system
+    pub nlink: u16,
+    // Size of file (bytes)
+    pub size: u32,
+    // Data block addresses
+    pub addrs: [u32; NDIRECT + 1],
+}
+
+impl DiskInode {
+    /// Returns a mutable reference to the `DiskInode` with number `inum` in the given buffer.
+    ///
+    /// # Safety
+    /// The caller must ensure that `buf` contains the block that holds the inode with number `inum`.
+    pub unsafe fn from_buf(buf: &mut Buf, inum: u32) -> &'static mut Self {
+        unsafe {
+            &mut *(buf
+                .data_mut()
+                .as_mut_ptr()
+                .add((inum % IPB) as usize * size_of::<DiskInode>())
+                as *mut DiskInode)
+        }
+    }
+}
+
+/// Cached inode data, protected by sleeplock
+#[derive(Debug)]
+pub struct InodeInner {
+    /// Indicates whether inode has been read from disk
+    pub valid: bool,
+    pub r#type: InodeType,
+    pub major: u16,
+    pub minor: u16,
+    pub nlink: u16,
+    pub size: u32,
+    pub addrs: [u32; NDIRECT + 1],
+}
+
+impl InodeInner {
+    #[allow(clippy::new_without_default)]
+    pub const fn new() -> Self {
+        Self {
+            valid: false,
+            r#type: InodeType::Free,
+            major: 0,
+            minor: 0,
+            nlink: 0,
+            size: 0,
+            addrs: [0; NDIRECT + 1],
+        }
+    }
+}
+
+/// Metadata about an inode, protected by SpinLock
+pub struct InodeMeta {
+    /// Device number
+    pub dev: u32,
+    /// Inode number
+    pub inum: u32,
+    /// Reference Count
+    pub r#ref: u32,
+}
+
+impl InodeMeta {
+    #[allow(clippy::new_without_default)]
+    pub const fn new() -> Self {
+        Self {
+            dev: 0,
+            inum: 0,
+            r#ref: 0,
+        }
+    }
+}
+
+/// In-memory inode structure
+/// Only holds the index to the actual data in the inode table
+#[derive(Debug, Clone, Copy)]
+pub struct Inode {
+    id: usize,
+}
+
+impl Inode {
+    pub const fn new(id: usize) -> Self {
+        Self { id }
+    }
+}
+
+pub static INODE_TABLE: InodeTable = InodeTable::new();
+
+pub struct InodeTable {
+    meta: SpinLock<[InodeMeta; NINODE]>,
+    inner: [SleepLock<InodeInner>; NINODE],
+}
+
+impl InodeTable {
+    const fn new() -> Self {
+        let meta = {
+            let mut array: [MaybeUninit<InodeMeta>; NINODE] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+
+            let mut i = 0;
+            while i < NINODE {
+                array[i] = MaybeUninit::new(InodeMeta::new());
+                i += 1;
+            }
+
+            SpinLock::new(
+                unsafe { mem::transmute::<[MaybeUninit<InodeMeta>; 50], [InodeMeta; 50]>(array) },
+                "itable",
+            )
+        };
+
+        let inner = {
+            let mut array: [MaybeUninit<SleepLock<InodeInner>>; NINODE] =
+                unsafe { MaybeUninit::uninit().assume_init() };
+
+            let mut i = 0;
+            while i < NINODE {
+                array[i] = MaybeUninit::new(SleepLock::new(InodeInner::new(), "inode"));
+                i += 1;
+            }
+
+            unsafe {
+                mem::transmute::<
+                    [MaybeUninit<SleepLock<InodeInner>>; 50],
+                    [SleepLock<InodeInner>; 50],
+                >(array)
+            }
+        };
+
+        Self { meta, inner }
+    }
+}
+
+impl Inode {
+    /// Allocates an inode on device `dev`.
+    /// Marks it allocated by giving it type `type`.
+    /// Returns an unlocked but allocated and referenced inode or error.
+    pub fn alloc(dev: u32, r#type: InodeType) -> Result<Self, KernelError> {
+        let sb = SB.get().unwrap();
+
+        for inum in 1..sb.ninodes {
+            let mut buf = BCACHE.read(dev, sb.inodestart + inum / IPB);
+            let dinode = unsafe { DiskInode::from_buf(&mut buf, inum) };
+
+            if dinode.r#type == InodeType::Free {
+                dinode.r#type = r#type;
+                log::write(&buf);
+                BCACHE.release(buf);
+                return Self::get(dev, inum);
+            }
+
+            BCACHE.release(buf);
+        }
+
+        Err(KernelError::Fs)
+    }
+
+    /// Finds the inode with number `inum` on device `dev` and returns the in-memory copy.
+    /// Does not lock the inode and does not read it from disk.
+    pub fn get(dev: u32, inum: u32) -> Result<Inode, KernelError> {
+        let mut meta = INODE_TABLE.meta.lock();
+
+        let mut empty = None;
+
+        for (id, inode) in meta.iter_mut().enumerate() {
+            if inode.r#ref > 0 && inode.dev == dev && inode.inum == inum {
+                inode.r#ref += 1;
+                return Ok(Inode { id });
+            }
+
+            if empty.is_none() && inode.r#ref == 0 {
+                empty = Some(id);
+            }
+        }
+
+        if let Some(id) = empty {
+            let inode = &mut meta[id];
+            inode.dev = dev;
+            inode.inum = inum;
+            inode.r#ref = 1;
+
+            // # Safety: We have exclusive access to this inode since its ref count is 0.
+            let inner = unsafe { INODE_TABLE.inner[id].get_mut_unchecked() };
+            inner.valid = false;
+
+            Ok(Inode { id })
+        } else {
+            Err(KernelError::Fs)
+        }
+    }
+
+    /// Copies a modified in-memory inode to disk.
+    /// Must be called after every change to an `Inode` field that lives on disk.
+    pub fn update(&self, inner: &SleepLockGuard<'_, InodeInner>) {
+        let sb = SB.get().unwrap();
+
+        let (dev, inum) = {
+            let meta = INODE_TABLE.meta.lock();
+            (meta[self.id].dev, meta[self.id].inum)
+        };
+
+        let mut buf = BCACHE.read(dev, sb.inodestart + inum / IPB);
+        let dinode = unsafe { DiskInode::from_buf(&mut buf, inum) };
+
+        dinode.r#type = inner.r#type;
+        dinode.major = inner.major;
+        dinode.minor = inner.minor;
+        dinode.nlink = inner.nlink;
+        dinode.size = inner.size;
+        dinode.addrs.copy_from_slice(&inner.addrs);
+
+        log::write(&buf);
+        BCACHE.release(buf);
+    }
+
+    /// Increments reference count for `inode`.
+    /// Returns `Inode` to enable `inode = idup(inode1)` idiom.
+    pub fn dup(&self) -> Inode {
+        let mut meta = INODE_TABLE.meta.lock();
+        meta[self.id].r#ref += 1;
+        *self
+    }
+
+    /// Locks the given `inode`.
+    /// Reads the inode from disk if necessary.
+    pub fn lock(&self) -> SleepLockGuard<'_, InodeInner> {
+        let (dev, inum) = {
+            let meta = INODE_TABLE.meta.lock();
+            assert!(meta[self.id].r#ref > 0, "ilock");
+            (meta[self.id].dev, meta[self.id].inum)
+        };
+
+        let sb = SB.get().unwrap();
+
+        let mut inner = INODE_TABLE.inner[self.id].lock();
+
+        if !inner.valid {
+            let mut buf = BCACHE.read(dev, sb.inodestart + inum / IPB);
+            let dinode = unsafe { DiskInode::from_buf(&mut buf, inum) };
+
+            inner.r#type = dinode.r#type;
+            inner.major = dinode.major;
+            inner.minor = dinode.minor;
+            inner.nlink = dinode.nlink;
+            inner.size = dinode.size;
+            inner.addrs.copy_from_slice(&dinode.addrs);
+
+            BCACHE.release(buf);
+
+            inner.valid = true;
+            assert_ne!(inner.r#type, InodeType::Free, "ilock: no type");
+        }
+
+        inner
+    }
+
+    /// Unlocks the given `inode`.
+    pub fn unlock(&self, guard: SleepLockGuard<'_, InodeInner>) {
+        drop(guard);
+    }
+
+    /// Drops a reference to an in-memory inode.
+    /// If that was the last reference, the inode table entry can be recycled.
+    /// If that was the last reference and the inode has no links to it, free the inode (and its
+    /// content) on disk.
+    /// All calls to `iput()` must be inside a transaction in case it has to free the inode.
+    pub fn put(mut self) {
+        let mut meta = INODE_TABLE.meta.lock();
+
+        if meta[self.id].r#ref == 1 {
+            // We are acquiring sleeplock while spinlock is active (interrupts disabled).
+            // This is normally problematic since sleeplock can sleep but never wake up but,
+            // ref == 1 means no other process can have ip locked, so the inner lock won't block
+            let mut inner = INODE_TABLE.inner[self.id].lock();
+
+            if inner.valid && inner.nlink == 0 {
+                // inode has no links and no other refereneces: truncate and free
+
+                // drop meta since both trunc and update will need it
+                drop(meta);
+
+                self.trunc(&mut inner);
+                inner.r#type = InodeType::Free;
+                self.update(&inner);
+                inner.valid = false;
+
+                drop(inner);
+
+                // reacquire meta
+                meta = INODE_TABLE.meta.lock();
+            }
+        }
+
+        meta[self.id].r#ref -= 1;
+    }
+
+    /// Common idiom: `unlock()`, then `put()`
+    pub fn unlock_put(self, guard: SleepLockGuard<'_, InodeInner>) {
+        self.unlock(guard);
+        self.put();
+    }
+
+    /// Truncates inode (discard contents).
+    ///
+    /// It will acquire spinlock.
+    pub fn trunc(&mut self, inner: &mut SleepLockGuard<'_, InodeInner>) {
+        let dev = {
+            let meta = INODE_TABLE.meta.lock();
+            meta[self.id].dev
+        };
+
+        for i in 0..NDIRECT {
+            if inner.addrs[i] != 0 {
+                let block = Block(inner.addrs[i]);
+                block.free(dev);
+                inner.addrs[i] = 0;
+            }
+        }
+
+        if inner.addrs[NDIRECT] != 0 {
+            let buf = BCACHE.read(dev, inner.addrs[NDIRECT]);
+            let array = unsafe {
+                core::slice::from_raw_parts(buf.data().as_ptr() as *const u32, NINDIRECT)
+            };
+
+            for block in array {
+                if *block != 0 {
+                    let b = Block(*block);
+                    b.free(dev);
+                }
+            }
+
+            BCACHE.release(buf);
+            let block = Block(inner.addrs[NDIRECT]);
+            block.free(dev);
+            inner.addrs[NDIRECT] = 0;
+        }
+
+        inner.size = 0;
+        self.update(inner);
+    }
 }

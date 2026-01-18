@@ -67,6 +67,15 @@ impl<T> SleepLock<T> {
     pub fn into_inner(self) -> T {
         self.data.into_inner()
     }
+
+    /// Returns a reference to the inner data from a shared reference to the mutex.
+    ///
+    /// # Safety
+    /// The caller must ensure that the mutex is locked.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn get_mut_unchecked(&self) -> &mut T {
+        unsafe { &mut *self.data.get() }
+    }
 }
 
 impl<'a, T: 'a> Drop for SleepLockGuard<'a, T> {

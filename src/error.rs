@@ -10,6 +10,7 @@ pub enum KernelError {
     InvalidPte = -4,
     InvalidArgument = -5,
     Syscall = -6,
+    Fs = -7,
 }
 
 impl From<core::alloc::AllocError> for KernelError {
@@ -33,6 +34,7 @@ impl KernelError {
             KernelError::InvalidPte => "invalid pte",
             KernelError::InvalidArgument => "invalid argument",
             KernelError::Syscall => "syscall error",
+            KernelError::Fs => "filesystem error",
         }
     }
 }

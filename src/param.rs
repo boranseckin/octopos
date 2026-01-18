@@ -2,6 +2,8 @@
 pub const NCPU: usize = 8;
 /// maximum number of processes
 pub const NPROC: usize = 64;
+/// maximum number of active inodes
+pub const NINODE: usize = 50;
 /// device nubmer of file system root disk
 pub const ROOTDEV: u32 = 1;
 /// max # of blocks any FS op writes

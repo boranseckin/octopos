@@ -903,6 +903,8 @@ pub unsafe extern "C" fn fork_ret() {
         .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
         .is_ok()
     {
+        // file system initialization must be run in the context of a regular process (because it
+        // calls sleep), and thus cannot be run from `main()`.
         fs::init(ROOTDEV);
     }
 

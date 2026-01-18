@@ -262,8 +262,8 @@ impl Log {
 /// Record the block number and pin in the cache by increasing ref count.
 /// `commit()`/`write_log()` will do the disk write.
 ///
-/// `log_write()` replaces `BCACHE::write()`
-pub fn log_write(buf: &Buf<'_>) {
+/// `write()` replaces `BCACHE::write()`
+pub fn write(buf: &Buf<'_>) {
     let mut inner = LOG.inner.lock();
 
     if inner.header.n as usize >= LOGSIZE || inner.header.n >= inner.size - 1 {
