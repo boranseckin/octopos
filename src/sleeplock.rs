@@ -15,7 +15,7 @@ pub struct SleepLockInner {
 /// Unlike SpinLock, interrupts remain enabled while holding a SleepLock.
 #[derive(Debug)]
 pub struct SleepLock<T> {
-    name: &'static str,
+    _name: &'static str,
     /// SpinLock only protects the lock state and not the data
     inner: SpinLock<SleepLockInner>,
     data: UnsafeCell<T>,
@@ -30,7 +30,7 @@ pub struct SleepLockGuard<'a, T: 'a> {
 impl<T> SleepLock<T> {
     pub const fn new(value: T, name: &'static str) -> Self {
         SleepLock {
-            name,
+            _name: name,
             inner: SpinLock::new(
                 SleepLockInner {
                     pid: None,

@@ -177,84 +177,83 @@ impl Log {
             BCACHE.release(from);
         }
     }
+}
 
-    /// Begins a new operation on the log.
-    /// Must be called at the start of each FS system call.
-    pub fn begin_op() {
-        let mut inner = LOG.inner.lock();
+/// Begins a new operation on the log.
+/// Must be called at the start of each FS system call.
+pub fn begin_op() {
+    let mut inner = LOG.inner.lock();
 
-        loop {
-            if inner.committing {
-                inner = proc::sleep(Channel::Log, inner);
-            } else if inner.header.n as usize + (inner.outstanding as usize + 1) * MAXOPBLOCKS
-                > LOGSIZE
-            {
-                // this op might exhaust log space; wait for commit
-                inner = proc::sleep(Channel::Log, inner);
-            } else {
-                inner.outstanding += 1;
-                break;
-            }
+    loop {
+        if inner.committing {
+            inner = proc::sleep(Channel::Log, inner);
+        } else if inner.header.n as usize + (inner.outstanding as usize + 1) * MAXOPBLOCKS > LOGSIZE
+        {
+            // this op might exhaust log space; wait for commit
+            inner = proc::sleep(Channel::Log, inner);
+        } else {
+            inner.outstanding += 1;
+            break;
         }
     }
+}
 
-    /// Ends the current operation on the log.
-    /// Must be called at the end of each FS system call.
-    /// Commits if this was the last outstanding operation.
-    pub fn end_op() {
-        let mut do_commit = false;
+/// Ends the current operation on the log.
+/// Must be called at the end of each FS system call.
+/// Commits if this was the last outstanding operation.
+pub fn end_op() {
+    let mut do_commit = false;
+
+    {
+        let mut inner = LOG.inner.lock();
+
+        inner.outstanding -= 1;
+
+        if inner.committing {
+            panic!("log committing");
+        }
+
+        if inner.outstanding == 0 {
+            do_commit = true;
+            inner.committing = true;
+        } else {
+            // `begin_op()` may be waiting for log space, and decrementing `outstanding` has
+            // decreased the amount of reserved space
+            proc::wakeup(Channel::Log);
+        }
+    } // drop inner lock
+
+    if do_commit {
+        // call commit without holding locks, since not allowed to sleep with locks
+        commit();
+        let mut inner = LOG.inner.lock();
+        inner.committing = false;
+        proc::wakeup(Channel::Log);
+    }
+}
+
+/// Commits the current transaction.
+fn commit() {
+    let n = {
+        let inner = LOG.inner.lock();
+        inner.header.n
+    };
+
+    if n > 0 {
+        // write modified blocks from cache to log
+        Log::write_log();
+        // write header to disk -- the real commit
+        unsafe { Log::write_head() };
+        // now install write to home location
+        Log::install_trans(false);
 
         {
             let mut inner = LOG.inner.lock();
-
-            inner.outstanding -= 1;
-
-            if inner.committing {
-                panic!("log committing");
-            }
-
-            if inner.outstanding == 0 {
-                do_commit = true;
-                inner.committing = true;
-            } else {
-                // `begin_op()` may be waiting for log space, and decrementing `outstanding` has
-                // decreased the amount of reserved space
-                proc::wakeup(Channel::Log);
-            }
-        } // drop inner lock
-
-        if do_commit {
-            // call commit without holding locks, since not allowed to sleep with locks
-            Log::commit();
-            let mut inner = LOG.inner.lock();
-            inner.committing = false;
-            proc::wakeup(Channel::Log);
+            inner.header.n = 0;
         }
-    }
 
-    /// Commits the current transaction.
-    fn commit() {
-        let n = {
-            let inner = LOG.inner.lock();
-            inner.header.n
-        };
-
-        if n > 0 {
-            // write modified blocks from cache to log
-            Log::write_log();
-            // write header to disk -- the real commit
-            unsafe { Log::write_head() };
-            // now install write to home location
-            Log::install_trans(false);
-
-            {
-                let mut inner = LOG.inner.lock();
-                inner.header.n = 0;
-            }
-
-            // erase the transactions from the log
-            unsafe { Log::write_head() };
-        }
+        // erase the transactions from the log
+        unsafe { Log::write_head() };
     }
 }
 
