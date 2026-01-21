@@ -1,15 +1,18 @@
 use core::mem::{self, MaybeUninit};
 use core::slice;
 
+use crate::console::Console;
 use crate::error::KernelError;
 use crate::fs::Stat;
 use crate::fs::{BSIZE, Inode};
-use crate::param::{MAXOPBLOCKS, NFILE};
+use crate::log;
+use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
+use crate::proc;
 use crate::proc::Addr;
 use crate::sleeplock::SleepLock;
 use crate::spinlock::SpinLock;
+use crate::syscall::SyscallError;
 use crate::vm::VA;
-use crate::{log, proc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
@@ -179,7 +182,7 @@ impl File {
         let file_inner = FILE_TABLE.inner[self.id].lock();
 
         match file_inner.r#type {
-            FileType::Inode { inode } => {
+            FileType::Inode { inode } | FileType::Device { inode, .. } => {
                 let inode_inner = inode.lock();
                 let stat = inode.stat(&inode_inner);
                 inode.unlock(inode_inner);
@@ -191,22 +194,17 @@ impl File {
 
                 Ok(())
             }
-            FileType::Device { inode, major } => {
-                unimplemented!()
-            }
             _ => Err(KernelError::Fs),
         }
     }
 
     /// Reads from file.
-    pub fn read(&self, addr: VA, n: usize) -> Result<usize, KernelError> {
+    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SyscallError> {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.readable {
-            return Err(KernelError::Fs);
+            return Err(SyscallError::ReadError);
         }
-
-        let mut read = 0;
 
         match file_inner.r#type {
             FileType::None => panic!("fileread"),
@@ -216,26 +214,31 @@ impl File {
             FileType::Inode { inode } => {
                 let mut inode_inner = inode.lock();
                 let dst = unsafe { slice::from_raw_parts_mut(addr.as_mut_ptr(), n) };
-                if let Ok(r) = inode.read(&mut inode_inner, file_inner.offset, dst) {
-                    file_inner.offset += r;
-                    read += r;
+                let read = inode.read(&mut inode_inner, file_inner.offset, dst);
+                if let Ok(read) = read {
+                    file_inner.offset += read;
                 }
                 inode.unlock(inode_inner);
-            }
-            FileType::Device { inode: _, major: _ } => {
-                unimplemented!()
-            }
-        }
 
-        Ok(read as usize)
+                if let Ok(read) = read {
+                    Ok(read as usize)
+                } else {
+                    Err(SyscallError::ReadError)
+                }
+            }
+            FileType::Device { inode: _, major } => match &DEVICES[major as usize] {
+                Some(dev) => (dev.read)(addr, n),
+                None => Err(SyscallError::ReadError),
+            },
+        }
     }
 
     /// Writes to a file.
-    pub fn write(&mut self, addr: VA, n: usize) -> Result<usize, KernelError> {
+    pub fn write(&mut self, addr: VA, n: usize) -> Result<usize, SyscallError> {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.writeable {
-            return Err(KernelError::Fs);
+            return Err(SyscallError::WriteError);
         }
 
         match file_inner.r#type {
@@ -273,11 +276,37 @@ impl File {
                     i += w.unwrap() as usize;
                 }
 
-                if i == n { Ok(n) } else { Err(KernelError::Fs) }
+                if i == n {
+                    Ok(n)
+                } else {
+                    Err(SyscallError::WriteError)
+                }
             }
-            FileType::Device { inode: _, major: _ } => {
-                unimplemented!()
-            }
+            FileType::Device { inode: _, major } => match &DEVICES[major as usize] {
+                Some(dev) => (dev.write)(addr, n),
+                None => Err(SyscallError::WriteError),
+            },
         }
     }
 }
+
+pub struct Device {
+    pub read: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
+    pub write: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
+}
+
+pub static DEVICES: [Option<Device>; NDEV] = [
+    None,
+    Some(Device {
+        read: Console::read,
+        write: Console::read,
+    }),
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+];
