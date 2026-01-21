@@ -1,6 +1,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::file::File;
+use crate::param::NOFILE;
 use crate::println;
 use crate::proc::{CPU_POOL, Proc, TrapFrame};
 use crate::sysfile::*;
@@ -16,6 +18,9 @@ pub enum SyscallError {
     SleepError,
     FetchError,
     ConsoleError,
+    ReadError,
+    WriteError,
+    StatError,
 }
 
 /// Wrapper for extracting typed syscall arguments from trapframe.
@@ -57,6 +62,26 @@ impl<'a> SyscallArgs<'a> {
     /// Does not check for legality, since `copyin`/`copyout` will do that.
     pub fn get_addr(&self, index: usize) -> VA {
         VA::from(self.get_raw(index))
+    }
+
+    /// Fetch the nth word-sized system call argument as a file descriptor and return both the
+    /// descriptor and the corresponding `File`.
+    // TODO: better error reporting
+    pub fn get_file(&self, index: usize) -> Result<(usize, File), SyscallError> {
+        let fd: usize = self
+            .get_int(index)
+            .try_into()
+            .or(Err(SyscallError::FetchError))?;
+
+        if fd >= NOFILE {
+            return Err(SyscallError::FetchError);
+        }
+
+        if let Some(file) = CPU_POOL.current_proc().unwrap().data().open_files[fd] {
+            return Ok((fd, file));
+        }
+
+        Err(SyscallError::FetchError)
     }
 
     /// Fetches a null-terminated string from user space.

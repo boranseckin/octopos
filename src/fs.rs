@@ -181,6 +181,15 @@ impl DiskInode {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Stat {
+    pub dev: u32,
+    pub ino: u32,
+    pub r#type: InodeType,
+    pub nlink: u16,
+    pub size: u64,
+}
+
 /// Cached inode data, protected by sleeplock
 #[derive(Debug)]
 pub struct InodeInner {
@@ -233,7 +242,7 @@ impl InodeMeta {
 /// In-memory inode structure
 /// `id` is the index to the actual data in the inode table.
 /// Also holds device and inode numbers for quick lookup.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Inode {
     /// Inode table index
     pub id: usize,
@@ -269,7 +278,9 @@ impl InodeTable {
             }
 
             SpinLock::new(
-                unsafe { mem::transmute::<[MaybeUninit<InodeMeta>; 50], [InodeMeta; 50]>(array) },
+                unsafe {
+                    mem::transmute::<[MaybeUninit<InodeMeta>; NINODE], [InodeMeta; NINODE]>(array)
+                },
                 "itable",
             )
         };
@@ -286,8 +297,8 @@ impl InodeTable {
 
             unsafe {
                 mem::transmute::<
-                    [MaybeUninit<SleepLock<InodeInner>>; 50],
-                    [SleepLock<InodeInner>; 50],
+                    [MaybeUninit<SleepLock<InodeInner>>; NINODE],
+                    [SleepLock<InodeInner>; NINODE],
                 >(array)
             }
         };
@@ -564,6 +575,16 @@ impl Inode {
         Err(KernelError::Fs)
     }
 
+    pub fn stat(&self, inner: &SleepLockGuard<'_, InodeInner>) -> Stat {
+        Stat {
+            dev: self.dev,
+            r#type: inner.r#type,
+            nlink: inner.nlink,
+            size: inner.size as u64,
+            ino: self.inum,
+        }
+    }
+
     /// Reads data from inode.
     // TODO: Only handles user virtual addresses.
     pub fn read(
@@ -615,7 +636,7 @@ impl Inode {
     }
 
     pub fn write(
-        &mut self,
+        &self,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         offset: u32,
         src: &[u8],

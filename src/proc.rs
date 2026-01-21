@@ -8,9 +8,10 @@ use alloc::boxed::Box;
 use alloc::string::String;
 
 use crate::error::KernelError;
+use crate::file::File;
 use crate::fs;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
-use crate::param::{NCPU, NPROC, ROOTDEV};
+use crate::param::{NCPU, NOFILE, NPROC, ROOTDEV};
 use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
@@ -346,7 +347,7 @@ pub struct ProcData {
     /// swtch() here to run process
     pub context: Context,
     /// Open files
-    pub open_files: (),
+    pub open_files: [Option<File>; NOFILE],
     /// Current directory
     pub cwd: (),
     /// Process name
@@ -361,7 +362,7 @@ impl ProcData {
             pagetable: None,
             trapframe: None,
             context: Context::new(),
-            open_files: (),
+            open_files: [None; NOFILE],
             cwd: (),
             name: String::new(),
         }
