@@ -907,6 +907,9 @@ pub unsafe extern "C" fn fork_ret() {
         // file system initialization must be run in the context of a regular process (because it
         // calls sleep), and thus cannot be run from `main()`.
         fs::init(ROOTDEV);
+
+        // TEMPORARY
+        crate::file::setup_console_fds();
     }
 
     unsafe {
