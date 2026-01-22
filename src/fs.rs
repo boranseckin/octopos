@@ -242,7 +242,7 @@ impl InodeMeta {
 /// In-memory inode structure
 /// `id` is the index to the actual data in the inode table.
 /// Also holds device and inode numbers for quick lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inode {
     /// Inode table index
     pub id: usize,
@@ -333,7 +333,7 @@ impl Inode {
 
     /// Finds the inode with number `inum` on device `dev` and returns the in-memory copy.
     /// Does not lock the inode and does not read it from disk.
-    pub fn get(dev: u32, inum: u32) -> Result<Inode, KernelError> {
+    pub fn get(dev: u32, inum: u32) -> Result<Self, KernelError> {
         let mut meta = INODE_TABLE.meta.lock();
 
         let mut empty = None;
@@ -341,7 +341,7 @@ impl Inode {
         for (id, inode) in meta.iter_mut().enumerate() {
             if inode.r#ref > 0 && inode.dev == dev && inode.inum == inum {
                 inode.r#ref += 1;
-                return Ok(Inode { id, dev, inum });
+                return Ok(Self { id, dev, inum });
             }
 
             if empty.is_none() && inode.r#ref == 0 {
@@ -359,7 +359,7 @@ impl Inode {
             let inner = unsafe { INODE_TABLE.inner[id].get_mut_unchecked() };
             inner.valid = false;
 
-            Ok(Inode { id, dev, inum })
+            Ok(Self { id, dev, inum })
         } else {
             Err(KernelError::Fs)
         }
@@ -386,10 +386,10 @@ impl Inode {
 
     /// Increments reference count for `inode`.
     /// Returns `Inode` to enable `inode = idup(inode1)` idiom.
-    pub fn dup(&self) -> Inode {
+    pub fn dup(&self) -> Self {
         let mut meta = INODE_TABLE.meta.lock();
         meta[self.id].r#ref += 1;
-        *self
+        self.clone()
     }
 
     /// Locks the given `inode`.

@@ -14,7 +14,7 @@ use crate::spinlock::SpinLock;
 use crate::syscall::SyscallError;
 use crate::vm::VA;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileType {
     None,
     Pipe { pipe: () },
@@ -23,30 +23,19 @@ pub enum FileType {
 }
 
 /// File metadata protected by table-wide spinlock
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FileMeta {
     pub ref_count: usize,
 }
 
 /// Per-file mutable state protected by per-file sleeplock
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FileInner {
     /// Index into the file table.
     pub readable: bool,
     pub writeable: bool,
     pub r#type: FileType,
     pub offset: u32,
-}
-
-impl FileInner {
-    const fn new() -> Self {
-        Self {
-            readable: false,
-            writeable: false,
-            r#type: FileType::None,
-            offset: 0,
-        }
-    }
 }
 
 pub static FILE_TABLE: FileTable = FileTable::new();
@@ -86,7 +75,15 @@ impl FileTable {
 
             let mut i = 0;
             while i < NFILE {
-                array[i] = MaybeUninit::new(SleepLock::new(FileInner::new(), "file"));
+                array[i] = MaybeUninit::new(SleepLock::new(
+                    FileInner {
+                        readable: false,
+                        writeable: false,
+                        r#type: FileType::None,
+                        offset: 0,
+                    },
+                    "file",
+                ));
                 i += 1;
             }
 
@@ -103,7 +100,7 @@ impl FileTable {
 }
 
 /// File handle, just an index into the `FileTable`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct File {
     pub id: usize,
 }
@@ -132,7 +129,7 @@ impl File {
 
         meta.ref_count += 1;
 
-        *self
+        self.clone()
     }
 
     /// Decrements the reference count and closes the file if it reaches 0.
@@ -150,7 +147,7 @@ impl File {
         let inner_copy = {
             let mut inner = FILE_TABLE.inner[self.id].lock();
             // copy inner before resetting fields
-            let copy = *inner;
+            let copy = inner.clone();
 
             meta.ref_count = 0;
             inner.r#type = FileType::None;
@@ -164,12 +161,7 @@ impl File {
             FileType::Pipe { pipe: _ } => {
                 todo!("pipeclose");
             }
-            FileType::Inode { inode } => {
-                log::begin_op();
-                inode.put();
-                log::end_op();
-            }
-            FileType::Device { inode, major: _ } => {
+            FileType::Inode { inode } | FileType::Device { inode, .. } => {
                 log::begin_op();
                 inode.put();
                 log::end_op();
@@ -181,7 +173,7 @@ impl File {
     pub fn stat(&self, addr: VA) -> Result<(), KernelError> {
         let file_inner = FILE_TABLE.inner[self.id].lock();
 
-        match file_inner.r#type {
+        match &file_inner.r#type {
             FileType::Inode { inode } | FileType::Device { inode, .. } => {
                 let inode_inner = inode.lock();
                 let stat = inode.stat(&inode_inner);
@@ -206,18 +198,22 @@ impl File {
             return Err(SyscallError::ReadError);
         }
 
-        match file_inner.r#type {
+        match &mut file_inner.r#type {
             FileType::None => panic!("fileread"),
             FileType::Pipe { pipe: _ } => {
                 unimplemented!()
             }
             FileType::Inode { inode } => {
+                let inode = inode.clone();
                 let mut inode_inner = inode.lock();
+
                 let dst = unsafe { slice::from_raw_parts_mut(addr.as_mut_ptr(), n) };
                 let read = inode.read(&mut inode_inner, file_inner.offset, dst);
+
                 if let Ok(read) = read {
                     file_inner.offset += read;
                 }
+
                 inode.unlock(inode_inner);
 
                 if let Ok(read) = read {
@@ -226,7 +222,7 @@ impl File {
                     Err(SyscallError::ReadError)
                 }
             }
-            FileType::Device { inode: _, major } => match &DEVICES[major as usize] {
+            FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.read)(addr, n),
                 None => Err(SyscallError::ReadError),
             },
@@ -241,12 +237,16 @@ impl File {
             return Err(SyscallError::WriteError);
         }
 
-        match file_inner.r#type {
+        match &mut file_inner.r#type {
             FileType::None => panic!("filewrite"),
+
             FileType::Pipe { pipe: _ } => {
                 unimplemented!()
             }
+
             FileType::Inode { inode } => {
+                let inode = inode.clone();
+
                 // write a few block at a time to avoid exceeding the maximum log transaction size,
                 // including inode, indirect block, allocation blocks, and 2 block of slop for
                 // non-aligned writes.
@@ -260,20 +260,20 @@ impl File {
                     let mut inode_inner = inode.lock();
 
                     let src = unsafe { slice::from_raw_parts(addr.as_usize() as *const u8, n1) };
-                    let w = inode.write(&mut inode_inner, file_inner.offset, src);
+                    let write = inode.write(&mut inode_inner, file_inner.offset, src);
 
-                    if let Ok(w) = w {
+                    if let Ok(w) = write {
                         file_inner.offset += w;
                     }
 
                     inode.unlock(inode_inner);
                     log::end_op();
 
-                    if w.is_err() {
+                    if write.is_err() {
                         break;
                     }
 
-                    i += w.unwrap() as usize;
+                    i += write.unwrap() as usize;
                 }
 
                 if i == n {
@@ -282,7 +282,8 @@ impl File {
                     Err(SyscallError::WriteError)
                 }
             }
-            FileType::Device { inode: _, major } => match &DEVICES[major as usize] {
+
+            FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.write)(addr, n),
                 None => Err(SyscallError::WriteError),
             },
@@ -332,7 +333,7 @@ pub fn setup_console_fds() {
     }
 
     // fd 0 = stdin, fd 1 = stdout, fd 2 = stderr
-    data.open_files[0] = Some(file);
     data.open_files[1] = Some(file.dup());
     data.open_files[2] = Some(file.dup());
+    data.open_files[0] = Some(file);
 }

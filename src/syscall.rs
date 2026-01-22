@@ -77,8 +77,8 @@ impl<'a> SyscallArgs<'a> {
             return Err(SyscallError::FetchError);
         }
 
-        if let Some(file) = CPU_POOL.current_proc().unwrap().data().open_files[fd] {
-            return Ok((fd, file));
+        if let Some(file) = &CPU_POOL.current_proc().unwrap().data().open_files[fd] {
+            return Ok((fd, file.clone()));
         }
 
         Err(SyscallError::FetchError)

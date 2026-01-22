@@ -362,7 +362,7 @@ impl ProcData {
             pagetable: None,
             trapframe: None,
             context: Context::new(),
-            open_files: [None; NOFILE],
+            open_files: [const { None }; NOFILE],
             cwd: (),
             name: String::new(),
         }

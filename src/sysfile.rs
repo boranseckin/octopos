@@ -20,10 +20,8 @@ fn fd_alloc(file: File) -> Result<usize, SyscallError> {
 
 pub fn sys_dup(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let (_, mut file) = args.get_file(0)?;
-    let fd = fd_alloc(file)?;
-
+    let fd = fd_alloc(file.clone())?;
     file.dup();
-
     Ok(fd)
 }
 
