@@ -290,27 +290,25 @@ impl File {
     }
 }
 
+/// Device interface
+#[derive(Debug, Clone, Copy)]
 pub struct Device {
     pub read: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
     pub write: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
 }
 
+/// Console device major number
 pub const CONSOLE: usize = 1;
-pub static DEVICES: [Option<Device>; NDEV] = [
-    None,
-    Some(Device {
+
+/// Device table
+pub static DEVICES: [Option<Device>; NDEV] = {
+    let mut devices = [None; NDEV];
+    devices[CONSOLE] = Some(Device {
         read: Console::read,
         write: Console::write,
-    }),
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-];
+    });
+    devices
+};
 
 /// TEMPORARY console setup from kernel
 pub fn setup_console_fds() {
