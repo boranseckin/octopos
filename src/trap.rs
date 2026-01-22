@@ -235,6 +235,7 @@ fn device_interrupt(intr: scause::Interrupt) -> Option<InterruptType> {
             let irq = plic::claim();
 
             match irq as usize {
+                0 => {} // spurious interrupt from PLIC, ignore
                 UART0_IRQ => UART.handle_interrupt(),
                 VIRTIO0_IRQ => virtio_disk::handle_interrupt(),
                 _ => println!("unexpected interrupt irq = {}", irq),

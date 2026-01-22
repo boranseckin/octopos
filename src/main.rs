@@ -60,10 +60,6 @@ extern "C" fn main() -> ! {
             trap::init_hart();
             plic::init_hart();
         }
-
-        loop {
-            core::hint::spin_loop()
-        }
     }
 
     proc::scheduler();
