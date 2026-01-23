@@ -618,8 +618,7 @@ impl Inode {
 
                 if proc::copy_out(src, Addr::User(dst_va)).is_err() {
                     BCACHE.release(buf);
-                    total -= 1;
-                    break;
+                    return Err(KernelError::Fs);
                 }
 
                 BCACHE.release(buf);
