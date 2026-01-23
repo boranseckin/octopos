@@ -29,6 +29,8 @@ pub const IPB: u32 = (BSIZE / size_of::<DiskInode>()) as u32;
 /// Bitmap bits per block
 pub const BPB: u32 = BSIZE as u32 * 8;
 
+pub const DIRSIZE: usize = 14;
+
 pub static SB: OnceLock<SuperBlock> = OnceLock::new();
 
 /// On-disk superblock (read at boot)
@@ -687,5 +689,114 @@ impl Inode {
         self.update(inner);
 
         Ok(total)
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct Directory {
+    inum: u16,
+    name: [u8; DIRSIZE],
+}
+
+impl Directory {
+    pub const SIZE: usize = size_of::<Self>();
+
+    fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
+        unsafe { ptr::read_unaligned(bytes.as_ptr() as *const Self) }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self as *const Self as *const u8, Self::SIZE) }
+    }
+
+    fn is_name_equal(&self, name: &str) -> bool {
+        let end = self.name.iter().position(|&c| c == 0).unwrap_or(DIRSIZE);
+        &self.name[..end] == name.as_bytes()
+    }
+
+    fn set_name(&mut self, name: &str) {
+        self.name.fill(0);
+        let bytes = name.as_bytes();
+        let len = bytes.len().min(DIRSIZE);
+        self.name[..len].copy_from_slice(&bytes[..len]);
+    }
+
+    /// Looks up for a directory entry in a directory.
+    /// If found, returns byte offset and Inode.
+    pub fn lookup(
+        inode: &Inode,
+        inner: &mut SleepLockGuard<'_, InodeInner>,
+        name: &str,
+    ) -> Result<(u32, Inode), KernelError> {
+        assert_eq!(inner.r#type, InodeType::Directory, "dirlookup not DIR");
+
+        let mut buf = [0; Self::SIZE];
+
+        for offset in (0..inner.size).step_by(Self::SIZE) {
+            let read = inode.read(inner, offset, &mut buf)?;
+            assert_eq!(read as usize, Self::SIZE, "dirlookup read");
+
+            let dir = Self::from_bytes(&buf);
+
+            if dir.inum == 0 {
+                continue;
+            }
+
+            if dir.is_name_equal(name) {
+                // entry matches path element
+                let dir_inode = Inode::get(inode.dev, dir.inum as u32)?;
+                return Ok((offset, dir_inode));
+            }
+        }
+
+        Err(KernelError::Fs)
+    }
+
+    /// Writes a new directory entry (name, inum) into the directory Inode.
+    pub fn link(
+        inode: &Inode,
+        inner: &mut SleepLockGuard<'_, InodeInner>,
+        name: &str,
+        inum: u16,
+    ) -> Result<(), KernelError> {
+        // check the name is not present
+        if let Ok((_, dir)) = Self::lookup(inode, inner, name) {
+            dir.put();
+            return Err(KernelError::Fs);
+        }
+
+        // look for an empty directory
+        let mut buf = [0; Self::SIZE];
+        let mut dir = Self {
+            inum: 0,
+            name: [0; DIRSIZE],
+        };
+        let mut offset = 0;
+
+        while offset < inner.size {
+            let read = inode.read(inner, offset, &mut buf)?;
+            assert_eq!(read as usize, Self::SIZE, "dirlink read");
+
+            dir = Self::from_bytes(&buf);
+
+            // if we find an empty slot break and use it.
+            // otherwise, the dir will be appended to the end
+            if dir.inum == 0 {
+                break;
+            } else {
+                offset += Self::SIZE as u32;
+            }
+        }
+
+        dir.set_name(name);
+        dir.inum = inum;
+
+        let write = inode.write(inner, offset, dir.as_bytes())?;
+        if write as usize != Self::SIZE {
+            return Err(KernelError::Fs);
+        }
+
+        Ok(())
     }
 }
