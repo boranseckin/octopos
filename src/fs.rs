@@ -4,8 +4,8 @@ use core::slice;
 
 use crate::buf::{BCACHE, Buf};
 use crate::error::KernelError;
-use crate::param::NINODE;
-use crate::proc::Addr;
+use crate::param::{NINODE, ROOTDEV};
+use crate::proc::{Addr, CPU_POOL};
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
 use crate::sync::OnceLock;
@@ -15,6 +15,8 @@ use crate::{log, println, proc};
 /// File system magic number
 pub const FSMAGIC: u32 = 0x10203040;
 
+/// Root inode number
+pub const ROOTINO: u32 = 1;
 /// Block size
 pub const BSIZE: usize = 1024;
 /// Number of direct block addresses in inode
@@ -394,9 +396,9 @@ impl Inode {
         self.clone()
     }
 
-    /// Locks the given `inode`.
+    /// Locks the given `inode`. The lifetime of the lock is static since it comes from the table.
     /// Reads the inode from disk if necessary.
-    pub fn lock(&self) -> SleepLockGuard<'_, InodeInner> {
+    pub fn lock(&self) -> SleepLockGuard<'static, InodeInner> {
         let sb = SB.get().unwrap();
 
         let mut inner = INODE_TABLE.inner[self.id].lock();
@@ -422,7 +424,7 @@ impl Inode {
     }
 
     /// Unlocks the given `inode`.
-    pub fn unlock(&self, guard: SleepLockGuard<'_, InodeInner>) {
+    pub fn unlock(&self, guard: SleepLockGuard<'static, InodeInner>) {
         drop(guard);
     }
 
@@ -461,7 +463,7 @@ impl Inode {
     }
 
     /// Common idiom: `unlock()`, then `put()`
-    pub fn unlock_put(self, guard: SleepLockGuard<'_, InodeInner>) {
+    pub fn unlock_put(self, guard: SleepLockGuard<'static, InodeInner>) {
         self.unlock(guard);
         self.put();
     }
@@ -798,5 +800,99 @@ impl Directory {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Path<'a>(&'a str);
+
+impl<'a> Path<'a> {
+    pub const fn new(name: &'a str) -> Path<'a> {
+        Self(name)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn is_absolute(&self) -> bool {
+        self.0.starts_with('/')
+    }
+
+    /// Returns (next path component, rest).
+    /// The returned path has no leading slashes, so the caller can check to see if the component
+    /// is the last one (Path == '\0').
+    /// If no component to remove, returns None.
+    pub fn next_component(&self) -> Option<(&'a str, Path<'a>)> {
+        let s = self.0.trim_start_matches('/');
+
+        if s.is_empty() {
+            return None;
+        }
+
+        match s.find('/') {
+            Some(i) => {
+                let rest = s[i..].trim_start_matches('/');
+                Some((&s[..i], Path(rest)))
+            }
+            None => Some((s, Path(""))),
+        }
+    }
+
+    fn resolve_inner(&self, parent: bool) -> Result<(Inode, &'a str), KernelError> {
+        let mut inode = if self.is_absolute() {
+            Inode::get(ROOTDEV, ROOTINO)?
+        } else {
+            CPU_POOL.current_proc().unwrap().data().cwd.dup()
+        };
+
+        let mut name = "";
+        let mut path = self.clone();
+
+        while let Some((component, rest)) = path.next_component() {
+            let mut inner = inode.lock();
+
+            if inner.r#type != InodeType::Directory {
+                inode.unlock_put(inner);
+                return Err(KernelError::Fs);
+            }
+
+            if parent && rest.is_empty() {
+                // stop one level early
+                inode.unlock(inner);
+                return Ok((inode, component));
+            }
+
+            match Directory::lookup(&inode, &mut inner, component) {
+                Ok((_, next)) => {
+                    inode.unlock_put(inner);
+                    inode = next;
+                }
+                Err(e) => {
+                    inode.unlock_put(inner);
+                    return Err(e);
+                }
+            }
+
+            name = component;
+            path = rest;
+        }
+
+        if parent {
+            inode.put();
+            return Err(KernelError::Fs);
+        }
+
+        Ok((inode, name))
+    }
+
+    /// Resolves the full path to an inode.
+    pub fn resolve(&self) -> Result<Inode, KernelError> {
+        self.resolve_inner(false).map(|(inode, _)| inode)
+    }
+
+    /// Resolves to the parent directory, returning (parent, final_name).
+    pub fn resolve_parent(&self) -> Result<(Inode, &'a str), KernelError> {
+        self.resolve_inner(true)
     }
 }

@@ -9,7 +9,7 @@ use alloc::string::String;
 
 use crate::error::KernelError;
 use crate::file::File;
-use crate::fs;
+use crate::fs::{self, Inode, Path};
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
 use crate::param::{NCPU, NOFILE, NPROC, ROOTDEV};
 use crate::println;
@@ -349,7 +349,7 @@ pub struct ProcData {
     /// Open files
     pub open_files: [Option<File>; NOFILE],
     /// Current directory
-    pub cwd: (),
+    pub cwd: Inode,
     /// Process name
     pub name: String,
 }
@@ -363,7 +363,7 @@ impl ProcData {
             trapframe: None,
             context: Context::new(),
             open_files: [const { None }; NOFILE],
-            cwd: (),
+            cwd: Inode::new(0, 0, 0),
             name: String::new(),
         }
     }
@@ -606,7 +606,7 @@ pub fn user_init() {
     trapframe.sp = PGSIZE; // user stack pointer
 
     data.name = String::from("initcode");
-    data.cwd = (); // TODO
+    data.cwd = Path::new("/").resolve().unwrap();
 
     inner.state = ProcState::Runnable;
 
