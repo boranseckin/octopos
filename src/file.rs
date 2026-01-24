@@ -259,7 +259,8 @@ impl File {
                     log::begin_op();
                     let mut inode_inner = inode.lock();
 
-                    let src = unsafe { slice::from_raw_parts(addr.as_usize() as *const u8, n1) };
+                    let src =
+                        unsafe { slice::from_raw_parts((addr.as_usize() + i) as *const u8, n1) };
                     let write = inode.write(&mut inode_inner, file_inner.offset, src);
 
                     if let Ok(w) = write {
