@@ -18,3 +18,5 @@ pub const MAXOPBLOCKS: usize = 10;
 pub const LOGSIZE: usize = MAXOPBLOCKS * 3;
 /// size of disk block cache
 pub const NBUF: usize = MAXOPBLOCKS * 3;
+/// maximum file path name
+pub const MAXPATH: usize = 128;

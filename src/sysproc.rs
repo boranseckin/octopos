@@ -15,7 +15,7 @@ pub fn sys_getpid(args: &SyscallArgs) -> Result<usize, SyscallError> {
 pub fn sys_fork(_args: &SyscallArgs) -> Result<usize, SyscallError> {
     match proc::fork() {
         Ok(pid) => Ok(*pid),
-        Err(_) => Err(SyscallError::ForkError),
+        Err(_) => Err(SyscallError::Fork),
     }
 }
 
@@ -23,7 +23,7 @@ pub fn sys_wait(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let addr = args.get_addr(0);
     match proc::wait(addr) {
         Some(pid) => Ok(*pid),
-        None => Err(SyscallError::WaitError),
+        None => Err(SyscallError::Wait),
     }
 }
 
@@ -33,7 +33,7 @@ pub fn sys_sbrk(args: &SyscallArgs) -> Result<usize, SyscallError> {
 
     match unsafe { proc::grow(size) } {
         Ok(_) => Ok(addr),
-        Err(_) => Err(SyscallError::SbrkError),
+        Err(_) => Err(SyscallError::Sbrk),
     }
 }
 
@@ -45,7 +45,7 @@ pub fn sys_sleep(args: &SyscallArgs) -> Result<usize, SyscallError> {
 
     while *ticks - ticks0 < duration {
         if CPU_POOL.current_proc().unwrap().is_killed() {
-            return Err(SyscallError::SleepError);
+            return Err(SyscallError::Sleep);
         }
 
         ticks = proc::sleep(Channel::Ticks, ticks);

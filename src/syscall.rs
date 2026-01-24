@@ -12,15 +12,23 @@ use crate::vm::VA;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallError {
     Unknown(usize),
-    ForkError,
-    WaitError,
-    SbrkError,
-    SleepError,
-    FetchError,
-    ConsoleError,
-    ReadError,
-    WriteError,
-    StatError,
+    Fork,
+    Wait,
+    Sbrk,
+    Sleep,
+    Fetch,
+    Console,
+    Read,
+    Write,
+    Stat,
+    Link,
+    Unlink,
+    Open,
+    Mkdir,
+    Mknod,
+    Chdir,
+    Exec,
+    Pipe,
 }
 
 /// Wrapper for extracting typed syscall arguments from trapframe.
@@ -71,17 +79,17 @@ impl<'a> SyscallArgs<'a> {
         let fd: usize = self
             .get_int(index)
             .try_into()
-            .or(Err(SyscallError::FetchError))?;
+            .or(Err(SyscallError::Fetch))?;
 
         if fd >= NOFILE {
-            return Err(SyscallError::FetchError);
+            return Err(SyscallError::Fetch);
         }
 
         if let Some(file) = &CPU_POOL.current_proc().unwrap().data().open_files[fd] {
             return Ok((fd, file.clone()));
         }
 
-        Err(SyscallError::FetchError)
+        Err(SyscallError::Fetch)
     }
 
     /// Fetches a null-terminated string from user space.
@@ -100,7 +108,7 @@ impl<'a> SyscallArgs<'a> {
                 .copy_in(&mut buf, VA::from(addr.as_usize() + i))
                 .is_err()
             {
-                return Err(SyscallError::FetchError);
+                return Err(SyscallError::Fetch);
             }
 
             if buf[0] == 0 {
@@ -119,7 +127,7 @@ impl<'a> SyscallArgs<'a> {
         let data = unsafe { proc.data_mut() };
 
         if addr >= data.size || addr + 64 > data.size {
-            return Err(SyscallError::FetchError);
+            return Err(SyscallError::Fetch);
         }
 
         let mut result = Vec::with_capacity(len);
@@ -130,7 +138,7 @@ impl<'a> SyscallArgs<'a> {
             .copy_in(&mut result, addr)
             .is_err()
         {
-            return Err(SyscallError::FetchError);
+            return Err(SyscallError::Fetch);
         }
 
         Ok(result)

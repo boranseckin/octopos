@@ -76,7 +76,7 @@ impl Console {
             // wait until interrupt handler has put some input into `buf`.
             while console.r == console.w {
                 if CPU_POOL.current_proc().unwrap().is_killed() {
-                    return Err(SyscallError::ConsoleError);
+                    return Err(SyscallError::Console);
                 }
 
                 console = proc::sleep(Channel::Buffer(&console.r as *const _ as usize), console);

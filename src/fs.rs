@@ -30,7 +30,7 @@ pub const MAXFILE: usize = NDIRECT + NINDIRECT;
 pub const IPB: u32 = (BSIZE / size_of::<DiskInode>()) as u32;
 /// Bitmap bits per block
 pub const BPB: u32 = BSIZE as u32 * 8;
-
+/// Directory entry name size
 pub const DIRSIZE: usize = 14;
 
 pub static SB: OnceLock<SuperBlock> = OnceLock::new();
@@ -692,24 +692,119 @@ impl Inode {
 
         Ok(total)
     }
+
+    pub fn create(
+        path: &Path,
+        r#type: InodeType,
+        major: u16,
+        minor: u16,
+    ) -> Result<(Self, SleepLockGuard<'static, InodeInner>), KernelError> {
+        let (parent, name) = path.resolve_parent()?;
+
+        let mut parent_inner = parent.lock();
+
+        // check if the file already exists
+        if let Ok((_, inode)) = Directory::lookup(&parent, &mut parent_inner, name) {
+            parent.unlock_put(parent_inner);
+
+            let inode_inner = inode.lock();
+
+            // check type matches
+            if r#type == InodeType::File
+                && (inode_inner.r#type == InodeType::File
+                    || inode_inner.r#type == InodeType::Device)
+            {
+                return Ok((inode, inode_inner));
+            }
+
+            // type mismatch
+            inode.unlock_put(inode_inner);
+            return Err(KernelError::Fs);
+        };
+
+        let inode = match Self::alloc(parent.dev, r#type) {
+            Ok(v) => v,
+            Err(e) => {
+                parent.unlock_put(parent_inner);
+                return Err(e);
+            }
+        };
+
+        let mut inode_inner = inode.lock();
+        inode_inner.major = major;
+        inode_inner.minor = minor;
+        inode_inner.nlink = 1;
+        inode.update(&inode_inner);
+
+        // create `.` and `..` entries if it is a directory
+        // no inode.nlink += 1 for `.` to avoid cyclic ref count
+        if r#type == InodeType::Directory
+            && (Directory::link(&inode, &mut inode_inner, ".", inode.inum as u16).is_err()
+                || Directory::link(&inode, &mut inode_inner, "..", inode.inum as u16).is_err())
+        {
+            // fail
+            inode_inner.nlink = 0;
+            inode.update(&inode_inner);
+            inode.unlock_put(inode_inner);
+            parent.unlock_put(parent_inner);
+            return Err(KernelError::Fs);
+        }
+
+        if Directory::link(&parent, &mut parent_inner, name, inode.inum as u16).is_err() {
+            // fail
+            inode_inner.nlink = 0;
+            inode.update(&inode_inner);
+            inode.unlock_put(inode_inner);
+            parent.unlock_put(parent_inner);
+            return Err(KernelError::Fs);
+        }
+
+        if r#type == InodeType::Directory {
+            // success is now guarenteed
+            parent_inner.nlink += 1;
+            parent.update(&parent_inner);
+        }
+
+        parent.unlock_put(parent_inner);
+
+        Ok((inode, inode_inner))
+    }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Directory {
-    inum: u16,
-    name: [u8; DIRSIZE],
+    pub inum: u16,
+    pub name: [u8; DIRSIZE],
 }
 
 impl Directory {
     pub const SIZE: usize = size_of::<Self>();
 
+    pub const fn new_empty() -> Self {
+        Self {
+            inum: 0,
+            name: [0; DIRSIZE],
+        }
+    }
+
     fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
         unsafe { ptr::read_unaligned(bytes.as_ptr() as *const Self) }
     }
 
-    fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self as *const Self as *const u8, Self::SIZE) }
+    }
+
+    fn from_inode(
+        inode: &Inode,
+        inner: &mut SleepLockGuard<'_, InodeInner>,
+        offset: u32,
+    ) -> Result<Self, KernelError> {
+        let mut buf = [0; Self::SIZE];
+        let read = inode.read(inner, offset, &mut buf)?;
+        assert_eq!(read as usize, Self::SIZE, "dir read from inode");
+        Ok(Self::from_bytes(&buf))
     }
 
     fn is_name_equal(&self, name: &str) -> bool {
@@ -724,6 +819,18 @@ impl Directory {
         self.name[..len].copy_from_slice(&bytes[..len]);
     }
 
+    /// Checks whether the directory is empty (only contains `.` and `..`).
+    pub fn is_empty(inode: &Inode, inner: &mut SleepLockGuard<'_, InodeInner>) -> bool {
+        for offset in ((2 * Self::SIZE as u32)..inner.size).step_by(Self::SIZE) {
+            let dir = Self::from_inode(inode, inner, offset).unwrap();
+            if dir.inum != 0 {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Looks up for a directory entry in a directory.
     /// If found, returns byte offset and Inode.
     pub fn lookup(
@@ -733,13 +840,8 @@ impl Directory {
     ) -> Result<(u32, Inode), KernelError> {
         assert_eq!(inner.r#type, InodeType::Directory, "dirlookup not DIR");
 
-        let mut buf = [0; Self::SIZE];
-
         for offset in (0..inner.size).step_by(Self::SIZE) {
-            let read = inode.read(inner, offset, &mut buf)?;
-            assert_eq!(read as usize, Self::SIZE, "dirlookup read");
-
-            let dir = Self::from_bytes(&buf);
+            let dir = Self::from_inode(inode, inner, offset)?;
 
             if dir.inum == 0 {
                 continue;
@@ -769,18 +871,11 @@ impl Directory {
         }
 
         // look for an empty directory
-        let mut buf = [0; Self::SIZE];
-        let mut dir = Self {
-            inum: 0,
-            name: [0; DIRSIZE],
-        };
+        let mut dir = Self::new_empty();
         let mut offset = 0;
 
         while offset < inner.size {
-            let read = inode.read(inner, offset, &mut buf)?;
-            assert_eq!(read as usize, Self::SIZE, "dirlink read");
-
-            dir = Self::from_bytes(&buf);
+            dir = Self::from_inode(inode, inner, offset)?;
 
             // if we find an empty slot break and use it.
             // otherwise, the dir will be appended to the end
@@ -849,6 +944,7 @@ impl<'a> Path<'a> {
         let mut name = "";
         let mut path = self.clone();
 
+        // walk the path, one component at at time
         while let Some((component, rest)) = path.next_component() {
             let mut inner = inode.lock();
 
@@ -857,12 +953,13 @@ impl<'a> Path<'a> {
                 return Err(KernelError::Fs);
             }
 
+            // stop one level early
             if parent && rest.is_empty() {
-                // stop one level early
                 inode.unlock(inner);
                 return Ok((inode, component));
             }
 
+            // get the next inode
             match Directory::lookup(&inode, &mut inner, component) {
                 Ok((_, next)) => {
                     inode.unlock_put(inner);
@@ -878,6 +975,7 @@ impl<'a> Path<'a> {
             path = rest;
         }
 
+        // we returned early to put the last inode
         if parent {
             inode.put();
             return Err(KernelError::Fs);

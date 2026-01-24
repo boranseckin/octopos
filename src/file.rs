@@ -195,7 +195,7 @@ impl File {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.readable {
-            return Err(SyscallError::ReadError);
+            return Err(SyscallError::Read);
         }
 
         match &mut file_inner.r#type {
@@ -219,12 +219,12 @@ impl File {
                 if let Ok(read) = read {
                     Ok(read as usize)
                 } else {
-                    Err(SyscallError::ReadError)
+                    Err(SyscallError::Read)
                 }
             }
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.read)(addr, n),
-                None => Err(SyscallError::ReadError),
+                None => Err(SyscallError::Read),
             },
         }
     }
@@ -234,7 +234,7 @@ impl File {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.writeable {
-            return Err(SyscallError::WriteError);
+            return Err(SyscallError::Write);
         }
 
         match &mut file_inner.r#type {
@@ -279,16 +279,23 @@ impl File {
                 if i == n {
                     Ok(n)
                 } else {
-                    Err(SyscallError::WriteError)
+                    Err(SyscallError::Write)
                 }
             }
 
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.write)(addr, n),
-                None => Err(SyscallError::WriteError),
+                None => Err(SyscallError::Write),
             },
         }
     }
+
+    /// Open file flags
+    pub const O_RDONLY: i32 = 0x000;
+    pub const O_WRONLY: i32 = 0x001;
+    pub const O_RDWR: i32 = 0x002;
+    pub const O_CREATE: i32 = 0x200;
+    pub const O_TRUNC: i32 = 0x400;
 }
 
 /// Device interface
