@@ -10,6 +10,7 @@ use alloc::string::String;
 use crate::error::KernelError;
 use crate::file::File;
 use crate::fs::{self, Inode, Path};
+use crate::log;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
 use crate::param::{NCPU, NOFILE, NPROC, ROOTDEV};
 use crate::println;
@@ -552,7 +553,7 @@ impl ProcPool {
                 // Allocate an empty user page table.
                 match proc.create_pagetable() {
                     Ok(uvm) => {
-                        data.pagetable = Some(uvm);
+                        data.pagetable.replace(uvm);
                     }
                     Err(err) => {
                         proc.free(inner);
@@ -586,7 +587,7 @@ pub fn user_init() {
     let (proc, mut inner) = PROC_POOL.alloc().unwrap();
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
 
-    // #SAFETY: we are holding inner lock
+    // # Safety: we are holding inner lock
     let data = unsafe { proc.data_mut() };
 
     // allocate one user page and copy initcode's instructions and data into it.
@@ -672,7 +673,13 @@ pub fn fork() -> Result<PID, KernelError> {
     // cause fork to return 0 in the child
     new_trapframe.a0 = 0;
 
-    // TODO: increment reference counts on open file descriptors
+    // increment reference counts on open file descriptors
+    for (i, file) in data.open_files.iter_mut().enumerate() {
+        if let Some(file) = file.as_mut() {
+            new_data.open_files[i] = Some(file.dup());
+        }
+    }
+    new_data.cwd = data.cwd.dup();
 
     new_data.name = data.name.clone();
 
@@ -712,7 +719,17 @@ pub fn exit(status: isize) -> ! {
 
     let data = unsafe { proc.data_mut() };
 
-    // TODO: Close all open files.
+    // close all open files
+    for file in &mut data.open_files {
+        if let Some(mut file) = file.take() {
+            file.close();
+        }
+    }
+
+    log::begin_op();
+    let cwd = data.cwd.clone();
+    cwd.put();
+    log::end_op();
 
     let inner = {
         // parents lock is dropped at the end of this scope
@@ -804,8 +821,10 @@ pub fn scheduler() -> ! {
 
     loop {
         // The most recent process to run may have had interrupts turned off; enable them to avoid
-        // a deadlock if all processes are waiting.
+        // a deadlock if all processes are waiting. Then, turn them off to avoid possible rece
+        // between an interrupt and wfi.
         interrupts::enable();
+        interrupts::disable();
 
         let mut found = false;
 
@@ -828,8 +847,6 @@ pub fn scheduler() -> ! {
 
         if !found {
             // nothing to run; stop running on this core until an interrupt.
-            interrupts::enable();
-
             unsafe { asm!("wfi") };
         }
     }
@@ -864,6 +881,7 @@ pub fn sched<'a>(
     let interrupts_enabled = cpu.interrupts_enabled;
     unsafe { swtch(context, &cpu.context) };
 
+    let cpu = unsafe { &mut *CPU_POOL.current() };
     cpu.interrupts_enabled = interrupts_enabled;
 
     proc_inner
@@ -994,6 +1012,9 @@ pub fn copy_out_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
 }
 
 /// Copies from a kernel address.
+///
+/// # Safety
+/// The caller must ensure that `dst` is valid for writes of `src.len()` bytes.
 pub unsafe fn copy_out_kernel(src: &[u8], dst: *mut u8) {
     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
 }
@@ -1013,6 +1034,9 @@ pub fn copy_in_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
 }
 
 /// Copies from a kernel address.
+///
+/// # Safety
+/// The caller must ensure that `src` is valid for reads of `dst.len()` bytes.
 pub unsafe fn copy_in_kernel(src: &[u8], dst: *mut u8) {
     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
 }

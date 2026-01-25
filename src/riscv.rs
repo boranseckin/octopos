@@ -114,6 +114,8 @@ pub mod registers {
             StoreAddressMisaligned,
             StoreAccessFault,
             EnvironmentCall,
+            LoadPageFault,
+            StorePageFault,
             Unknown,
         }
 
@@ -141,6 +143,8 @@ pub mod registers {
                     6 => Exception::StoreAddressMisaligned,
                     7 => Exception::StoreAccessFault,
                     8 => Exception::EnvironmentCall,
+                    13 => Exception::LoadPageFault,
+                    15 => Exception::StorePageFault,
                     _ => Exception::Unknown,
                 }
             }

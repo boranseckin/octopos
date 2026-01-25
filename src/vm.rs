@@ -678,7 +678,7 @@ impl Uvm {
     ///
     /// Returns the physical access, if successful.
     /// Returns err if `va` is invalid / already mapped, or out of physical memory.
-    fn vmfault(&mut self, va: VA) -> Result<PA, KernelError> {
+    pub fn vmfault(&mut self, va: VA) -> Result<PA, KernelError> {
         let proc = CPU_POOL.current_proc().unwrap();
         let data = unsafe { proc.data_mut() };
 

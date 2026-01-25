@@ -34,7 +34,7 @@ pub extern "C" fn uservec() {
 
         // each process has a separate p->trapframe memory area, but it's mapped to the same
         // virtual address (TRAPFRAME) in every process' user page table.
-        "li a0, {tp}",
+        "li a0, {tf}",
 
         // save the user registers in TRAPFRAME
         "sd ra, 40(a0)",
@@ -97,7 +97,7 @@ pub extern "C" fn uservec() {
         // jump to usertrap(), which does not return
         "jr t0",
 
-        tp = const TRAPFRAME,
+        tf = const TRAPFRAME,
     );
 }
 

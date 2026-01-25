@@ -12,6 +12,7 @@ use crate::syscall::syscall;
 use crate::trampoline::{trampoline, userret, uservec};
 use crate::uart::UART;
 use crate::virtio_disk;
+use crate::vm::VA;
 
 pub static TICKS: SpinLock<usize> = SpinLock::new(0, "time");
 
@@ -34,6 +35,7 @@ pub unsafe extern "C" fn usertrap() {
         let proc = CPU_POOL.current_proc().unwrap();
         let data = proc.data_mut();
         let trapframe = data.trapframe.as_mut().unwrap();
+        let pagetable = data.pagetable.as_mut().unwrap();
 
         // save user program counter in case, this handler yields to another core, and the new core
         // switches to user space, overwriting sepc.
@@ -57,6 +59,16 @@ pub unsafe extern "C" fn usertrap() {
                 interrupts::enable();
 
                 syscall(trapframe);
+            }
+
+            // page fault on lazily-allocated page
+            scause::Trap::Exception(scause::Exception::StorePageFault)
+            | scause::Trap::Exception(scause::Exception::LoadPageFault)
+                if pagetable.vmfault(VA::from(stval::read())).is_ok() =>
+            {
+                // vmfault handles the interrupt
+                // nothing to do
+                println!("usertrap vmfault");
             }
 
             // device interrupt
@@ -106,24 +118,22 @@ pub unsafe extern "C" fn usertrap() {
 pub unsafe extern "C" fn usertrapret() {
     let proc = CPU_POOL.current_proc().unwrap();
 
-    // we're about to switch the destination of traps from
-    // kerneltrap() to usertrap(), so turn off interrupts until
-    // we're back in user space, where usertrap() is correct.
+    // we're about to switch the destination of traps from `kerneltrap()` to `usertrap()`, so turn
+    // off interrupts until we're back in user space, where `usertrap()` is correct.
     interrupts::disable();
 
-    // send syscalls, interrupts, and exceptions to uservec in trampoline.S
+    // send syscalls, interrupts, and exceptions to `uservec` in `trampoline.S`
     let trampoline_uservec =
         TRAMPOLINE + (uservec as *const () as usize - trampoline as *const () as usize);
     unsafe { stvec::write(trampoline_uservec) };
 
-    // set up trapframe values that uservec will need when
-    // the process next traps into the kernel.
+    // set up trapframe values that uservec will need when the process next traps into the kernel.
     let data = unsafe { proc.data_mut() };
     let trapframe = data.trapframe.as_mut().unwrap();
-    trapframe.kernel_satp = unsafe { satp::read() };
-    trapframe.kernel_sp = (data.kstack + PGSIZE).as_usize();
+    trapframe.kernel_satp = unsafe { satp::read() }; // kernel page table
+    trapframe.kernel_sp = (data.kstack + PGSIZE).as_usize(); // process's kernel stack
     trapframe.kernel_trap = usertrap as *const () as usize;
-    trapframe.kernel_hartid = unsafe { tp::read() };
+    trapframe.kernel_hartid = unsafe { tp::read() }; // hartid for `current_id()`
 
     // set up the registers that trampoline.S's sret will use to get to user space.
 
