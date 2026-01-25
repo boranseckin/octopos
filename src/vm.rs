@@ -1,13 +1,12 @@
 use alloc::boxed::Box;
 
-use core::cmp::min;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 
 use crate::error::KernelError;
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
 use crate::println;
-use crate::proc::PROC_POOL;
+use crate::proc::{CPU_POOL, PROC_POOL};
 use crate::riscv::{
     MAXVA, PGSIZE, PTE_R, PTE_U, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pg_round_up,
     pte_flags, pte_to_pa, px,
@@ -143,6 +142,14 @@ impl VA {
         self.as_usize() as *mut T
     }
 
+    pub fn round_down(&self) -> Self {
+        Self(pg_round_down(self.as_usize()))
+    }
+
+    pub fn round_up(&self) -> Self {
+        Self(pg_round_up(self.as_usize()))
+    }
+
     /// Returns the page table index for the given level.
     fn px(&self, level: usize) -> usize {
         px(level, self.as_usize())
@@ -195,7 +202,7 @@ impl PageTableEntry {
     /// Check if the PTE is a leaf (pointing to a PA).
     fn is_leaf(&self) -> bool {
         // If the PTE is a leaf, it should have at least one of the permission bits set.
-        (*self & (PTE_X | PTE_W | PTE_R)) != 0
+        *self & (PTE_X | PTE_W | PTE_R) != 0
     }
 
     /// Returns the underlying usize value of the PTE.
@@ -347,7 +354,7 @@ impl PageTable {
     }
 
     /// Creates PTEs for virtual addresses starting at `va` that refer to physical addresses
-    /// starting at `pa` applying the permissions given in `perm`.
+    /// starting at `pa`, applying the permissions given in `perm`.
     ///
     /// `va` and `size` must be page-aligned.
     pub fn map_pages(
@@ -390,14 +397,12 @@ impl PageTable {
         // iterate over all 512 PTEs
         for pte in pagetable.iter_mut() {
             if pte.is_v() {
-                // if this PTE is a leaf
                 if pte.is_leaf() {
                     panic!("free_walk: leaf");
                 }
 
                 // if this PTE points to a lower-level page tabel
-                let child = pte.as_pa();
-                let child = unsafe { PageTable::from_pa(child) };
+                let child = unsafe { PageTable::from_pa(pte.as_pa()) };
                 child.free_walk();
                 *pte = PageTableEntry(0);
             }
@@ -421,6 +426,9 @@ impl Kvm {
     }
 
     /// Maps [va, va+size) to [pa, pa+size) in the kernel page table.
+    ///
+    /// Only used when booting.
+    /// Does not flush TLB or enable paging.
     pub fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
         if self.0.map_pages(va, pa, size, perm).is_err() {
             panic!("kvmmap");
@@ -436,7 +444,7 @@ impl Kvm {
         self.map(VA::from(VIRTIO0), PA::from(VIRTIO0), PGSIZE, PTE_R | PTE_W);
 
         // PLIC
-        self.map(VA::from(PLIC), PA::from(PLIC), 0x40_0000, PTE_R | PTE_W);
+        self.map(VA::from(PLIC), PA::from(PLIC), 0x400_0000, PTE_R | PTE_W);
 
         // kernel text executable and read-only
         self.map(
@@ -548,6 +556,7 @@ impl Uvm {
         }
 
         let old_size = pg_round_up(old_size);
+
         for i in (old_size..new_size).step_by(PGSIZE) {
             let mem = match Box::<Page>::try_new_zeroed() {
                 Ok(mem) => unsafe { mem.assume_init() },
@@ -560,8 +569,8 @@ impl Uvm {
             let mem = Box::into_raw(mem);
 
             if let Err(err) = self.0.map_pages(
-                i.into(),
-                (mem as usize).into(),
+                VA::from(i),
+                PA::from(mem as usize),
                 PGSIZE,
                 PTE_R | PTE_U | xperm,
             ) {
@@ -591,7 +600,7 @@ impl Uvm {
 
         if new_size < old_size {
             let npages = (old_size - new_size) / PGSIZE;
-            self.unmap(new_size.into(), npages, true);
+            self.unmap(VA::from(new_size), npages, true);
         }
 
         original_new_size
@@ -643,9 +652,12 @@ impl Uvm {
                 ptr::copy_nonoverlapping(pa.as_mut_ptr::<u8>(), mem_ptr as *mut u8, PGSIZE);
             }
 
-            if let Err(err) = child.map_pages(VA::from(i), pa, PGSIZE, flags) {
+            if let Err(err) =
+                child.map_pages(VA::from(i), PA::from(mem_ptr as usize), PGSIZE, flags)
+            {
                 // # Safety: mem_ptr was allocated above and is not mapped in child's pagetable.
                 drop(unsafe { Box::from_raw(mem_ptr) });
+                child.unmap(VA::from(0), 1 / PGSIZE, true);
                 return Err(err);
             }
         }
@@ -653,10 +665,56 @@ impl Uvm {
         Ok(())
     }
 
+    fn is_mapped(&mut self, va: VA) -> bool {
+        if let Ok(pte) = self.walk(va, false) {
+            pte.is_v()
+        } else {
+            false
+        }
+    }
+
+    /// Allocates and maps user memory if process is referencing a page that was lazily allocated
+    /// in `sys_sbrk()`.
+    ///
+    /// Returns the physical access, if successful.
+    /// Returns err if `va` is invalid / already mapped, or out of physical memory.
+    fn vmfault(&mut self, va: VA) -> Result<PA, KernelError> {
+        let proc = CPU_POOL.current_proc().unwrap();
+        let data = unsafe { proc.data_mut() };
+
+        if va.as_usize() >= data.size {
+            return Err(KernelError::InvalidAddress);
+        }
+
+        let va = va.round_down();
+        if self.is_mapped(va) {
+            return Err(KernelError::InvalidAddress);
+        }
+
+        let mem = match Box::<Page>::try_new_zeroed() {
+            Ok(mem) => unsafe { mem.assume_init() },
+            Err(err) => return Err(err.into()),
+        };
+        let mem_ptr = Box::into_raw(mem);
+        let pa = PA::from(mem_ptr as usize);
+
+        if self
+            .map_pages(va, pa, PGSIZE, PTE_W | PTE_U | PTE_R)
+            .is_err()
+        {
+            // # Safety: mem_ptr was allocated above and is not mapped in pagetable.
+            drop(unsafe { Box::from_raw(mem_ptr) });
+            return Err(KernelError::Alloc);
+        }
+
+        Ok(pa)
+    }
+
     /// Copies from kernel to user.
     /// Copies bytes from src to virtual address dstva in the current page table.
-    pub fn copy_out(&mut self, dstva: VA, mut src: &[u8]) -> Result<(), KernelError> {
-        let mut dstva = dstva.0;
+    pub fn copy_out(&mut self, dstva: VA, src: &[u8]) -> Result<(), KernelError> {
+        let mut dstva = dstva.as_usize();
+        let mut src = src;
 
         while !src.is_empty() {
             let va0 = pg_round_down(dstva);
@@ -665,18 +723,23 @@ impl Uvm {
                 return Err(KernelError::InvalidAddress);
             }
 
+            let pa0 = match self.walk_addr(VA::from(va0)) {
+                Ok(pa0) => pa0,
+                Err(_) => self.vmfault(VA::from(va0))?,
+            };
+
             let pte = self.walk(VA::from(va0), false)?;
 
-            if !pte.is_v() || !pte.is_u() || !pte.is_w() {
+            // forbid copy_out over read-only user text pages
+            if !pte.is_w() {
                 return Err(KernelError::InvalidPte);
             }
 
-            let pa0 = pte.as_pa();
-            let n = min(PGSIZE - (dstva - va0), src.len());
+            let n = (PGSIZE - (dstva - va0)).min(src.len());
 
             unsafe {
                 let src_ptr = src[..n].as_ptr();
-                let dst_ptr = (pa0.0 + (dstva - va0)) as *mut u8;
+                let dst_ptr = (pa0.as_usize() + (dstva - va0)) as *mut u8;
                 ptr::copy_nonoverlapping(src_ptr, dst_ptr, n);
             }
 
@@ -691,13 +754,16 @@ impl Uvm {
     /// Copy bytes from virtual address srcva to dst in the current page table.
     pub fn copy_in(&mut self, dst: &mut [u8], srcva: VA) -> Result<(), KernelError> {
         let mut dst = dst;
-        let mut srcva = srcva.0;
+        let mut srcva = srcva.as_usize();
 
         while !dst.is_empty() {
             let va0 = pg_round_down(srcva);
-            let pa0 = self.walk_addr(va0.into())?;
+            let pa0 = match self.walk_addr(VA::from(va0)) {
+                Ok(pa0) => pa0,
+                Err(_) => self.vmfault(VA::from(va0))?,
+            };
 
-            let n = min(PGSIZE - (srcva - va0), dst.len());
+            let n = (PGSIZE - (srcva - va0)).min(dst.len());
 
             unsafe {
                 let src_ptr = (pa0.0 + (srcva - va0)) as *const u8;
