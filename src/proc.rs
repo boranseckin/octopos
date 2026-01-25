@@ -985,49 +985,42 @@ pub fn kill(pid: PID) -> bool {
     false
 }
 
-pub enum Addr {
-    User(VA),
-    Kernel(*mut u8),
-}
-
-/// Copies from either a user or a kernel address.
-pub fn copy_out(src: &[u8], dst: Addr) -> Result<(), KernelError> {
+/// Copies from a user address.
+pub fn copy_out_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
     unsafe {
-        match dst {
-            Addr::User(va) => CPU_POOL
-                .current_proc()
-                .unwrap()
-                .data_mut()
-                .pagetable
-                .as_mut()
-                .unwrap()
-                .copy_out(va, src),
-            Addr::Kernel(ptr) => {
-                ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
-                Ok(())
-            }
-        }
+        CPU_POOL
+            .current_proc()
+            .unwrap()
+            .data_mut()
+            .pagetable
+            .as_mut()
+            .unwrap()
+            .copy_out(dst, src)
     }
 }
 
-/// Copies into either a user or a kernel address.
-pub fn copy_in(src: Addr, dst: &mut [u8]) -> Result<(), KernelError> {
+/// Copies from a kernel address.
+pub fn copy_out_kernel(src: &[u8], dst: *mut u8) {
+    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
+}
+
+/// Copies into a user address.
+pub fn copy_in_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
     unsafe {
-        match src {
-            Addr::User(va) => CPU_POOL
-                .current_proc()
-                .unwrap()
-                .data_mut()
-                .pagetable
-                .as_mut()
-                .unwrap()
-                .copy_in(dst, va),
-            Addr::Kernel(ptr) => {
-                ptr::copy_nonoverlapping(ptr, dst.as_mut_ptr(), dst.len());
-                Ok(())
-            }
-        }
+        CPU_POOL
+            .current_proc()
+            .unwrap()
+            .data_mut()
+            .pagetable
+            .as_mut()
+            .unwrap()
+            .copy_in(dst, src)
     }
+}
+
+/// Copies from a kernel address.
+pub fn copy_in_kernel(src: &[u8], dst: *mut u8) {
+    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
 }
 
 /// Initializes the process table.

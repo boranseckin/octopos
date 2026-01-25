@@ -8,7 +8,6 @@ use crate::fs::{BSIZE, Inode};
 use crate::log;
 use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
 use crate::proc;
-use crate::proc::Addr;
 use crate::sleeplock::SleepLock;
 use crate::spinlock::SpinLock;
 use crate::syscall::SyscallError;
@@ -182,7 +181,7 @@ impl File {
                 let src = unsafe {
                     slice::from_raw_parts(&stat as *const _ as *const u8, mem::size_of::<Stat>())
                 };
-                proc::copy_out(src, Addr::User(addr))?;
+                proc::copy_out_user(src, addr)?;
 
                 Ok(())
             }
@@ -208,7 +207,7 @@ impl File {
                 let mut inode_inner = inode.lock();
 
                 let dst = unsafe { slice::from_raw_parts_mut(addr.as_mut_ptr(), n) };
-                let read = inode.read(&mut inode_inner, file_inner.offset, dst);
+                let read = inode.read(&mut inode_inner, file_inner.offset, dst, true);
 
                 if let Ok(read) = read {
                     file_inner.offset += read;
@@ -261,7 +260,7 @@ impl File {
 
                     let src =
                         unsafe { slice::from_raw_parts((addr.as_usize() + i) as *const u8, n1) };
-                    let write = inode.write(&mut inode_inner, file_inner.offset, src);
+                    let write = inode.write(&mut inode_inner, file_inner.offset, src, true);
 
                     if let Ok(w) = write {
                         file_inner.offset += w;

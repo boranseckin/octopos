@@ -1,4 +1,4 @@
-use crate::proc::{self, Addr, CPU_POOL, Channel};
+use crate::proc::{self, CPU_POOL, Channel};
 use crate::spinlock::SpinLock;
 use crate::syscall::SyscallError;
 use crate::uart;
@@ -54,7 +54,7 @@ impl Console {
             let src = VA::from(src.as_usize() + i);
             let mut dst = [0u8];
 
-            match proc::copy_in(proc::Addr::User(src), &mut dst) {
+            match proc::copy_in_user(src, &mut dst) {
                 Ok(_) => Self::putc(dst[0]),
                 Err(_) => return Ok(i),
             }
@@ -98,7 +98,7 @@ impl Console {
 
             // copy the input byte to the user-space buffer
             let buf = [c];
-            if proc::copy_out(&buf, Addr::User(dst)).is_err() {
+            if proc::copy_out_user(&buf, dst).is_err() {
                 break;
             }
 

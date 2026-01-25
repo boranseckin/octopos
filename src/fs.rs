@@ -5,7 +5,7 @@ use core::slice;
 use crate::buf::{BCACHE, Buf};
 use crate::error::KernelError;
 use crate::param::{NINODE, ROOTDEV};
-use crate::proc::{Addr, CPU_POOL};
+use crate::proc::CPU_POOL;
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
 use crate::sync::OnceLock;
@@ -590,12 +590,13 @@ impl Inode {
     }
 
     /// Reads data from inode.
-    // TODO: Only handles user virtual addresses.
+    /// `dst_user` indicates whether `dst` is a user space address.
     pub fn read(
         &self,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         offset: u32,
         dst: &mut [u8],
+        dst_user: bool,
     ) -> Result<u32, KernelError> {
         let mut dst = dst;
         let mut n = dst.len() as u32;
@@ -618,11 +619,15 @@ impl Inode {
                 let m = (n - total).min(BSIZE as u32 - offset % BSIZE as u32);
 
                 let src = &buf.data()[(offset as usize % BSIZE)..][..m as usize];
-                let dst_va = VA::from(dst.as_mut_ptr() as usize);
 
-                if proc::copy_out(src, Addr::User(dst_va)).is_err() {
-                    BCACHE.release(buf);
-                    return Err(KernelError::Fs);
+                if dst_user {
+                    let dst_va = VA::from(dst.as_mut_ptr() as usize);
+                    if proc::copy_out_user(src, dst_va).is_err() {
+                        BCACHE.release(buf);
+                        return Err(KernelError::Fs);
+                    }
+                } else {
+                    proc::copy_out_kernel(src, dst.as_mut_ptr());
                 }
 
                 BCACHE.release(buf);
@@ -638,11 +643,14 @@ impl Inode {
         Ok(total)
     }
 
+    /// Writes data to inode.
+    /// `src_user` indicates whether `src` is a user space address.
     pub fn write(
         &self,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         offset: u32,
         src: &[u8],
+        src_user: bool,
     ) -> Result<u32, KernelError> {
         let mut src = src;
         let n = src.len() as u32;
@@ -663,12 +671,16 @@ impl Inode {
                 let mut buf = BCACHE.read(self.dev, addr);
                 let m = (n - total).min(BSIZE as u32 - (offset % BSIZE as u32));
 
-                let src_va = VA::from(src.as_ptr() as usize);
                 let dst = &mut buf.data_mut()[(offset as usize % BSIZE)..][..m as usize];
 
-                if proc::copy_in(Addr::User(src_va), dst).is_err() {
-                    BCACHE.release(buf);
-                    break;
+                if src_user {
+                    let src_va = VA::from(src.as_ptr() as usize);
+                    if proc::copy_in_user(src_va, dst).is_err() {
+                        BCACHE.release(buf);
+                        break;
+                    }
+                } else {
+                    proc::copy_in_kernel(src, dst.as_mut_ptr());
                 }
 
                 log::write(&buf);
@@ -802,7 +814,7 @@ impl Directory {
         offset: u32,
     ) -> Result<Self, KernelError> {
         let mut buf = [0; Self::SIZE];
-        let read = inode.read(inner, offset, &mut buf)?;
+        let read = inode.read(inner, offset, &mut buf, false)?;
         assert_eq!(read as usize, Self::SIZE, "dir read from inode");
         Ok(Self::from_bytes(&buf))
     }
@@ -889,7 +901,7 @@ impl Directory {
         dir.set_name(name);
         dir.inum = inum;
 
-        let write = inode.write(inner, offset, dir.as_bytes())?;
+        let write = inode.write(inner, offset, dir.as_bytes(), false)?;
         if write as usize != Self::SIZE {
             return Err(KernelError::Fs);
         }

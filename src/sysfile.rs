@@ -170,7 +170,7 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize, SyscallError> {
 
         // replace the directory entry with an empty one
         let dir = Directory::new_empty();
-        match parent.write(&mut parent_inner, offset, dir.as_bytes()) {
+        match parent.write(&mut parent_inner, offset, dir.as_bytes(), false) {
             Ok(write) => {
                 assert_eq!(write, Directory::SIZE as u32, "unlink write");
             }
