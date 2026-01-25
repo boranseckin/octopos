@@ -994,7 +994,7 @@ pub fn copy_out_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
 }
 
 /// Copies from a kernel address.
-pub fn copy_out_kernel(src: &[u8], dst: *mut u8) {
+pub unsafe fn copy_out_kernel(src: &[u8], dst: *mut u8) {
     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
 }
 
@@ -1013,7 +1013,7 @@ pub fn copy_in_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
 }
 
 /// Copies from a kernel address.
-pub fn copy_in_kernel(src: &[u8], dst: *mut u8) {
+pub unsafe fn copy_in_kernel(src: &[u8], dst: *mut u8) {
     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
 }
 

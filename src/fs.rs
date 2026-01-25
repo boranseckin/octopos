@@ -627,7 +627,7 @@ impl Inode {
                         return Err(KernelError::Fs);
                     }
                 } else {
-                    proc::copy_out_kernel(src, dst.as_mut_ptr());
+                    unsafe { proc::copy_out_kernel(src, dst.as_mut_ptr()) };
                 }
 
                 BCACHE.release(buf);
@@ -680,7 +680,7 @@ impl Inode {
                         break;
                     }
                 } else {
-                    proc::copy_in_kernel(src, dst.as_mut_ptr());
+                    unsafe { proc::copy_in_kernel(src, dst.as_mut_ptr()) };
                 }
 
                 log::write(&buf);
