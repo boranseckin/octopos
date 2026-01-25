@@ -732,7 +732,7 @@ impl Inode {
             // type mismatch
             inode.unlock_put(inode_inner);
             return Err(KernelError::Fs);
-        };
+        }
 
         let inode = match Self::alloc(parent.dev, r#type) {
             Ok(v) => v,
