@@ -2,7 +2,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 pub mod registers {
-    // Machine Hart (core) ID register, mhartid
+    /// Machine Hart (core) ID register, mhartid
     pub mod mhartid {
         use core::arch::asm;
 
@@ -16,14 +16,14 @@ pub mod registers {
         }
     }
 
-    // Machine Status register, mstatus
+    /// Machine Status register, mstatus
     pub mod mstatus {
         use core::arch::asm;
 
         pub const MPP_MASK: usize = 3 << 11;
         pub const MIE: usize = 1 << 3; // Machine Mode Interrupt enable
 
-        // Machine Previous Privilege Mode
+        /// Machine Previous Privilege Mode
         pub enum MPP {
             Machine = 3,
             Supervisor = 1,
@@ -57,7 +57,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Status register, sstatus
+    /// Supervisor Status register, sstatus
     pub mod sstatus {
         use core::arch::asm;
 
@@ -84,7 +84,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Trap Cause
+    /// Supervisor Trap Cause
     pub mod scause {
         use core::arch::asm;
 
@@ -198,7 +198,7 @@ pub mod registers {
         }
     }
 
-    // Machine-mode Counter-Enable
+    /// Machine-mode Counter-Enable
     pub mod mcounteren {
         use core::arch::asm;
 
@@ -219,7 +219,7 @@ pub mod registers {
         }
     }
 
-    // Machine-mode Cycle Counter
+    /// Machine-mode Cycle Counter
     pub mod time {
         use core::arch::asm;
 
@@ -233,7 +233,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Trap-Vector Base Address
+    /// Supervisor Trap-Vector Base Address
     pub mod stvec {
         use core::arch::asm;
 
@@ -254,7 +254,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Trap Value
+    /// Supervisor Trap Value
     pub mod stval {
         use core::arch::asm;
 
@@ -268,7 +268,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Time Comparison Register
+    /// Supervisor Time Comparison Register
     pub mod stimecmp {
         use core::arch::asm;
 
@@ -289,7 +289,7 @@ pub mod registers {
         }
     }
 
-    // Machine Environment Configuration Register
+    /// Machine Environment Configuration Register
     pub mod menvcfg {
         use core::arch::asm;
 
@@ -310,8 +310,8 @@ pub mod registers {
         }
     }
 
-    // Supervisor Exception Program Counter
-    // holds the instruction address to which a return from exception will go
+    /// Supervisor Exception Program Counter
+    /// Holds the instruction address to which a return from exception will go to.
     pub mod sepc {
         use core::arch::asm;
 
@@ -332,7 +332,7 @@ pub mod registers {
         }
     }
 
-    // Machien Exception Program Counter register, mepc
+    /// Machien Exception Program Counter register, mepc
     pub mod mepc {
         use core::arch::asm;
 
@@ -344,7 +344,7 @@ pub mod registers {
         }
     }
 
-    // Machine Exception Delegation register, medeleg
+    /// Machine Exception Delegation register, medeleg
     pub mod medeleg {
         use core::arch::asm;
 
@@ -356,7 +356,7 @@ pub mod registers {
         }
     }
 
-    // Machine Interrupt Delegation register, medeleg
+    /// Machine Interrupt Delegation register, medeleg
     pub mod mideleg {
         use core::arch::asm;
 
@@ -368,7 +368,7 @@ pub mod registers {
         }
     }
 
-    // Physical Memory Protection Config register, pmpcfg0
+    /// Physical Memory Protection Config register, pmpcfg0
     pub mod pmpcfg0 {
         use core::arch::asm;
 
@@ -379,7 +379,7 @@ pub mod registers {
         }
     }
 
-    // Physical Memory Protection Address register, pmpaddr0
+    /// Physical Memory Protection Address register, pmpaddr0
     pub mod pmpaddr0 {
         use core::arch::asm;
 
@@ -390,7 +390,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Interrupt Enable register, sie
+    /// Supervisor Interrupt Enable register, sie
     pub mod sie {
         use core::arch::asm;
 
@@ -415,7 +415,7 @@ pub mod registers {
         }
     }
 
-    // Machine Interrupt Enable register, mie
+    /// Machine Interrupt Enable register, mie
     pub mod mie {
         use core::arch::asm;
 
@@ -441,7 +441,7 @@ pub mod registers {
         }
     }
 
-    // Supervisor Interrupt Pending
+    /// Supervisor Interrupt Pending
     pub mod sip {
         use core::arch::asm;
 
@@ -466,8 +466,8 @@ pub mod registers {
         }
     }
 
-    // Supervisor Address Translation and Protection register, satp
-    // holds the address of the page table
+    /// Supervisor Address Translation and Protection register, satp
+    /// Holds the address of the page table.
     pub mod satp {
         use core::arch::asm;
 
@@ -495,7 +495,7 @@ pub mod registers {
         }
     }
 
-    // Thread Pointer register, tp
+    /// Thread Pointer register, tp
     pub mod tp {
         use core::arch::asm;
 
