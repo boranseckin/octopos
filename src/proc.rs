@@ -668,7 +668,7 @@ pub fn fork() -> Result<PID, KernelError> {
     // copy saved user registers
     let new_trapframe = new_data.trapframe.as_mut().unwrap();
     let trapframe = data.trapframe.as_ref().unwrap();
-    *new_trapframe = (*trapframe).clone();
+    new_trapframe.clone_from(trapframe);
 
     // cause fork to return 0 in the child
     new_trapframe.a0 = 0;
