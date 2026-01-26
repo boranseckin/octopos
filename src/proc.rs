@@ -445,11 +445,11 @@ impl Proc {
         let data = unsafe { self.data_mut() };
 
         if let Some(trapframe) = data.trapframe.take() {
-            let _tf = trapframe;
+            drop(trapframe);
         }
 
         if let Some(uvm) = data.pagetable.take() {
-            uvm.free(data.size);
+            uvm.proc_free(data.size);
         }
 
         data.size = 0;
@@ -731,22 +731,21 @@ pub fn exit(status: isize) -> ! {
     cwd.put();
     log::end_op();
 
-    let inner = {
-        // parents lock is dropped at the end of this scope
-        let mut parents = PROC_POOL.parents.lock();
+    let mut parents = PROC_POOL.parents.lock();
 
-        // give any children to init
-        reparent(proc, &mut parents);
+    // give any children to init
+    reparent(proc, &mut parents);
 
-        // parent might be sleeping in `wait`
-        let parent_id = parents[proc.id].expect("exit no parent");
-        wakeup(Channel::Proc(parent_id));
+    // parent might be sleeping in `wait`
+    let parent_id = parents[proc.id].expect("exit no parent");
+    wakeup(Channel::Proc(parent_id));
 
-        let mut inner = proc.inner.lock();
-        inner.xstate = status;
-        inner.state = ProcState::Zombie;
-        inner
-    };
+    let mut inner = proc.inner.lock();
+    inner.xstate = status;
+    inner.state = ProcState::Zombie;
+
+    // unlock parents
+    drop(parents);
 
     sched(inner, &mut data.context);
 
@@ -924,9 +923,8 @@ pub unsafe extern "C" fn fork_ret() {
         crate::file::setup_console_fds();
     }
 
-    unsafe {
-        usertrapret();
-    }
+    // return to user space, mimicing `usertrap()`'s return
+    unsafe { usertrapret() };
 }
 
 /// Atomically releases a condition's lock and sleeps on channel.
