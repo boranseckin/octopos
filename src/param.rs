@@ -12,6 +12,8 @@ pub const NINODE: usize = 50;
 pub const NDEV: usize = 10;
 /// device nubmer of file system root disk
 pub const ROOTDEV: u32 = 1;
+/// max exec arguments
+pub const MAXARG: usize = 32;
 /// max # of blocks any FS op writes
 pub const MAXOPBLOCKS: usize = 10;
 /// max data blocks in on-disk log
@@ -20,3 +22,5 @@ pub const LOGSIZE: usize = MAXOPBLOCKS * 3;
 pub const NBUF: usize = MAXOPBLOCKS * 3;
 /// maximum file path name
 pub const MAXPATH: usize = 128;
+/// user stack pages
+pub const USERSTACK: usize = 1;

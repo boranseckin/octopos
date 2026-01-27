@@ -4,6 +4,7 @@ use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 
 use crate::error::KernelError;
+use crate::fs::{Inode, InodeInner};
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
 use crate::println;
 use crate::proc::{CPU_POOL, PROC_POOL};
@@ -12,6 +13,7 @@ use crate::riscv::{
     pte_flags, pte_to_pa, px,
     registers::{satp, vma},
 };
+use crate::sleeplock::SleepLockGuard;
 use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 
@@ -411,6 +413,34 @@ impl PageTable {
         // Free pagetable
         let _pt = unsafe { Box::from_raw(self.ptr.as_mut()) };
     }
+
+    pub fn load_elf_segment(
+        &mut self,
+        inode: &mut Inode,
+        inner: &mut SleepLockGuard<'_, InodeInner>,
+        va: VA,
+        offset: u32,
+        size: usize,
+    ) -> Result<(), KernelError> {
+        let mut n: usize;
+        for i in (0..size).step_by(PGSIZE) {
+            let pa = self.walk_addr(va)?;
+
+            if size - i < PGSIZE {
+                n = size - i;
+            } else {
+                n = PGSIZE;
+            }
+
+            let dst = unsafe { core::slice::from_raw_parts_mut(pa.as_usize() as *mut u8, n) };
+            match inode.read(inner, offset + i as u32, dst, false) {
+                Ok(read) if read as usize == dst.len() => {}
+                _ => return Err(KernelError::Fs),
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub static KVM: OnceLock<Kvm> = OnceLock::new();
@@ -662,6 +692,15 @@ impl Uvm {
             }
         }
 
+        Ok(())
+    }
+
+    /// Marks a PTE invalid for user access.
+    ///
+    /// Used by `exec()` for the user stack guard page.
+    pub fn clear(&mut self, va: VA) -> Result<(), KernelError> {
+        let pte = self.walk(va, false)?;
+        *pte &= !PTE_U;
         Ok(())
     }
 

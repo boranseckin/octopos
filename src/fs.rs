@@ -918,6 +918,10 @@ impl<'a> Path<'a> {
         Self(name)
     }
 
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

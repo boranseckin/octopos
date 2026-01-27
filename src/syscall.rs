@@ -121,6 +121,23 @@ impl<'a> SyscallArgs<'a> {
         Ok(result)
     }
 
+    pub fn fetch_string_to_buf(&self, addr: VA, buf: &mut [u8]) -> Result<(), SyscallError> {
+        let proc = CPU_POOL.current_proc().unwrap();
+        let data = unsafe { proc.data_mut() };
+
+        if data
+            .pagetable
+            .as_mut()
+            .unwrap()
+            .copy_in(buf, VA::from(addr.as_usize()))
+            .is_err()
+        {
+            return Err(SyscallError::Fetch);
+        }
+
+        Ok(())
+    }
+
     /// Fetches a byte array from user space.
     pub fn fetch_bytes(&self, addr: VA, len: usize) -> Result<Vec<u8>, SyscallError> {
         let proc = CPU_POOL.current_proc().unwrap();

@@ -1,11 +1,18 @@
 use core::mem;
+use core::slice;
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use crate::exec::exec;
 use crate::file::{FILE_TABLE, File, FileType};
 use crate::fs::{Directory, Inode, InodeType, Path};
 use crate::log;
-use crate::param::{MAXPATH, NDEV};
+use crate::param::{MAXARG, MAXPATH, NDEV};
 use crate::proc::CPU_POOL;
+use crate::riscv::PGSIZE;
 use crate::syscall::{SyscallArgs, SyscallError};
+use crate::vm::VA;
 
 /// Allocates a file descriptor for the give file.
 /// Takes over file reference from caller on success.
@@ -363,8 +370,53 @@ pub fn sys_chdir(args: &SyscallArgs) -> Result<usize, SyscallError> {
     Ok(0)
 }
 
-pub fn sys_exec(_args: &SyscallArgs) -> Result<usize, SyscallError> {
-    unimplemented!()
+pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SyscallError> {
+    let uargv = args.get_addr(1);
+
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
+    let path = Path::new(&path);
+
+    let proc = CPU_POOL.current_proc().unwrap();
+    let pagetable = unsafe { &mut proc.data_mut().pagetable.as_mut().unwrap() };
+
+    // use heap allocation
+    let mut argv_bufs: Vec<Box<[u8; PGSIZE]>> = Vec::with_capacity(MAXARG);
+
+    for i in 0..MAXARG {
+        // fetch pointer argv[i] from user space
+        let mut uarg: usize = 0;
+        pagetable
+            .copy_in(
+                unsafe {
+                    slice::from_raw_parts_mut(
+                        &mut uarg as *mut usize as *mut u8,
+                        core::mem::size_of::<usize>(),
+                    )
+                },
+                uargv + i * size_of::<usize>(),
+            )
+            .map_err(|_| SyscallError::Exec)?;
+
+        if uarg == 0 {
+            break; // NULL terminator
+        }
+
+        let mut buf = Box::new([0u8; PGSIZE]);
+
+        // fetch string from user space
+        args.fetch_string_to_buf(VA::from(uarg), buf.as_mut())?;
+        argv_bufs.push(buf);
+    }
+
+    let argv: Vec<&str> = argv_bufs
+        .iter()
+        .map(|buf| {
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            str::from_utf8(&buf[..len]).expect("sys_exec string not utf8")
+        })
+        .collect::<Vec<_>>();
+
+    exec(&path, &argv).map_err(|_| SyscallError::Exec)
 }
 
 pub fn sys_pipe(_args: &SyscallArgs) -> Result<usize, SyscallError> {
