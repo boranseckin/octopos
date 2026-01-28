@@ -65,14 +65,13 @@ impl Console {
 
     /// User `read()`s from the console are handled here.
     /// Currently only handles user addresses.
-    pub fn read(dst: VA, len: usize) -> Result<usize, SyscallError> {
+    pub fn read(dst: VA, mut len: usize) -> Result<usize, SyscallError> {
         let mut console = CONSOLE.lock();
 
         let mut dst = dst;
         let target = len;
-        let mut current = 0;
 
-        while current <= len {
+        while len > 0 {
             // wait until interrupt handler has put some input into `buf`.
             while console.r == console.w {
                 if CPU_POOL.current_proc().unwrap().is_killed() {
@@ -88,7 +87,7 @@ impl Console {
 
             // end-of-file
             if c == ctrl(b'D') {
-                if current < target {
+                if len < target {
                     // save ^D for next time, to make sure caller gets a 0-byte result
                     console.r -= 1;
                 }
@@ -103,7 +102,7 @@ impl Console {
             }
 
             dst = VA::from(dst.as_usize() + 1);
-            current -= 1;
+            len -= 1;
 
             // a whole line has arrived, return to the user-level `read()`
             if c == b'\n' {
@@ -111,7 +110,7 @@ impl Console {
             }
         }
 
-        Ok(target - current)
+        Ok(target - len)
     }
 
     /// Console input interrupt handler.
