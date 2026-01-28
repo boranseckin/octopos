@@ -4,13 +4,14 @@ use core::slice;
 
 use crate::buf::{BCACHE, Buf};
 use crate::error::KernelError;
+use crate::log;
 use crate::param::{NINODE, ROOTDEV};
+use crate::proc;
 use crate::proc::CPU_POOL;
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
 use crate::sync::OnceLock;
 use crate::vm::VA;
-use crate::{log, println, proc};
 
 /// File system magic number
 pub const FSMAGIC: u32 = 0x10203040;

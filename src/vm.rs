@@ -6,7 +6,6 @@ use core::ptr::{self, NonNull};
 use crate::error::KernelError;
 use crate::fs::{Inode, InodeInner};
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
-use crate::println;
 use crate::proc::{CPU_POOL, PROC_POOL};
 use crate::riscv::{
     MAXVA, PGSIZE, PTE_R, PTE_U, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pg_round_up,

@@ -5,10 +5,13 @@
 
 extern crate alloc;
 
+#[macro_use]
+pub mod printf;
+#[macro_use]
+pub mod error;
 pub mod buf;
 pub mod console;
 pub mod entry;
-pub mod error;
 pub mod exec;
 pub mod file;
 pub mod fs;
@@ -18,7 +21,6 @@ pub mod log;
 pub mod memlayout;
 pub mod param;
 pub mod plic;
-pub mod printf;
 pub mod proc;
 pub mod riscv;
 pub mod sleeplock;

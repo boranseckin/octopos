@@ -3,7 +3,6 @@ use core::alloc::{GlobalAlloc, Layout};
 use buddy_alloc::{BuddyAllocParam, buddy_alloc::BuddyAlloc};
 
 use crate::memlayout::PHYSTOP;
-use crate::println;
 use crate::spinlock::SpinLock;
 
 unsafe extern "C" {

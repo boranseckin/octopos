@@ -1,7 +1,6 @@
 use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::plic;
-use crate::println;
 use crate::proc::{self, CPU_POOL, Channel};
 use crate::riscv::{
     PGSIZE, interrupts,

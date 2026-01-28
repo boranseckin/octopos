@@ -13,7 +13,6 @@ use crate::fs::{self, Inode, Path};
 use crate::log;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
 use crate::param::{NCPU, NOFILE, NPROC, ROOTDEV};
-use crate::println;
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
 use crate::spinlock::{SpinLock, SpinLockGuard};

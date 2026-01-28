@@ -3,7 +3,6 @@ use alloc::vec::Vec;
 
 use crate::file::File;
 use crate::param::NOFILE;
-use crate::println;
 use crate::proc::{CPU_POOL, Proc, TrapFrame};
 use crate::sysfile::*;
 use crate::sysproc::*;

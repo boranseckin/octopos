@@ -2,7 +2,6 @@ use core::mem::{self, MaybeUninit};
 
 use crate::fs::BSIZE;
 use crate::param::NBUF;
-use crate::println;
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
 use crate::virtio_disk;

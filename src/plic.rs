@@ -2,7 +2,6 @@
 // https://github.com/riscv/riscv-plic-spec/blob/master/riscv-plic.adoc
 
 use crate::memlayout::{PLIC, PLIC_SCLAIM, PLIC_SENABLE, PLIC_SPRIORITY, UART0_IRQ, VIRTIO0_IRQ};
-use crate::println;
 use crate::proc::CPU_POOL;
 
 /// Asks PLIC what interrupt we should server.
