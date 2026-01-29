@@ -25,8 +25,8 @@ pub enum SyscallError {
 impl Display for SyscallError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            SyscallError::Unknown(i) => write!(f, "unknown syscall ({i})"),
-            SyscallError::InvalidArgument(s) => write!(f, "invalid argument ({s})"),
+            SyscallError::Unknown(i) => write!(f, "unknown syscall {i}"),
+            SyscallError::InvalidArgument(s) => write!(f, "invalid argument {s}"),
             SyscallError::FetchArgument => write!(f, "fetch argument"),
             SyscallError::Proc(s) => write!(f, "{s}"),
             SyscallError::File(s) => write!(f, "{s}"),
@@ -255,18 +255,17 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Mkdir => sys_mkdir(&args),
             Syscall::Close => sys_close(&args),
         },
-        Err(e) => {
-            println!(
-                "{} {}: unknown syscall {}",
-                *proc.inner.lock().pid,
-                proc.data().name,
-                trapframe.a7
-            );
-            Err(e)
-        }
+        Err(e) => Err(e),
     };
 
     trapframe.a0 = log!(result)
-        .inspect_err(|e| println!("  {}", e))
+        .inspect_err(|e| {
+            println!(
+                "! syscall error ({}) from proc {} ({})",
+                e,
+                *proc.inner.lock().pid,
+                proc.data().name,
+            )
+        })
         .unwrap_or(usize::MAX);
 }
