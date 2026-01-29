@@ -67,7 +67,7 @@ pub fn panic(info: &core::panic::PanicInfo) -> ! {
     // Safety: we are panicked, don't care about the lock
     let cpu_id = unsafe { CPU_POOL.current_id() };
 
-    println!("hart {} {}", cpu_id, info);
+    println!("! hart {} {}", cpu_id, info);
 
     PRINTF.panicked.store(true, Ordering::Relaxed);
 

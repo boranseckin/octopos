@@ -77,7 +77,18 @@ impl Display for KernelError {
 macro_rules! err {
     ($e:expr) => {{
         #[cfg(debug_assertions)]
-        $crate::println!("! {}:{}: {}", file!(), line!(), $e);
+        {
+            let _lock = $crate::proc::CPU_POOL.lock_current();
+            #[allow(unused_unsafe)]
+            let cpu_id = unsafe { $crate::proc::CPU_POOL.current_id() };
+            $crate::println!(
+                "! hart {} errored at {}:{}: {}",
+                cpu_id,
+                file!(),
+                line!(),
+                $e
+            );
+        }
         return Err($e.into());
     }};
 }
