@@ -5,6 +5,7 @@
 // the virtio spec:
 // https://docs.oasis-open.org/virtio/virtio/v1.1/virtio-v1.1.pdf
 
+use core::fmt::Display;
 use core::ptr;
 
 use crate::buf::{BCACHE, Buf};
@@ -57,8 +58,16 @@ const VRING_DESC_F_WRITE: u16 = 2; // device writes (vs read)
 const NUM: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VirtioError {
+pub enum VirtioError {
     Alloc,
+}
+
+impl Display for VirtioError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            VirtioError::Alloc => write!(f, "allocation error"),
+        }
+    }
 }
 
 /// A single descriptor from the spec
@@ -205,7 +214,7 @@ impl Disk {
             }
         }
 
-        Err(VirtioError::Alloc)
+        err!(VirtioError::Alloc);
     }
 
     /// Marks a descriptor as free.
@@ -245,17 +254,19 @@ impl Disk {
         let mut result = [None; 3];
 
         for i in 0..3 {
-            if let Ok(alloc) = self.alloc_desc() {
-                result[i] = Some(alloc);
-            } else {
-                result.iter_mut().take(i).for_each(|j| {
-                    if let Some(idx) = j {
-                        self.free_desc(*idx);
-                    }
-                });
-
-                return Err(VirtioError::Alloc);
-            }
+            match log!(self.alloc_desc()) {
+                Ok(alloc) => {
+                    result[i] = Some(alloc);
+                }
+                Err(e) => {
+                    result.iter_mut().take(i).for_each(|j| {
+                        if let Some(idx) = j {
+                            self.free_desc(*idx);
+                        }
+                    });
+                    return Err(e);
+                }
+            };
         }
 
         Ok(result.map(|i| i.unwrap()))
@@ -278,7 +289,7 @@ pub fn rw(buf: &mut Buf<'_>, write: bool) {
 
     // allocate the three descriptors
     let ids = loop {
-        if let Ok(ids) = disk.alloc3_desc() {
+        if let Ok(ids) = log!(disk.alloc3_desc()) {
             break ids;
         }
 

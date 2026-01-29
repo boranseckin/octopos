@@ -1,3 +1,5 @@
+use core::fmt::Display;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -11,25 +13,29 @@ use crate::vm::VA;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyscallError {
     Unknown(usize),
-    Fork,
-    Wait,
-    Sbrk,
-    Sleep,
-    Fetch,
+    InvalidArgument(&'static str),
+    FetchArgument,
+    Proc(&'static str),
+    File(&'static str),
     Console,
     Read,
     Write,
-    Stat,
-    Link,
-    Unlink,
-    Open,
-    Mkdir,
-    Mknod,
-    Chdir,
-    Exec,
-    Pipe,
 }
 
+impl Display for SyscallError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SyscallError::Unknown(i) => write!(f, "unknown syscall ({i})"),
+            SyscallError::InvalidArgument(s) => write!(f, "invalid argument ({s})"),
+            SyscallError::FetchArgument => write!(f, "fetch argument"),
+            SyscallError::Proc(s) => write!(f, "{s}"),
+            SyscallError::File(s) => write!(f, "{s}"),
+            SyscallError::Console => write!(f, "console error"),
+            SyscallError::Read => write!(f, "read error"),
+            SyscallError::Write => write!(f, "write error"),
+        }
+    }
+}
 /// Wrapper for extracting typed syscall arguments from trapframe.
 pub struct SyscallArgs<'a> {
     trapframe: &'a TrapFrame,
@@ -75,20 +81,21 @@ impl<'a> SyscallArgs<'a> {
     /// descriptor and the corresponding `File`.
     // TODO: better error reporting
     pub fn get_file(&self, index: usize) -> Result<(usize, File), SyscallError> {
-        let fd: usize = self
-            .get_int(index)
-            .try_into()
-            .or(Err(SyscallError::Fetch))?;
+        let fd: usize = try_log!(
+            self.get_int(index)
+                .try_into()
+                .or(Err(SyscallError::InvalidArgument("fd conversion failed")))
+        );
 
         if fd >= NOFILE {
-            return Err(SyscallError::Fetch);
+            err!(SyscallError::InvalidArgument("fd out of range"));
         }
 
         if let Some(file) = &CPU_POOL.current_proc().unwrap().data().open_files[fd] {
             return Ok((fd, file.clone()));
         }
 
-        Err(SyscallError::Fetch)
+        err!(SyscallError::InvalidArgument("fd not open"));
     }
 
     /// Fetches a null-terminated string from user space.
@@ -100,15 +107,14 @@ impl<'a> SyscallArgs<'a> {
 
         let mut buf = [0u8; 1];
         for i in 0..max {
-            if data
-                .pagetable
-                .as_mut()
-                .unwrap()
-                .copy_in(&mut buf, VA::from(addr.as_usize() + i))
-                .is_err()
-            {
-                return Err(SyscallError::Fetch);
-            }
+            try_log!(
+                data.pagetable
+                    .as_mut()
+                    .unwrap()
+                    .copy_in(&mut buf, VA::from(addr.as_usize() + i))
+                    .inspect_err(|e| println!("copy_in failed: {:?}", e))
+                    .map_err(|_| SyscallError::FetchArgument)
+            );
 
             if buf[0] == 0 {
                 return Ok(result);
@@ -124,15 +130,14 @@ impl<'a> SyscallArgs<'a> {
         let proc = CPU_POOL.current_proc().unwrap();
         let data = unsafe { proc.data_mut() };
 
-        if data
-            .pagetable
-            .as_mut()
-            .unwrap()
-            .copy_in(buf, VA::from(addr.as_usize()))
-            .is_err()
-        {
-            return Err(SyscallError::Fetch);
-        }
+        try_log!(
+            data.pagetable
+                .as_mut()
+                .unwrap()
+                .copy_in(buf, VA::from(addr.as_usize()))
+                .inspect_err(|e| println!("copy_in failed: {:?}", e))
+                .map_err(|_| SyscallError::FetchArgument)
+        );
 
         Ok(())
     }
@@ -143,19 +148,18 @@ impl<'a> SyscallArgs<'a> {
         let data = unsafe { proc.data_mut() };
 
         if addr >= data.size || addr + 64 > data.size {
-            return Err(SyscallError::Fetch);
+            err!(SyscallError::FetchArgument);
         }
 
         let mut result = Vec::with_capacity(len);
-        if data
-            .pagetable
-            .as_mut()
-            .unwrap()
-            .copy_in(&mut result, addr)
-            .is_err()
-        {
-            return Err(SyscallError::Fetch);
-        }
+        try_log!(
+            data.pagetable
+                .as_mut()
+                .unwrap()
+                .copy_in(&mut result, addr)
+                .inspect_err(|e| println!("copy_in failed: {:?}", e))
+                .map_err(|_| SyscallError::FetchArgument)
+        );
 
         Ok(result)
     }
@@ -262,5 +266,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
         }
     };
 
-    trapframe.a0 = result.unwrap_or(usize::MAX);
+    trapframe.a0 = log!(result)
+        .inspect_err(|e| println!("  {}", e))
+        .unwrap_or(usize::MAX);
 }

@@ -10,7 +10,7 @@ use alloc::string::String;
 use crate::error::KernelError;
 use crate::file::File;
 use crate::fs::{self, Inode, Path};
-use crate::log;
+use crate::log::Operation;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
 use crate::param::{NCPU, NOFILE, NPROC, ROOTDEV};
 use crate::riscv::registers::tp;
@@ -233,7 +233,7 @@ pub struct TrapFrame {
 
 impl TrapFrame {
     pub fn try_new() -> Result<Self, KernelError> {
-        let memory: Box<MaybeUninit<Self>> = Box::try_new_zeroed()?;
+        let memory: Box<MaybeUninit<Self>> = try_log!(Box::try_new_zeroed());
         let memory = unsafe { memory.assume_init() };
         Ok(*memory)
     }
@@ -412,28 +412,28 @@ impl Proc {
 
         // Map the trampoline code (for system call returns) at the highest user virtual address.
         // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
-        if let Err(err) = uvm.map_pages(
+        if let Err(err) = log!(uvm.map_pages(
             TRAMPOLINE.into(),
             (trampoline as *const () as usize).into(),
             PGSIZE,
             PTE_R | PTE_X,
-        ) {
+        )) {
             uvm.free(0);
-            return Err(err);
+            return Err(err.into());
         }
 
         // Map the trapframe page just below the trampoline page, for `trampoline.rs`.
         let data = self.data();
-        if let Err(err) = uvm.map_pages(
+        if let Err(err) = log!(uvm.map_pages(
             TRAPFRAME.into(),
             // As disgusting as this is, we need to get the address of the trapframe.
             (data.trapframe.as_deref().unwrap() as *const _ as usize).into(),
             PGSIZE,
             PTE_R | PTE_W,
-        ) {
+        )) {
             uvm.unmap(TRAMPOLINE.into(), 1, false);
             uvm.free(0);
-            return Err(err);
+            return Err(err.into());
         }
 
         Ok(uvm)
@@ -518,7 +518,9 @@ impl ProcPool {
         for (i, _) in self.pool.iter().enumerate() {
             // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
             // initializer works for now. It would be better to create a new struct called Stack...
-            let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
+            let pa = log!(PageTable::try_new())
+                .expect("proc map stack kalloc")
+                .as_pa();
             // Cannot get va from proc.data.kstack since init function is not called yet.
             let va = VA::from(kstack(i));
 
@@ -539,7 +541,7 @@ impl ProcPool {
                 let data = unsafe { proc.data_mut() };
 
                 // Allocate a trapframe page.
-                match Box::<TrapFrame>::try_new_zeroed() {
+                match log!(Box::<TrapFrame>::try_new_zeroed()) {
                     Ok(trapframe) => {
                         data.trapframe.replace(unsafe { trapframe.assume_init() });
                     }
@@ -550,7 +552,7 @@ impl ProcPool {
                 }
 
                 // Allocate an empty user page table.
-                match proc.create_pagetable() {
+                match log!(proc.create_pagetable()) {
                     Ok(uvm) => {
                         data.pagetable.replace(uvm);
                     }
@@ -568,8 +570,7 @@ impl ProcPool {
             }
         }
 
-        // TODO: change this error to "out of free proc"
-        Err(KernelError::Alloc)
+        Err(KernelError::OutOfProc)
     }
 }
 
@@ -583,7 +584,7 @@ unsafe impl Sync for ProcPool {}
 
 /// Sets up first user process.
 pub fn user_init() {
-    let (proc, mut inner) = PROC_POOL.alloc().unwrap();
+    let (proc, mut inner) = log!(PROC_POOL.alloc()).unwrap();
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
 
     // # Safety: we are holding inner lock
@@ -600,7 +601,7 @@ pub fn user_init() {
     trapframe.sp = PGSIZE; // user stack pointer
 
     data.name = String::from("initcode");
-    data.cwd = Path::new("/").resolve().unwrap();
+    data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
 
     inner.state = ProcState::Runnable;
 
@@ -619,15 +620,16 @@ pub unsafe fn grow(n: isize) -> Result<usize, KernelError> {
     let mut size = data.size;
 
     if n > 0 {
-        size = data
-            .pagetable
-            .as_mut()
-            .unwrap()
-            .alloc(size, size + (n as usize), PTE_W)?;
+        size = try_log!(
+            data.pagetable
+                .as_mut()
+                .unwrap()
+                .alloc(size, size + (n as usize), PTE_W)
+        );
     } else if n < 0 {
         let shrink = (-n) as usize;
         if shrink > size {
-            return Err(KernelError::InvalidArgument);
+            err!(KernelError::InvalidArgument);
         }
 
         size = data
@@ -648,19 +650,19 @@ pub fn fork() -> Result<PID, KernelError> {
     let data = unsafe { proc.data_mut() };
 
     // allocate process
-    let (new_proc, new_inner) = PROC_POOL.alloc()?;
+    let (new_proc, new_inner) = try_log!(PROC_POOL.alloc());
     let new_data = unsafe { new_proc.data_mut() };
 
     // copy user memory from parent to child
     let new_pagetable = new_data.pagetable.as_mut().unwrap();
-    if let Err(err) = data
-        .pagetable
-        .as_mut()
-        .unwrap()
-        .copy(new_pagetable, data.size)
-    {
+    if let Err(err) = log!(
+        data.pagetable
+            .as_mut()
+            .unwrap()
+            .copy(new_pagetable, data.size)
+    ) {
         new_proc.free(new_inner);
-        return Err(err);
+        return Err(err.into());
     };
     new_data.size = data.size;
 
@@ -725,10 +727,11 @@ pub fn exit(status: isize) -> ! {
         }
     }
 
-    log::begin_op();
-    let cwd = data.cwd.clone();
-    cwd.put();
-    log::end_op();
+    {
+        let _op = Operation::begin();
+        let cwd = data.cwd.clone();
+        cwd.put();
+    }
 
     let mut parents = PROC_POOL.parents.lock();
 
@@ -776,13 +779,15 @@ pub fn wait(addr: VA) -> Option<PID> {
                     if addr != 0 {
                         unsafe {
                             let xstate_bytes = &inner.xstate.to_le_bytes();
-                            current_proc
-                                .data_mut()
-                                .pagetable
-                                .as_mut()
-                                .unwrap()
-                                .copy_out(addr, xstate_bytes)
-                                .expect("wait copy out xstate");
+                            log!(
+                                current_proc
+                                    .data_mut()
+                                    .pagetable
+                                    .as_mut()
+                                    .unwrap()
+                                    .copy_out(addr, xstate_bytes)
+                            )
+                            .expect("wait copy out xstate");
                         }
                     }
 
@@ -997,14 +1002,17 @@ pub fn kill(pid: PID) -> bool {
 /// Copies from a user address.
 pub fn copy_out_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
     unsafe {
-        CPU_POOL
-            .current_proc()
-            .unwrap()
-            .data_mut()
-            .pagetable
-            .as_mut()
-            .unwrap()
-            .copy_out(dst, src)
+        log!(
+            CPU_POOL
+                .current_proc()
+                .unwrap()
+                .data_mut()
+                .pagetable
+                .as_mut()
+                .unwrap()
+                .copy_out(dst, src)
+        )
+        .map_err(|e| e.into())
     }
 }
 
@@ -1019,14 +1027,17 @@ pub unsafe fn copy_out_kernel(src: &[u8], dst: *mut u8) {
 /// Copies into a user address.
 pub fn copy_in_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
     unsafe {
-        CPU_POOL
-            .current_proc()
-            .unwrap()
-            .data_mut()
-            .pagetable
-            .as_mut()
-            .unwrap()
-            .copy_in(dst, src)
+        log!(
+            CPU_POOL
+                .current_proc()
+                .unwrap()
+                .data_mut()
+                .pagetable
+                .as_mut()
+                .unwrap()
+                .copy_in(dst, src)
+        )
+        .map_err(|e| e.into())
     }
 }
 

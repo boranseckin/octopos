@@ -1,10 +1,10 @@
+use core::fmt::Display;
 use core::mem::{self, MaybeUninit};
 use core::ptr;
 use core::slice;
 
 use crate::buf::{BCACHE, Buf};
-use crate::error::KernelError;
-use crate::log;
+use crate::log::{self, Operation};
 use crate::param::{NINODE, ROOTDEV};
 use crate::proc;
 use crate::proc::CPU_POOL;
@@ -33,6 +33,41 @@ pub const IPB: u32 = (BSIZE / size_of::<DiskInode>()) as u32;
 pub const BPB: u32 = BSIZE as u32 * 8;
 /// Directory entry name size
 pub const DIRSIZE: usize = 14;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsError {
+    OutOfBlock,
+    OutOfInode,
+    OutOfFile,
+    OutOfRange,
+    Read,
+    Write,
+    Create,
+    Lookup,
+    Link,
+    Resolve,
+    Type,
+    Copy,
+}
+
+impl Display for FsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FsError::OutOfBlock => write!(f, "out of block"),
+            FsError::OutOfInode => write!(f, "out of inode"),
+            FsError::OutOfRange => write!(f, "out of range"),
+            FsError::OutOfFile => write!(f, "out of file"),
+            FsError::Read => write!(f, "read error"),
+            FsError::Write => write!(f, "write error"),
+            FsError::Create => write!(f, "create error"),
+            FsError::Lookup => write!(f, "lookup error"),
+            FsError::Link => write!(f, "link error"),
+            FsError::Resolve => write!(f, "resolve error"),
+            FsError::Type => write!(f, "type error"),
+            FsError::Copy => write!(f, "copy error"),
+        }
+    }
+}
 
 pub static SB: OnceLock<SuperBlock> = OnceLock::new();
 
@@ -93,7 +128,7 @@ impl Block {
     }
 
     /// Allocates a zeroed disk block.
-    pub fn alloc(dev: u32) -> Result<Self, KernelError> {
+    pub fn alloc(dev: u32) -> Result<Self, FsError> {
         let sb = SB.get().unwrap();
 
         for b in (0..sb.size).step_by(BPB as usize) {
@@ -121,8 +156,7 @@ impl Block {
             BCACHE.release(buf);
         }
 
-        // panic!("balloc: out of blocks");
-        Err(KernelError::Fs)
+        err!(FsError::OutOfBlock)
     }
 
     /// Frees a disk block.
@@ -316,7 +350,7 @@ impl Inode {
     /// Allocates an inode on device `dev`.
     /// Marks it allocated by giving it type `type`.
     /// Returns an unlocked but allocated and referenced inode or error.
-    pub fn alloc(dev: u32, r#type: InodeType) -> Result<Self, KernelError> {
+    pub fn alloc(dev: u32, r#type: InodeType) -> Result<Self, FsError> {
         let sb = SB.get().unwrap();
 
         for inum in 1..sb.ninodes {
@@ -327,18 +361,18 @@ impl Inode {
                 dinode.r#type = r#type;
                 log::write(&buf);
                 BCACHE.release(buf);
-                return Self::get(dev, inum);
+                return log!(Self::get(dev, inum));
             }
 
             BCACHE.release(buf);
         }
 
-        Err(KernelError::Fs)
+        err!(FsError::OutOfInode);
     }
 
     /// Finds the inode with number `inum` on device `dev` and returns the in-memory copy.
     /// Does not lock the inode and does not read it from disk.
-    pub fn get(dev: u32, inum: u32) -> Result<Self, KernelError> {
+    pub fn get(dev: u32, inum: u32) -> Result<Self, FsError> {
         let mut meta = INODE_TABLE.meta.lock();
 
         let mut empty = None;
@@ -366,7 +400,7 @@ impl Inode {
 
             Ok(Self { id, dev, inum })
         } else {
-            Err(KernelError::Fs)
+            err!(FsError::OutOfInode)
         }
     }
 
@@ -478,20 +512,22 @@ impl Inode {
             let mut buf = BCACHE.read(dev, sb.inodestart + (inum / IPB));
             let dinode = unsafe { DiskInode::from_buf(&mut buf, inum) };
 
+            let mut inode = None;
             if dinode.r#type != InodeType::Free && dinode.nlink == 0 {
                 // this is an orphaned inode
                 println!("ireclaim: orphaned inode {}", inum);
 
-                let inode = Inode::get(dev, inum).expect("ireclaim: get inode failed");
-
-                log::begin_op();
-                let guard = inode.lock();
-                inode.unlock(guard);
-                inode.put();
-                log::end_op();
+                inode.replace(log!(Inode::get(dev, inum)));
             }
 
             BCACHE.release(buf);
+
+            if let Some(Ok(inode)) = inode {
+                let _op = Operation::begin();
+                let guard = inode.lock();
+                inode.unlock(guard);
+                inode.put();
+            }
         }
     }
 
@@ -533,14 +569,14 @@ impl Inode {
         &self,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         block_no: u32,
-    ) -> Result<u32, KernelError> {
+    ) -> Result<u32, FsError> {
         let mut block_no = block_no as usize;
 
         if block_no < NDIRECT {
             let addr = &mut inner.addrs[block_no];
 
             if *addr == 0 {
-                let block = Block::alloc(self.dev)?;
+                let block = try_log!(Block::alloc(self.dev));
                 *addr = block.0;
             }
 
@@ -554,7 +590,7 @@ impl Inode {
             let in_block_no = &mut inner.addrs[NDIRECT];
 
             if *in_block_no == 0 {
-                let block = Block::alloc(self.dev)?;
+                let block = try_log!(Block::alloc(self.dev));
                 *in_block_no = block.0;
             }
 
@@ -565,7 +601,7 @@ impl Inode {
 
             let addr = &mut in_block[block_no];
             if *addr == 0 {
-                let block = Block::alloc(self.dev)?;
+                let block = try_log!(Block::alloc(self.dev));
 
                 *addr = block.0;
                 log::write(&buf);
@@ -576,8 +612,7 @@ impl Inode {
             return Ok(*addr);
         }
 
-        // panic block out of range
-        Err(KernelError::Fs)
+        Err(FsError::OutOfRange)
     }
 
     pub fn stat(&self, inner: &SleepLockGuard<'_, InodeInner>) -> Stat {
@@ -598,13 +633,13 @@ impl Inode {
         offset: u32,
         dst: &mut [u8],
         dst_user: bool,
-    ) -> Result<u32, KernelError> {
+    ) -> Result<u32, FsError> {
         let mut dst = dst;
         let mut n = dst.len() as u32;
         let mut offset = offset;
 
         if offset > inner.size || offset.checked_add(n).is_none() {
-            return Err(KernelError::Fs);
+            err!(FsError::Read);
         }
 
         if offset + n > inner.size {
@@ -614,7 +649,7 @@ impl Inode {
         let mut total = 0;
 
         while total < n {
-            if let Ok(addr) = self.map(inner, offset / BSIZE as u32) {
+            if let Ok(addr) = log!(self.map(inner, offset / BSIZE as u32)) {
                 let buf = BCACHE.read(self.dev, addr);
 
                 let m = (n - total).min(BSIZE as u32 - offset % BSIZE as u32);
@@ -623,9 +658,9 @@ impl Inode {
 
                 if dst_user {
                     let dst_va = VA::from(dst.as_mut_ptr() as usize);
-                    if proc::copy_out_user(src, dst_va).is_err() {
+                    if log!(proc::copy_out_user(src, dst_va)).is_err() {
                         BCACHE.release(buf);
-                        return Err(KernelError::Fs);
+                        err!(FsError::Read);
                     }
                 } else {
                     unsafe { proc::copy_out_kernel(src, dst.as_mut_ptr()) };
@@ -652,23 +687,23 @@ impl Inode {
         offset: u32,
         src: &[u8],
         src_user: bool,
-    ) -> Result<u32, KernelError> {
+    ) -> Result<u32, FsError> {
         let mut src = src;
         let n = src.len() as u32;
         let mut offset = offset;
 
         if offset > inner.size || offset.checked_add(n).is_none() {
-            return Err(KernelError::Fs);
+            err!(FsError::Write);
         }
 
         if offset + n > (MAXFILE * BSIZE) as u32 {
-            return Err(KernelError::Fs);
+            err!(FsError::Write);
         }
 
         let mut total = 0;
 
         while total < n {
-            if let Ok(addr) = self.map(inner, offset / BSIZE as u32) {
+            if let Ok(addr) = log!(self.map(inner, offset / BSIZE as u32)) {
                 let mut buf = BCACHE.read(self.dev, addr);
                 let m = (n - total).min(BSIZE as u32 - (offset % BSIZE as u32));
 
@@ -676,7 +711,7 @@ impl Inode {
 
                 if src_user {
                     let src_va = VA::from(src.as_ptr() as usize);
-                    if proc::copy_in_user(src_va, dst).is_err() {
+                    if log!(proc::copy_in_user(src_va, dst)).is_err() {
                         BCACHE.release(buf);
                         break;
                     }
@@ -711,13 +746,13 @@ impl Inode {
         r#type: InodeType,
         major: u16,
         minor: u16,
-    ) -> Result<(Self, SleepLockGuard<'static, InodeInner>), KernelError> {
-        let (parent, name) = path.resolve_parent()?;
+    ) -> Result<(Self, SleepLockGuard<'static, InodeInner>), FsError> {
+        let (parent, name) = try_log!(path.resolve_parent());
 
         let mut parent_inner = parent.lock();
 
         // check if the file already exists
-        if let Ok((_, inode)) = Directory::lookup(&parent, &mut parent_inner, name) {
+        if let Ok(Some((_, inode))) = log!(Directory::lookup(&parent, &mut parent_inner, name)) {
             parent.unlock_put(parent_inner);
 
             let inode_inner = inode.lock();
@@ -732,11 +767,11 @@ impl Inode {
 
             // type mismatch
             inode.unlock_put(inode_inner);
-            return Err(KernelError::Fs);
+            err!(FsError::Create);
         }
 
-        let inode = match Self::alloc(parent.dev, r#type) {
-            Ok(v) => v,
+        let inode = match log!(Self::alloc(parent.dev, r#type)) {
+            Ok(i) => i,
             Err(e) => {
                 parent.unlock_put(parent_inner);
                 return Err(e);
@@ -752,24 +787,43 @@ impl Inode {
         // create `.` and `..` entries if it is a directory
         // no inode.nlink += 1 for `.` to avoid cyclic ref count
         if r#type == InodeType::Directory
-            && (Directory::link(&inode, &mut inode_inner, ".", inode.inum as u16).is_err()
-                || Directory::link(&inode, &mut inode_inner, "..", inode.inum as u16).is_err())
+            && (log!(Directory::link(
+                &inode,
+                &mut inode_inner,
+                ".",
+                inode.inum as u16
+            ))
+            .is_err()
+                || log!(Directory::link(
+                    &inode,
+                    &mut inode_inner,
+                    "..",
+                    inode.inum as u16
+                ))
+                .is_err())
         {
             // fail
             inode_inner.nlink = 0;
             inode.update(&inode_inner);
             inode.unlock_put(inode_inner);
             parent.unlock_put(parent_inner);
-            return Err(KernelError::Fs);
+            err!(FsError::Create);
         }
 
-        if Directory::link(&parent, &mut parent_inner, name, inode.inum as u16).is_err() {
+        if log!(Directory::link(
+            &parent,
+            &mut parent_inner,
+            name,
+            inode.inum as u16
+        ))
+        .is_err()
+        {
             // fail
             inode_inner.nlink = 0;
             inode.update(&inode_inner);
             inode.unlock_put(inode_inner);
             parent.unlock_put(parent_inner);
-            return Err(KernelError::Fs);
+            err!(FsError::Create);
         }
 
         if r#type == InodeType::Directory {
@@ -813,9 +867,9 @@ impl Directory {
         inode: &Inode,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         offset: u32,
-    ) -> Result<Self, KernelError> {
+    ) -> Result<Self, FsError> {
         let mut buf = [0; Self::SIZE];
-        let read = inode.read(inner, offset, &mut buf, false)?;
+        let read = try_log!(inode.read(inner, offset, &mut buf, false));
         assert_eq!(read as usize, Self::SIZE, "dir read from inode");
         Ok(Self::from_bytes(&buf))
     }
@@ -835,7 +889,7 @@ impl Directory {
     /// Checks whether the directory is empty (only contains `.` and `..`).
     pub fn is_empty(inode: &Inode, inner: &mut SleepLockGuard<'_, InodeInner>) -> bool {
         for offset in ((2 * Self::SIZE as u32)..inner.size).step_by(Self::SIZE) {
-            let dir = Self::from_inode(inode, inner, offset).unwrap();
+            let dir = log!(Self::from_inode(inode, inner, offset)).expect("dir is_empty");
             if dir.inum != 0 {
                 return false;
             }
@@ -850,11 +904,11 @@ impl Directory {
         inode: &Inode,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         name: &str,
-    ) -> Result<(u32, Inode), KernelError> {
+    ) -> Result<Option<(u32, Inode)>, FsError> {
         assert_eq!(inner.r#type, InodeType::Directory, "dirlookup not DIR");
 
         for offset in (0..inner.size).step_by(Self::SIZE) {
-            let dir = Self::from_inode(inode, inner, offset)?;
+            let dir = try_log!(Self::from_inode(inode, inner, offset));
 
             if dir.inum == 0 {
                 continue;
@@ -862,12 +916,12 @@ impl Directory {
 
             if dir.is_name_equal(name) {
                 // entry matches path element
-                let dir_inode = Inode::get(inode.dev, dir.inum as u32)?;
-                return Ok((offset, dir_inode));
+                let dir_inode = try_log!(Inode::get(inode.dev, dir.inum as u32));
+                return Ok(Some((offset, dir_inode)));
             }
         }
 
-        Err(KernelError::Fs)
+        Ok(None)
     }
 
     /// Writes a new directory entry (name, inum) into the directory Inode.
@@ -876,11 +930,11 @@ impl Directory {
         inner: &mut SleepLockGuard<'_, InodeInner>,
         name: &str,
         inum: u16,
-    ) -> Result<(), KernelError> {
+    ) -> Result<(), FsError> {
         // check the name is not present
-        if let Ok((_, dir)) = Self::lookup(inode, inner, name) {
+        if let Ok(Some((_, dir))) = log!(Self::lookup(inode, inner, name)) {
             dir.put();
-            return Err(KernelError::Fs);
+            err!(FsError::Link);
         }
 
         // look for an empty directory
@@ -888,7 +942,7 @@ impl Directory {
         let mut offset = 0;
 
         while offset < inner.size {
-            dir = Self::from_inode(inode, inner, offset)?;
+            dir = try_log!(Self::from_inode(inode, inner, offset));
 
             // if we find an empty slot break and use it.
             // otherwise, the dir will be appended to the end
@@ -902,9 +956,9 @@ impl Directory {
         dir.set_name(name);
         dir.inum = inum;
 
-        let write = inode.write(inner, offset, dir.as_bytes(), false)?;
+        let write = try_log!(inode.write(inner, offset, dir.as_bytes(), false));
         if write as usize != Self::SIZE {
-            return Err(KernelError::Fs);
+            err!(FsError::Link);
         }
 
         Ok(())
@@ -951,9 +1005,9 @@ impl<'a> Path<'a> {
         }
     }
 
-    fn resolve_inner(&self, parent: bool) -> Result<(Inode, &'a str), KernelError> {
+    fn resolve_inner(&self, parent: bool) -> Result<(Inode, &'a str), FsError> {
         let mut inode = if self.is_absolute() {
-            Inode::get(ROOTDEV, ROOTINO)?
+            try_log!(Inode::get(ROOTDEV, ROOTINO))
         } else {
             CPU_POOL.current_proc().unwrap().data().cwd.dup()
         };
@@ -967,7 +1021,7 @@ impl<'a> Path<'a> {
 
             if inner.r#type != InodeType::Directory {
                 inode.unlock_put(inner);
-                return Err(KernelError::Fs);
+                err!(FsError::Resolve);
             }
 
             // stop one level early
@@ -977,10 +1031,14 @@ impl<'a> Path<'a> {
             }
 
             // get the next inode
-            match Directory::lookup(&inode, &mut inner, component) {
-                Ok((_, next)) => {
+            match log!(Directory::lookup(&inode, &mut inner, component)) {
+                Ok(Some((_, next))) => {
                     inode.unlock_put(inner);
                     inode = next;
+                }
+                Ok(None) => {
+                    inode.unlock_put(inner);
+                    err!(FsError::Resolve);
                 }
                 Err(e) => {
                     inode.unlock_put(inner);
@@ -995,19 +1053,19 @@ impl<'a> Path<'a> {
         // we returned early to put the last inode
         if parent {
             inode.put();
-            return Err(KernelError::Fs);
+            err!(FsError::Resolve);
         }
 
         Ok((inode, name))
     }
 
     /// Resolves the full path to an inode.
-    pub fn resolve(&self) -> Result<Inode, KernelError> {
+    pub fn resolve(&self) -> Result<Inode, FsError> {
         self.resolve_inner(false).map(|(inode, _)| inode)
     }
 
     /// Resolves to the parent directory, returning (parent, final_name).
-    pub fn resolve_parent(&self) -> Result<(Inode, &'a str), KernelError> {
+    pub fn resolve_parent(&self) -> Result<(Inode, &'a str), FsError> {
         self.resolve_inner(true)
     }
 }

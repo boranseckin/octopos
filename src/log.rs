@@ -179,9 +179,52 @@ impl Log {
     }
 }
 
+/// A guard that begins a log operation on creation and ends it on drop.
+/// If the operation did not complete successfully, the optional `on_err` callback is invoked.
+#[derive(Debug)]
+pub struct Operation<F: FnOnce() = fn()> {
+    on_err: Option<F>,
+    success: bool,
+}
+
+impl Operation {
+    pub fn begin() -> Self {
+        begin_op();
+        Self {
+            on_err: None,
+            success: false,
+        }
+    }
+}
+
+impl<F: FnOnce()> Operation<F> {
+    pub fn begin_with(on_err: F) -> Self {
+        begin_op();
+        Self {
+            on_err: Some(on_err),
+            success: false,
+        }
+    }
+
+    pub fn success(&mut self) {
+        self.success = true;
+    }
+}
+
+impl<F: FnOnce()> Drop for Operation<F> {
+    fn drop(&mut self) {
+        if !self.success
+            && let Some(f) = self.on_err.take()
+        {
+            f();
+        }
+        end_op();
+    }
+}
+
 /// Begins a new operation on the log.
 /// Must be called at the start of each FS system call.
-pub fn begin_op() {
+fn begin_op() {
     let mut inner = LOG.inner.lock();
 
     loop {
@@ -201,7 +244,7 @@ pub fn begin_op() {
 /// Ends the current operation on the log.
 /// Must be called at the end of each FS system call.
 /// Commits if this was the last outstanding operation.
-pub fn end_op() {
+fn end_op() {
     let mut do_commit = false;
 
     {
