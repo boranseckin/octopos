@@ -12,7 +12,7 @@ use crate::file::File;
 use crate::fs::{self, Inode, Path};
 use crate::log::Operation;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
-use crate::param::{NCPU, NOFILE, NPROC, ROOTDEV};
+use crate::param::{NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV};
 use crate::riscv::registers::tp;
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
 use crate::spinlock::{SpinLock, SpinLockGuard};
@@ -516,15 +516,17 @@ impl ProcPool {
     /// Which should be the case when initializing the page.
     pub unsafe fn map_stacks(&self, kvm: &mut Kvm) {
         for (i, _) in self.pool.iter().enumerate() {
-            // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the same
-            // initializer works for now. It would be better to create a new struct called Stack...
-            let pa = log!(PageTable::try_new())
-                .expect("proc map stack kalloc")
-                .as_pa();
-            // Cannot get va from proc.data.kstack since init function is not called yet.
-            let va = VA::from(kstack(i));
+            let base_va = VA::from(kstack(i));
 
-            kvm.map(va, pa, PGSIZE, PTE_R | PTE_W);
+            for page in 0..NKSTACK_PAGES {
+                // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the
+                // same initializer works for now.
+                let pa = log!(PageTable::try_new())
+                    .expect("proc map stack kalloc")
+                    .as_pa();
+                let va = base_va + page * PGSIZE;
+                kvm.map(va, pa, PGSIZE, PTE_R | PTE_W);
+            }
         }
     }
 
@@ -564,7 +566,7 @@ impl ProcPool {
 
                 // Set up new context to start executing at forkret, which return to user space.
                 data.context.ra = fork_ret as *const () as usize;
-                data.context.sp = (data.kstack + PGSIZE).as_usize();
+                data.context.sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize();
 
                 return Ok((proc, inner));
             }

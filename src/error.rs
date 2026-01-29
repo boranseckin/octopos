@@ -76,7 +76,7 @@ impl Display for KernelError {
 #[macro_export]
 macro_rules! err {
     ($e:expr) => {{
-        // #[cfg(debug_assertions)]
+        #[cfg(debug_assertions)]
         $crate::println!("! {}:{}: {}", file!(), line!(), $e);
         return Err($e.into());
     }};
@@ -89,7 +89,7 @@ macro_rules! log {
         match $e {
             Ok(v) => Ok(v),
             Err(e) => {
-                // #[cfg(debug_assertions)]
+                #[cfg(debug_assertions)]
                 $crate::println!("  at {}:{}", file!(), line!());
                 Err(e)
             }
@@ -104,7 +104,7 @@ macro_rules! try_log {
         match $e {
             Ok(v) => v,
             Err(e) => {
-                // #[cfg(debug_assertions)]
+                #[cfg(debug_assertions)]
                 $crate::println!("  at {}:{}", file!(), line!());
                 return Err(e.into());
             }

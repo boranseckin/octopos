@@ -19,6 +19,7 @@
  * PHYSTOP -- end RAM used by the kernel
  */
 
+use crate::param::NKSTACK_PAGES;
 use crate::riscv::{MAXVA, PGSIZE};
 
 // qemu UART registers
@@ -53,8 +54,9 @@ pub const TRAMPOLINE: usize = MAXVA - PGSIZE;
 
 // Kernel stack is beneath the trampoline
 // Each surrounded by invalid guard pages
+// Returns the base VA of the stack (lowest mapped address)
 pub const fn kstack(p: usize) -> usize {
-    TRAMPOLINE - (p + 1) * (2 * PGSIZE)
+    TRAMPOLINE - (p + 1) * ((NKSTACK_PAGES + 1) * PGSIZE)
 }
 
 /*

@@ -2,6 +2,7 @@ use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::plic;
 use crate::proc::{self, CPU_POOL, Channel};
+use crate::param::NKSTACK_PAGES;
 use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
@@ -130,7 +131,7 @@ pub unsafe extern "C" fn usertrapret() {
     let data = unsafe { proc.data_mut() };
     let trapframe = data.trapframe.as_mut().unwrap();
     trapframe.kernel_satp = unsafe { satp::read() }; // kernel page table
-    trapframe.kernel_sp = (data.kstack + PGSIZE).as_usize(); // process's kernel stack
+    trapframe.kernel_sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize(); // process's kernel stack
     trapframe.kernel_trap = usertrap as *const () as usize;
     trapframe.kernel_hartid = unsafe { tp::read() }; // hartid for `current_id()`
 
