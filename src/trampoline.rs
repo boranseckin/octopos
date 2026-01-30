@@ -94,7 +94,8 @@ pub extern "C" fn uservec() {
         // flush now-tale user entries from the TLB
         "sfence.vma zero, zero",
 
-        // jump to usertrap(), which does not return
+        // jump to usertrap(), which does not return here
+        // it will return to userret()
         "jr t0",
 
         tf = const TRAPFRAME,

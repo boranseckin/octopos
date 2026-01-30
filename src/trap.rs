@@ -1,8 +1,10 @@
+use core::mem;
+
 use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
+use crate::param::NKSTACK_PAGES;
 use crate::plic;
 use crate::proc::{self, CPU_POOL, Channel};
-use crate::param::NKSTACK_PAGES;
 use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
@@ -149,14 +151,14 @@ pub unsafe extern "C" fn usertrapret() {
     // tell trampoline.S the user page table to switch to.
     let user_satp = satp::make(data.pagetable.as_ref().unwrap().0.as_pa().as_usize());
 
-    // jump to userret in trampoline.S at the top of memory, which
-    // switches to the user page table, restores user registers,
-    // and switches to user mode with sret.
+    // jump to userret in trampoline.S at the top of memory, which switches to the user page table,
+    // restores user registers, and switches to user mode with sret.
     unsafe {
+        // calculate the virtual address of userret since we have to use the trampoline base address.
+        // directly using `userret` would be an address in the kernel page table.
         let trampoline_userret: usize =
             TRAMPOLINE + (userret as *const () as usize - trampoline as *const () as usize);
-        let trampoline_userret: extern "C" fn(usize) -> ! =
-            core::mem::transmute(trampoline_userret);
+        let trampoline_userret: extern "C" fn(usize) -> ! = mem::transmute(trampoline_userret);
         trampoline_userret(user_satp);
     }
 }

@@ -227,6 +227,7 @@ impl TryFrom<usize> for Syscall {
 ///
 /// # Safety
 /// Called from `usertrap` in `trap.rs`.
+#[unsafe(no_mangle)]
 pub unsafe fn syscall(trapframe: &mut TrapFrame) {
     let proc = CPU_POOL.current_proc().unwrap();
     let args = SyscallArgs::new(trapframe, proc);

@@ -563,34 +563,6 @@ impl Uvm {
         }
     }
 
-    /// Loads the user `initcode` into address 0 of pagetable.
-    ///
-    /// It is only meant to be used for the very first process.
-    ///
-    /// `initcode` length must be less than a page.
-    pub fn first(&mut self, initcode: &[u8]) {
-        assert!(initcode.len() < PGSIZE, "uvmfirst: more than a page");
-
-        let mem = match log!(Box::<Page>::try_new_zeroed()) {
-            Ok(mem) => unsafe { mem.assume_init() },
-            Err(_) => panic!("uvmfirst: out of memory"),
-        };
-
-        let ptr = Box::into_raw(mem);
-
-        log!(self.map_pages(
-            VA::from(0),
-            PA::from(ptr as usize),
-            PGSIZE,
-            PTE_W | PTE_R | PTE_X | PTE_U,
-        ))
-        .expect("uvmfirst: map_pages failed");
-
-        unsafe {
-            ptr::copy_nonoverlapping(initcode.as_ptr(), ptr as *mut u8, initcode.len());
-        }
-    }
-
     /// Allocates PTEs and physical memory to grow process from `old_size` to `new_size`,
     /// which need not be page aligned.
     ///

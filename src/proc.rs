@@ -8,6 +8,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 
 use crate::error::KernelError;
+use crate::exec::exec;
 use crate::file::File;
 use crate::fs::{self, Inode, Path};
 use crate::log::Operation;
@@ -130,7 +131,7 @@ impl Drop for InterruptLock {
 }
 
 /// Saved registers for kernel context switches.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct Context {
     pub ra: usize,
@@ -170,11 +171,22 @@ impl Context {
             s11: 0,
         }
     }
-}
 
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
+    pub fn zero(&mut self) {
+        self.ra = 0;
+        self.sp = 0;
+        self.s0 = 0;
+        self.s1 = 0;
+        self.s2 = 0;
+        self.s3 = 0;
+        self.s4 = 0;
+        self.s5 = 0;
+        self.s6 = 0;
+        self.s7 = 0;
+        self.s8 = 0;
+        self.s9 = 0;
+        self.s10 = 0;
+        self.s11 = 0;
     }
 }
 
@@ -564,7 +576,8 @@ impl ProcPool {
                     }
                 }
 
-                // Set up new context to start executing at forkret, which return to user space.
+                // Set up new context to start executing at forkret, which returns to user space.
+                data.context.zero();
                 data.context.ra = fork_ret as *const () as usize;
                 data.context.sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize();
 
@@ -592,17 +605,6 @@ pub fn user_init() {
     // # Safety: we are holding inner lock
     let data = unsafe { proc.data_mut() };
 
-    // allocate one user page and copy initcode's instructions and data into it.
-    let init_code = include_bytes!("../target/init.bin");
-    data.pagetable.as_mut().unwrap().first(init_code);
-    data.size = PGSIZE;
-
-    // prepare for the very first "return" from kernel to user.
-    let trapframe = data.trapframe.as_mut().unwrap();
-    trapframe.epc = 0; // user program counter
-    trapframe.sp = PGSIZE; // user stack pointer
-
-    data.name = String::from("initcode");
     data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
 
     inner.state = ProcState::Runnable;
@@ -925,8 +927,22 @@ pub unsafe extern "C" fn fork_ret() {
         // calls sleep), and thus cannot be run from `main()`.
         fs::init(ROOTDEV);
 
-        // TEMPORARY
-        crate::file::setup_console_fds();
+        // we can invoke `exec()` now that file system is initialized.
+        match log!(exec(&Path::new("/init"), &["init"])) {
+            Ok(result) => {
+                let trapframe = unsafe {
+                    CPU_POOL
+                        .current_proc()
+                        .unwrap()
+                        .data_mut()
+                        .trapframe
+                        .as_mut()
+                        .unwrap()
+                };
+                trapframe.a0 = result;
+            }
+            Err(_) => panic!("fork_ret exec"),
+        }
     }
 
     // return to user space, mimicing `usertrap()`'s return
