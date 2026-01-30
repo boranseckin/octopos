@@ -281,7 +281,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
     data.size = size;
     trapframe.epc = elf.entry as usize; // initial program counter = lib.c:start()
     trapframe.sp = sp; // initial stack pointer
-    old_pagetable.free(old_size);
+    old_pagetable.proc_free(old_size);
 
     Ok(argc) // this end up in a0, the first argument to main(argc, argv)
 }
