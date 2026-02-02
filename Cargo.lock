@@ -16,13 +16,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "octopos"
-version = "0.1.0"
-dependencies = [
- "buddy-alloc",
-]
-
-[[package]]
 name = "user"
 version = "0.1.0"
 dependencies = [

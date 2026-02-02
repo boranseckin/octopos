@@ -2,10 +2,23 @@
 name = "kernel"
 version = "0.1.0"
 edition = "2024"
+authors = ["Boran Seckin <boran@boranseckin.com>"]
+description = "xv6 for RISC-V in Rust"
+repository = "https://github.com/boranseckin/octopos"
+license = "MIT"
+keywords = ["riscv", "xv6"]
+default-run = "octopos"
 
 [lib]
 name = "kernel"
 path = "lib.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
+name = "octopos"
+path = "main.rs"
 test = false
 doctest = false
 bench = false

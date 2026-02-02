@@ -1,33 +1,6 @@
-[package]
-name = "octopos"
-version = "0.1.0"
-authors = ["Boran Seckin <boran@boranseckin.com>"]
-edition = "2024"
-description = "xv6 for RISC-V in Rust"
-repository = "https://github.com/boranseckin/octopos"
-license = "MIT"
-readme = "README.md"
-keywords = ["riscv", "xv6"]
-
 [workspace]
 members = [
   "kernel",
   "user",
 ]
-
-[[bin]]
-name = "octopos"
-path = "kernel/main.rs"
-test = false
-doctest = false
-bench = false
-
-[lib]
-name = "kernel"
-path = "kernel/lib.rs"
-test = false
-doctest = false
-bench = false
-
-[dependencies]
-buddy-alloc = "0.6"
+resolver = "3"
