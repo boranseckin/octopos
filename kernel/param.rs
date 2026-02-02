@@ -24,7 +24,7 @@ pub const NBUF: usize = MAXOPBLOCKS * 3;
 pub const MAXPATH: usize = 128;
 /// kernel stack pages per process (debug needs more stack to dump)
 #[cfg(debug_assertions)]
-pub const NKSTACK_PAGES: usize = 4;
+pub const NKSTACK_PAGES: usize = 8;
 #[cfg(not(debug_assertions))]
 pub const NKSTACK_PAGES: usize = 1;
 /// user stack pages
