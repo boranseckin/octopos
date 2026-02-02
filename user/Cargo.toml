@@ -11,5 +11,9 @@ path = "lib.rs"
 name = "init"
 path = "bin/init.rs"
 
+[[bin]]
+name = "sh"
+path = "bin/sh.rs"
+
 [dependencies]
 kernel = { path = "../kernel" }

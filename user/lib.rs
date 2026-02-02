@@ -115,7 +115,7 @@ pub fn kill(pid: usize) -> usize {
     syscall1(SYS_KILL, pid)
 }
 
-pub fn exec(path: &str, argv: &[&str]) -> usize {
+pub fn exec(path: &[u8], argv: &[*const u8]) -> usize {
     syscall2(SYS_EXEC, path.as_ptr() as usize, argv.as_ptr() as usize)
 }
 

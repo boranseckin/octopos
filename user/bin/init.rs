@@ -3,15 +3,15 @@
 
 use user::*;
 
-static SH: &str = "/sh";
-static ARGV: [&str; 1] = ["sh"];
+static SH: &[u8] = b"/sh\0";
+static SH_NAME: &[u8] = b"sh\0";
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
 extern "C" fn _start() -> ! {
-    if open(b"console", O_RDWR) == usize::MAX {
-        mknod(b"console", CONSOLE, 0);
-        open(b"console", O_RDWR);
+    if open(b"console\0", O_RDWR) == usize::MAX {
+        mknod(b"console\0", CONSOLE, 0);
+        open(b"console\0", O_RDWR);
     }
 
     dup(0); // stdout
@@ -25,7 +25,7 @@ extern "C" fn _start() -> ! {
             exit(1);
         }
         if pid == 0 {
-            exec(SH, &ARGV);
+            exec(SH, &[SH_NAME.as_ptr(), core::ptr::null()]);
             write(1, b"init: exec sh failed\n");
             exit(1);
         }
