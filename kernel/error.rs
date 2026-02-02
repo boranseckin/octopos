@@ -10,7 +10,6 @@ use crate::vm::VmError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelError {
     Alloc,
-    InvalidAddress,
     InvalidArgument,
     OutOfProc,
     Vm(VmError),
@@ -60,7 +59,6 @@ impl Display for KernelError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             KernelError::Alloc => write!(f, "alloc error"),
-            KernelError::InvalidAddress => write!(f, "invalid address"),
             KernelError::InvalidArgument => write!(f, "invalid argument"),
             KernelError::OutOfProc => write!(f, "out of proc"),
             KernelError::Syscall(e) => write!(f, "syscall error: {}", e),

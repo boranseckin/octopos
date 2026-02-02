@@ -317,30 +317,3 @@ pub static DEVICES: [Option<Device>; NDEV] = {
     });
     devices
 };
-
-/// TEMPORARY console setup from kernel
-pub fn setup_console_fds() {
-    let proc = crate::proc::CPU_POOL.current_proc().unwrap();
-    let data = unsafe { proc.data_mut() };
-
-    // Allocate a file for console device
-    let mut file = File::alloc().unwrap();
-    {
-        let mut inner = FILE_TABLE.inner[file.id].lock();
-        inner.readable = true;
-        inner.writeable = true;
-        inner.r#type = FileType::Device {
-            inode: Inode {
-                id: 0,
-                dev: 0,
-                inum: 0,
-            },
-            major: CONSOLE as u16,
-        };
-    }
-
-    // fd 0 = stdin, fd 1 = stdout, fd 2 = stderr
-    data.open_files[1] = Some(file.dup());
-    data.open_files[2] = Some(file.dup());
-    data.open_files[0] = Some(file);
-}
