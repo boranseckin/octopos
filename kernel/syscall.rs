@@ -3,6 +3,7 @@ use core::fmt::Display;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::abi::Syscall;
 use crate::file::File;
 use crate::param::NOFILE;
 use crate::proc::{CPU_POOL, Proc, TrapFrame};
@@ -163,33 +164,6 @@ impl<'a> SyscallArgs<'a> {
 
         Ok(result)
     }
-}
-
-/// System call numbers
-#[repr(usize)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Syscall {
-    Fork = 1,
-    Exit = 2,
-    Wait = 3,
-    Pipe = 4,
-    Read = 5,
-    Kill = 6,
-    Exec = 7,
-    Fstat = 8,
-    Chdir = 9,
-    Dup = 10,
-    Getpid = 11,
-    Sbrk = 12,
-    Sleep = 13,
-    Uptime = 14,
-    Open = 15,
-    Write = 16,
-    Mknod = 17,
-    Unlink = 18,
-    Link = 19,
-    Mkdir = 20,
-    Close = 21,
 }
 
 impl TryFrom<usize> for Syscall {

@@ -2,18 +2,32 @@
 name = "user"
 version = "0.1.0"
 edition = "2024"
+authors = ["Boran Seckin <boran@boranseckin.com>"]
+description = "user space programs for xv6 for RISC-V in Rust"
+repository = "https://github.com/boranseckin/octopos"
+license = "MIT"
+keywords = ["riscv", "xv6"]
 
 [lib]
 name = "user"
 path = "lib.rs"
+test = false
+doctest = false
+bench = false
 
 [[bin]]
 name = "init"
 path = "bin/init.rs"
+test = false
+doctest = false
+bench = false
 
 [[bin]]
 name = "sh"
 path = "bin/sh.rs"
+test = false
+doctest = false
+bench = false
 
 [dependencies]
 kernel = { path = "../kernel" }
