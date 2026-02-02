@@ -6,6 +6,6 @@ use user::*;
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]
 extern "C" fn _start() -> ! {
-    write(1, b"sh: hello from userspace!\n");
+    println!("sh: hello from userspace");
     loop {}
 }

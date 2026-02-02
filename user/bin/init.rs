@@ -18,16 +18,14 @@ extern "C" fn _start() -> ! {
     dup(0); // stderr
 
     loop {
-        write(1, b"init: starting\n");
+        println!("init: starting");
         let pid = fork();
         if pid == usize::MAX {
-            write(1, b"init: fork failed\n");
-            exit(1);
+            exit_with_msg("init: fork failed");
         }
         if pid == 0 {
             exec(SH, &[SH_NAME.as_ptr(), core::ptr::null()]);
-            write(1, b"init: exec sh failed\n");
-            exit(1);
+            exit_with_msg("init: exec sh failed");
         }
 
         loop {
@@ -37,8 +35,7 @@ extern "C" fn _start() -> ! {
                 // shell exited; restart it
                 break;
             } else if wpid == usize::MAX {
-                write(1, b"init: wait error\n");
-                exit(1);
+                exit_with_msg("init: wait error");
             } else {
                 // do nothing
             }
