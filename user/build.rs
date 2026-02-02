@@ -1,3 +1,3 @@
 fn main() {
-    println!("cargo::rustc-link-arg-bin=init=--script=user/user.ld");
+    println!("cargo::rustc-link-arg-bins=--script=user/user.ld");
 }
