@@ -232,6 +232,13 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
     let proc = CPU_POOL.current_proc().unwrap();
     let args = SyscallArgs::new(trapframe, proc);
 
+    println!(
+        "syscall {} called from proc {} ({})",
+        trapframe.a7,
+        *proc.inner.lock().pid,
+        proc.data().name,
+    );
+
     let result = match Syscall::try_from(trapframe.a7) {
         Ok(syscall) => match syscall {
             Syscall::Fork => sys_fork(&args),
@@ -269,4 +276,5 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             )
         })
         .unwrap_or(usize::MAX);
+    println!("syscall {} -> {}", trapframe.a7, trapframe.a0);
 }

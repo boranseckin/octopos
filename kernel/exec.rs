@@ -159,7 +159,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
             || ph.vaddr.checked_add(ph.memsz).is_none()
             || !ph.vaddr.is_multiple_of(PGSIZE as u64)
         {
-            pagetable.free(size);
+            pagetable.proc_free(size);
             inode.unlock_put(inner);
             err!(ExecError::Header);
         }
@@ -167,7 +167,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
         size = match log!(pagetable.alloc(size, (ph.vaddr + ph.memsz) as usize, ph.get_perms())) {
             Ok(new_size) => new_size,
             Err(_) => {
-                pagetable.free(size);
+                pagetable.proc_free(size);
                 inode.unlock_put(inner);
                 err!(ExecError::Alloc);
             }
@@ -182,7 +182,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
         ))
         .is_err()
         {
-            pagetable.free(size);
+            pagetable.proc_free(size);
             inode.unlock_put(inner);
             err!(ExecError::Memory);
         }
@@ -202,13 +202,13 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
     size = match log!(pagetable.alloc(size, size + (USERSTACK + 1) * PGSIZE, PTE_W)) {
         Ok(new_size) => new_size,
         Err(_) => {
-            pagetable.free(size);
+            pagetable.proc_free(size);
             err!(ExecError::Alloc);
         }
     };
 
     if log!(pagetable.clear(VA::from(size - (USERSTACK + 1) * PGSIZE))).is_err() {
-        pagetable.free(size);
+        pagetable.proc_free(size);
         err!(ExecError::Memory);
     }
 
@@ -221,7 +221,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
 
     for &arg in argv.iter() {
         if argc >= MAXARG {
-            pagetable.free(size);
+            pagetable.proc_free(size);
             err!(ExecError::Memory);
         }
 
@@ -229,14 +229,14 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
         sp -= sp % 16; // riscv sp must be 16-byte aligned
 
         if sp < stackbase {
-            pagetable.free(size);
+            pagetable.proc_free(size);
             err!(ExecError::Memory);
         }
 
         if log!(pagetable.copy_out(VA::from(sp), arg.as_bytes())).is_err()
             || log!(pagetable.copy_out(VA::from(sp + arg.len()), &[0u8])).is_err()
         {
-            pagetable.free(size);
+            pagetable.proc_free(size);
             err!(ExecError::Memory);
         }
 
@@ -255,7 +255,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
     };
 
     if sp < stackbase || log!(pagetable.copy_out(VA::from(sp), ustack_ptr)).is_err() {
-        pagetable.free(size);
+        pagetable.proc_free(size);
         err!(ExecError::Memory);
     }
 

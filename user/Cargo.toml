@@ -1,0 +1,15 @@
+[package]
+name = "user"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "user"
+path = "lib.rs"
+
+[[bin]]
+name = "init"
+path = "bin/init.rs"
+
+[dependencies]
+kernel = { path = "../kernel" }

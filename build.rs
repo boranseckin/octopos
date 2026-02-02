@@ -1,3 +1,3 @@
 fn main() {
-    println!("cargo::rustc-link-arg-bin=octopos=--script=src/kernel.ld");
+    println!("cargo::rustc-link-arg-bin=octopos=--script=kernel/kernel.ld");
 }

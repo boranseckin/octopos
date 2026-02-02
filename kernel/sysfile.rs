@@ -210,6 +210,8 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
     let path = Path::new(&path);
 
+    println!("sys_open {} {}", path.as_str(), o_mode);
+
     let _op = Operation::begin();
 
     let (mut inode, mut inode_inner);
@@ -309,6 +311,8 @@ pub fn sys_mknod(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let minor = args.get_int(2) as u16;
     let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
 
+    println!("sys_mknod {} {} {}", path, major, minor);
+
     let Ok((inode, inner)) = log!(Inode::create(
         &Path::new(&path),
         InodeType::Device,
@@ -355,6 +359,8 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
     let path = Path::new(&path);
 
+    println!("sys_exec {} {:#X}", path.as_str(), uargv.as_usize());
+
     let proc = CPU_POOL.current_proc().unwrap();
     let pagetable = unsafe { &mut proc.data_mut().pagetable.as_mut().unwrap() };
 
@@ -375,8 +381,10 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SyscallError> {
         ))
         .is_err()
         {
+            println!("argv[{}] uarg={:#X}", i, uarg);
             err!(SyscallError::File("sys_exec copy in"));
         }
+        println!("argv[{}] uarg={:#X}", i, uarg);
 
         if uarg == 0 {
             break; // NULL terminator

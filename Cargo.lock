@@ -9,8 +9,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee741d62dcaf41ca303576ef890989ccb01d5dd77f8ce1a6d6c7846ab5d09efb"
 
 [[package]]
+name = "kernel"
+version = "0.1.0"
+dependencies = [
+ "buddy-alloc",
+]
+
+[[package]]
 name = "octopos"
 version = "0.1.0"
 dependencies = [
  "buddy-alloc",
+]
+
+[[package]]
+name = "user"
+version = "0.1.0"
+dependencies = [
+ "kernel",
 ]

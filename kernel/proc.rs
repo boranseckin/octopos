@@ -927,6 +927,8 @@ pub unsafe extern "C" fn fork_ret() {
         // calls sleep), and thus cannot be run from `main()`.
         fs::init(ROOTDEV);
 
+        println!("exec init");
+
         // we can invoke `exec()` now that file system is initialized.
         match log!(exec(&Path::new("/init"), &["init"])) {
             Ok(result) => {

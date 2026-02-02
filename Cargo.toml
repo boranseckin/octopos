@@ -9,17 +9,22 @@ license = "MIT"
 readme = "README.md"
 keywords = ["riscv", "xv6"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+members = [
+  "kernel",
+  "user",
+]
+
 [[bin]]
 name = "octopos"
-path = "src/main.rs"
+path = "kernel/main.rs"
 test = false
 doctest = false
 bench = false
 
 [lib]
 name = "kernel"
-path = "src/lib.rs"
+path = "kernel/lib.rs"
 test = false
 doctest = false
 bench = false
