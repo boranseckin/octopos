@@ -4,7 +4,7 @@ use core::ptr;
 use crate::console::Console;
 use crate::memlayout::UART0;
 use crate::printf::PRINTF;
-use crate::proc::{self, CPU_POOL, Channel};
+use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
 // UART control registers are memory-mapped at address UART0.
@@ -182,7 +182,7 @@ impl SpinLock<Uart> {
 /// For use by kernel `printf` and to echo characters.
 /// It spins waiting for the UART's output register to be empty.
 pub fn putc_sync(c: u8) {
-    let _intr_lock = CPU_POOL.lock_current();
+    let _intr_lock = proc::lock_current_cpu();
 
     // Safety: locked interrupts
     let uart = unsafe { UART.get_mut_unchecked() };

@@ -4,7 +4,7 @@ use core::slice;
 use crate::fs::Path;
 use crate::log::Operation;
 use crate::param::{MAXARG, USERSTACK};
-use crate::proc::CPU_POOL;
+use crate::proc::current_proc;
 use crate::riscv::{PGSIZE, PTE_W, PTE_X, pg_round_up};
 use crate::vm::VA;
 
@@ -99,7 +99,7 @@ impl ProgramHeader {
 }
 
 pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
-    let mut proc = CPU_POOL.current_proc().unwrap();
+    let proc = current_proc();
     let mut size = 0;
 
     let _op = Operation::begin();
@@ -191,7 +191,6 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
     inode.unlock_put(inner);
     drop(_op);
 
-    proc = CPU_POOL.current_proc().unwrap();
     let old_size = proc.data().size;
 
     // allocate some pages at the next page boundary.
@@ -233,8 +232,8 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
             err!(ExecError::Memory);
         }
 
-        if log!(pagetable.copy_out(VA::from(sp), arg.as_bytes())).is_err()
-            || log!(pagetable.copy_out(VA::from(sp + arg.len()), &[0u8])).is_err()
+        if log!(pagetable.copy_to(arg.as_bytes(), VA::from(sp))).is_err()
+            || log!(pagetable.copy_to(&[0u8], VA::from(sp + arg.len()))).is_err()
         {
             pagetable.proc_free(size);
             err!(ExecError::Memory);
@@ -254,17 +253,13 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
         slice::from_raw_parts(ustack.as_ptr() as *const u8, (argc + 1) * size_of::<u64>())
     };
 
-    if sp < stackbase || log!(pagetable.copy_out(VA::from(sp), ustack_ptr)).is_err() {
+    if sp < stackbase || log!(pagetable.copy_to(ustack_ptr, VA::from(sp))).is_err() {
         pagetable.proc_free(size);
         err!(ExecError::Memory);
     }
 
+    // # Safety: we are the current proc
     let data = unsafe { proc.data_mut() };
-    let trapframe = data.trapframe.as_mut().unwrap();
-
-    // a0 and a1 contain arguments to user main(argc, argv)
-    // argc is returned via the system call return value at the end
-    trapframe.a1 = sp;
 
     // save program name for debugging
     data.name.clear();
@@ -279,8 +274,16 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize, ExecError> {
     // commit to the user image
     let old_pagetable = data.pagetable.replace(pagetable).unwrap();
     data.size = size;
+
+    let trapframe = data.trapframe_mut();
+
+    // a0 and a1 contain arguments to user main(argc, argv)
+    // argc is returned via the system call return value at the end
+    trapframe.a1 = sp;
+
     trapframe.epc = elf.entry as usize; // initial program counter = lib.c:start()
     trapframe.sp = sp; // initial stack pointer
+
     old_pagetable.proc_free(old_size);
 
     Ok(argc) // this end up in a0, the first argument to main(argc, argv)

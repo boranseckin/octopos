@@ -44,7 +44,7 @@ pub mod abi;
 static STARTED: AtomicBool = AtomicBool::new(false);
 
 pub extern "C" fn main() -> ! {
-    let cpu_id = unsafe { proc::CPU_POOL.current_id() };
+    let cpu_id = unsafe { proc::current_id() };
     if cpu_id == 0 {
         unsafe {
             console::init();
@@ -86,7 +86,7 @@ pub extern "C" fn main() -> ! {
         }
     }
 
-    proc::scheduler();
+    unsafe { proc::scheduler() };
 }
 
 pub fn panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {

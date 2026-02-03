@@ -6,7 +6,7 @@ use core::ptr::{self, NonNull};
 
 use crate::fs::{Inode, InodeInner};
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
-use crate::proc::{CPU_POOL, PROC_POOL};
+use crate::proc::{self, PROC_POOL};
 use crate::riscv::{
     MAXVA, PGSIZE, PTE_R, PTE_U, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pg_round_up,
     pte_flags, pte_to_pa, px,
@@ -710,7 +710,8 @@ impl Uvm {
     /// Returns the physical access, if successful.
     /// Returns err if `va` is invalid / already mapped, or out of physical memory.
     pub fn vmfault(&mut self, va: VA) -> Result<PA, VmError> {
-        let proc = CPU_POOL.current_proc().unwrap();
+        let proc = proc::current_proc();
+        // # Safety: we have the current process.
         let data = unsafe { proc.data_mut() };
 
         if va.as_usize() >= data.size {
@@ -738,11 +739,10 @@ impl Uvm {
         Ok(pa)
     }
 
-    /// Copies from kernel to user.
-    /// Copies bytes from src to virtual address dstva in the current page table.
-    pub fn copy_out(&mut self, dstva: VA, src: &[u8]) -> Result<(), VmError> {
-        let mut dstva = dstva.as_usize();
+    /// Copies bytes from `src` to `dst` virtual address in the current pagetable.
+    pub fn copy_to(&mut self, src: &[u8], dst: VA) -> Result<(), VmError> {
         let mut src = src;
+        let mut dstva = dst.as_usize();
 
         while !src.is_empty() {
             let va0 = pg_round_down(dstva);
@@ -778,11 +778,10 @@ impl Uvm {
         Ok(())
     }
 
-    /// Copies from user to kernel.
-    /// Copy bytes from virtual address srcva to dst in the current page table.
-    pub fn copy_in(&mut self, dst: &mut [u8], srcva: VA) -> Result<(), VmError> {
+    /// Copy bytes from `src` virtual address in the current pagetable to `dst`.
+    pub fn copy_from(&mut self, src: VA, dst: &mut [u8]) -> Result<(), VmError> {
+        let mut srcva = src.as_usize();
         let mut dst = dst;
-        let mut srcva = srcva.as_usize();
 
         while !dst.is_empty() {
             let va0 = pg_round_down(srcva);

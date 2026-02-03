@@ -4,7 +4,7 @@ use crate::kernelvec::kernelvec;
 use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::param::NKSTACK_PAGES;
 use crate::plic;
-use crate::proc::{self, CPU_POOL, Channel};
+use crate::proc::{self, Channel};
 use crate::riscv::{
     PGSIZE, interrupts,
     registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
@@ -34,10 +34,8 @@ pub unsafe extern "C" fn usertrap() {
         // send subsequent interrupts and exceptions to kerneltrap, since we are in kernel mode now
         stvec::write(kernelvec as *const () as usize);
 
-        let proc = CPU_POOL.current_proc().unwrap();
-        let data = proc.data_mut();
-        let trapframe = data.trapframe.as_mut().unwrap();
-        let pagetable = data.pagetable.as_mut().unwrap();
+        let (proc, data) = proc::current_proc_and_data_mut();
+        let (pagetable, trapframe) = data.pagetable_and_trapframe_mut();
 
         // save user program counter in case, this handler yields to another core, and the new core
         // switches to user space, overwriting sepc.
@@ -118,7 +116,7 @@ pub unsafe extern "C" fn usertrap() {
 /// Called from `usertrap()`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usertrapret() {
-    let proc = CPU_POOL.current_proc().unwrap();
+    let (_proc, data) = proc::current_proc_and_data_mut();
 
     // we're about to switch the destination of traps from `kerneltrap()` to `usertrap()`, so turn
     // off interrupts until we're back in user space, where `usertrap()` is correct.
@@ -130,10 +128,10 @@ pub unsafe extern "C" fn usertrapret() {
     unsafe { stvec::write(trampoline_uservec) };
 
     // set up trapframe values that uservec will need when the process next traps into the kernel.
-    let data = unsafe { proc.data_mut() };
-    let trapframe = data.trapframe.as_mut().unwrap();
+    let kstack = data.kstack;
+    let trapframe = data.trapframe_mut();
     trapframe.kernel_satp = unsafe { satp::read() }; // kernel page table
-    trapframe.kernel_sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize(); // process's kernel stack
+    trapframe.kernel_sp = (kstack + NKSTACK_PAGES * PGSIZE).as_usize(); // process's kernel stack
     trapframe.kernel_trap = usertrap as *const () as usize;
     trapframe.kernel_hartid = unsafe { tp::read() }; // hartid for `current_id()`
 
@@ -149,7 +147,7 @@ pub unsafe extern "C" fn usertrapret() {
     unsafe { sepc::write(trapframe.epc) };
 
     // tell trampoline.S the user page table to switch to.
-    let user_satp = satp::make(data.pagetable.as_ref().unwrap().0.as_pa().as_usize());
+    let user_satp = satp::make(data.pagetable().0.as_pa().as_usize());
 
     // jump to userret in trampoline.S at the top of memory, which switches to the user page table,
     // restores user registers, and switches to user mode with sret.
@@ -205,7 +203,7 @@ pub unsafe extern "C" fn kerneltrap() {
         }
 
         // If we got a timer interrupt, give up the cpu for another process
-        if Some(InterruptType::Timer) == which_dev && CPU_POOL.current_proc().is_some() {
+        if Some(InterruptType::Timer) == which_dev && proc::current_proc_opt().is_some() {
             proc::r#yield();
         }
 
@@ -216,10 +214,11 @@ pub unsafe extern "C" fn kerneltrap() {
     }
 }
 
-/// Handle clock interrupts.
+/// Handles clock interrupts.
 pub fn clock_intr() {
-    let _lock = CPU_POOL.lock_current();
-    let hart = unsafe { CPU_POOL.current_id() };
+    let _lock = proc::lock_current_cpu();
+    // # Safety: cpu is locked
+    let hart = unsafe { proc::current_id() };
 
     if hart == 0 {
         let mut ticks = TICKS.lock();
@@ -239,7 +238,7 @@ enum InterruptType {
     Timer,
 }
 
-/// Check if interrupt is from an external device or software timer.
+/// Checks if interrupt is from an external device or software timer.
 fn device_interrupt(intr: scause::Interrupt) -> Option<InterruptType> {
     match intr {
         // Supervisor external interrupt via PLIC

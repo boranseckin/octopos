@@ -9,7 +9,7 @@ use crate::file::{FILE_TABLE, File, FileType};
 use crate::fs::{Directory, Inode, InodeType, Path};
 use crate::log::Operation;
 use crate::param::{MAXARG, MAXPATH, NDEV};
-use crate::proc::CPU_POOL;
+use crate::proc::current_proc_and_data_mut;
 use crate::riscv::PGSIZE;
 use crate::syscall::{SyscallArgs, SyscallError};
 use crate::vm::VA;
@@ -17,10 +17,9 @@ use crate::vm::VA;
 /// Allocates a file descriptor for the give file.
 /// Takes over file reference from caller on success.
 fn fd_alloc(file: File) -> Result<usize, SyscallError> {
-    let proc = CPU_POOL.current_proc().unwrap();
-    let open_files = unsafe { &mut proc.data_mut().open_files };
+    let (_proc, data) = current_proc_and_data_mut();
 
-    for (fd, open_file) in open_files.iter_mut().enumerate() {
+    for (fd, open_file) in data.open_files.iter_mut().enumerate() {
         if open_file.is_none() {
             *open_file = Some(file);
             return Ok(fd);
@@ -54,10 +53,9 @@ pub fn sys_write(args: &SyscallArgs) -> Result<usize, SyscallError> {
 pub fn sys_close(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let (fd, mut file) = try_log!(args.get_file(0));
 
-    let proc = CPU_POOL.current_proc().unwrap();
-    let open_files = unsafe { &mut proc.data_mut().open_files };
+    let (_proc, data) = current_proc_and_data_mut();
 
-    open_files[fd] = None;
+    data.open_files[fd] = None;
     file.close();
 
     Ok(0)
@@ -324,7 +322,7 @@ pub fn sys_mknod(args: &SyscallArgs) -> Result<usize, SyscallError> {
 }
 
 pub fn sys_chdir(args: &SyscallArgs) -> Result<usize, SyscallError> {
-    let proc = CPU_POOL.current_proc().unwrap();
+    let (_proc, data) = current_proc_and_data_mut();
 
     let _op = Operation::begin();
 
@@ -343,7 +341,7 @@ pub fn sys_chdir(args: &SyscallArgs) -> Result<usize, SyscallError> {
 
     inode.unlock(inner);
 
-    let old_cwd = mem::replace(unsafe { &mut proc.data_mut().cwd }, inode);
+    let old_cwd = mem::replace(&mut data.cwd, inode);
     old_cwd.put();
 
     Ok(0)
@@ -355,23 +353,23 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
     let path = Path::new(&path);
 
-    let proc = CPU_POOL.current_proc().unwrap();
-    let pagetable = unsafe { &mut proc.data_mut().pagetable.as_mut().unwrap() };
+    let (_proc, data) = current_proc_and_data_mut();
 
     let mut argv_bufs: Vec<String> = Vec::with_capacity(MAXARG);
 
     for i in 0..MAXARG {
         // fetch pointer argv[i] from user space
         let mut uarg: usize = 0;
-        if log!(pagetable.copy_in(
-            unsafe {
-                slice::from_raw_parts_mut(
-                    &mut uarg as *mut usize as *mut u8,
-                    core::mem::size_of::<usize>(),
-                )
-            },
-            uargv + i * size_of::<usize>(),
-        ))
+        let dst = unsafe {
+            slice::from_raw_parts_mut(
+                &mut uarg as *mut usize as *mut u8,
+                core::mem::size_of::<usize>(),
+            )
+        };
+        if log!(
+            data.pagetable_mut()
+                .copy_from(uargv + i * size_of::<usize>(), dst)
+        )
         .is_err()
         {
             err!(SyscallError::File("sys_exec copy in"));

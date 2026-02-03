@@ -21,7 +21,7 @@ use crate::swtch::swtch;
 use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
-use crate::vm::{Kvm, PageTable, Uvm, VA};
+use crate::vm::{Kvm, PA, PageTable, Uvm, VA};
 
 pub static CPU_POOL: CPUPool = CPUPool::new();
 
@@ -78,44 +78,6 @@ impl CPUPool {
         }
         unsafe { transmute(array) }
     }
-
-    /// Returns the hart id of the current CPU.
-    ///
-    /// # Safety
-    /// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
-    #[inline]
-    pub unsafe fn current_id(&self) -> usize {
-        unsafe { tp::read() }
-    }
-
-    /// Returns a mutable pointer to the current CPU's [`CPU`] struct.
-    ///
-    /// # Safety
-    /// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
-    pub unsafe fn current(&self) -> &'static mut CPU {
-        unsafe {
-            assert!(!interrupts::get(), "mycpu interrupts enabled");
-            let id = self.current_id();
-            &mut *CPU_POOL.0[id].get()
-        }
-    }
-
-    /// Locks this CPU by disabling interrupts.
-    /// Returns an [`InterruptLock`] as the ownership and lifetime of the lock.
-    pub fn lock_current(&self) -> InterruptLock {
-        let old_state = interrupts::get();
-        interrupts::disable();
-
-        unsafe { self.current().lock(old_state) }
-    }
-
-    /// Returns a reference to this CPU's [`Proc`].
-    pub fn current_proc(&self) -> Option<&'static Proc> {
-        let _lock = self.lock_current();
-
-        let cpu = unsafe { &*self.current() };
-        cpu.proc
-    }
 }
 
 unsafe impl Sync for CPUPool {}
@@ -126,8 +88,68 @@ pub struct InterruptLock;
 
 impl Drop for InterruptLock {
     fn drop(&mut self) {
-        unsafe { (*CPU_POOL.current()).unlock() }
+        // # Safety: we are still holding the CPU lock
+        unsafe { current_cpu().unlock() }
     }
+}
+
+/// Returns the hart id of the current CPU.
+///
+/// # Safety
+/// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
+#[inline]
+pub unsafe fn current_id() -> usize {
+    unsafe { tp::read() }
+}
+
+/// Returns a mutable pointer to the current CPU's [`CPU`] struct.
+///
+/// # Safety
+/// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
+pub unsafe fn current_cpu() -> &'static mut CPU {
+    unsafe {
+        assert!(!interrupts::get(), "mycpu interrupts enabled");
+        let id = current_id();
+        &mut *CPU_POOL.0[id].get()
+    }
+}
+
+/// Locks this CPU by disabling interrupts.
+/// Returns an [`InterruptLock`] as the ownership and lifetime of the lock.
+pub fn lock_current_cpu() -> InterruptLock {
+    let old_state = interrupts::get();
+    interrupts::disable();
+
+    unsafe { current_cpu().lock(old_state) }
+}
+
+/// Returns a reference to this CPU's [`Proc`].
+pub fn current_proc_opt() -> Option<&'static Proc> {
+    let _lock = lock_current_cpu();
+
+    let cpu = unsafe { current_cpu() };
+    cpu.proc
+}
+
+/// Returns a reference to this CPU's [`Proc`].
+/// It unwraps the option and panics if there is no current process.
+pub fn current_proc() -> &'static Proc {
+    current_proc_opt().expect("no current process")
+}
+
+/// Returns a shared reference to this CPU's [`Proc`] and its underlying [`ProcData`].
+pub fn current_proc_and_data() -> (&'static Proc, &'static ProcData) {
+    let proc = current_proc();
+    let data = proc.data();
+    (proc, data)
+}
+
+/// Returns a shared reference to this CPU's [`Proc`] and exclusive reference to its underlying [`ProcData`].
+pub fn current_proc_and_data_mut() -> (&'static Proc, &'static mut ProcData) {
+    let proc = current_proc();
+    // # Safety: we are the current proc
+    let data = unsafe { proc.data_mut() };
+    (proc, data)
 }
 
 /// Saved registers for kernel context switches.
@@ -379,6 +401,33 @@ impl ProcData {
             name: String::new(),
         }
     }
+
+    pub fn trapframe(&self) -> &TrapFrame {
+        self.trapframe.as_ref().unwrap()
+    }
+
+    pub fn trapframe_mut(&mut self) -> &mut TrapFrame {
+        self.trapframe.as_mut().unwrap()
+    }
+
+    pub fn pagetable(&self) -> &Uvm {
+        self.pagetable.as_ref().unwrap()
+    }
+
+    pub fn pagetable_mut(&mut self) -> &mut Uvm {
+        self.pagetable.as_mut().unwrap()
+    }
+
+    pub fn pagetable_and_trapframe(&self) -> (&Uvm, &TrapFrame) {
+        (self.pagetable(), self.trapframe())
+    }
+
+    pub fn pagetable_and_trapframe_mut(&mut self) -> (&mut Uvm, &mut TrapFrame) {
+        (
+            self.pagetable.as_mut().unwrap(),
+            self.trapframe.as_mut().unwrap(),
+        )
+    }
 }
 
 unsafe impl Sync for ProcData {}
@@ -397,8 +446,12 @@ impl Proc {
         unsafe { &*self.data.get() }
     }
 
+    /// Returns a mutable reference to the process's data.
+    ///
     /// # Safety
-    /// The caller must ensure exclusive access to the returned mutable reference.
+    /// The caller must ensure they have exclusive access to the `Proc`. This is true if either
+    ///     1. it's the current proc (most cases) or
+    ///     2. the proc's state hasn't been set to Runnable/Sleeping yet (fork, allocproc).
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut ProcData {
         unsafe { &mut *self.data.get() }
@@ -438,8 +491,7 @@ impl Proc {
         let data = self.data();
         if let Err(err) = log!(uvm.map_pages(
             TRAPFRAME.into(),
-            // As disgusting as this is, we need to get the address of the trapframe.
-            (data.trapframe.as_deref().unwrap() as *const _ as usize).into(),
+            PA::from(data.trapframe() as *const _ as usize),
             PGSIZE,
             PTE_R | PTE_W,
         )) {
@@ -453,6 +505,7 @@ impl Proc {
 
     /// Free the process and the data attached to it (including user pages).
     pub fn free(&self, mut inner: SpinLockGuard<'_, ProcInner>) {
+        // # Safety: we are the only ones with access to this proc
         let data = unsafe { self.data_mut() };
 
         if let Some(trapframe) = data.trapframe.take() {
@@ -552,6 +605,7 @@ impl ProcPool {
                 inner.pid = PID::alloc();
                 inner.state = ProcState::Used;
 
+                // # Safety: proc is not yet runnable, so we are the only ones with access to it
                 let data = unsafe { proc.data_mut() };
 
                 // Allocate a trapframe page.
@@ -602,7 +656,7 @@ pub fn user_init() {
     let (proc, mut inner) = log!(PROC_POOL.alloc()).unwrap();
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
 
-    // # Safety: we are holding inner lock
+    // # Safety: during initialization, we are the only ones with access to this proc
     let data = unsafe { proc.data_mut() };
 
     data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
@@ -618,29 +672,19 @@ pub fn user_init() {
 /// # Safety
 /// The caller must ensure exclusive access to the process's memory.
 pub unsafe fn grow(n: isize) -> Result<usize, KernelError> {
-    let proc = CPU_POOL.current_proc().unwrap();
-    let data = unsafe { proc.data_mut() };
+    let (_proc, data) = current_proc_and_data_mut();
 
     let mut size = data.size;
 
     if n > 0 {
-        size = try_log!(
-            data.pagetable
-                .as_mut()
-                .unwrap()
-                .alloc(size, size + (n as usize), PTE_W)
-        );
+        size = try_log!(data.pagetable_mut().alloc(size, size + (n as usize), PTE_W));
     } else if n < 0 {
         let shrink = (-n) as usize;
         if shrink > size {
             err!(KernelError::InvalidArgument);
         }
 
-        size = data
-            .pagetable
-            .as_mut()
-            .unwrap()
-            .dealloc(size, size - shrink);
+        size = data.pagetable_mut().dealloc(size, size - shrink);
     }
 
     data.size = size;
@@ -650,29 +694,25 @@ pub unsafe fn grow(n: isize) -> Result<usize, KernelError> {
 /// Crates a new process, copying the parent.
 /// Sets up the child kernel stack to return as if from `fork()` system call.
 pub fn fork() -> Result<PID, KernelError> {
-    let proc = CPU_POOL.current_proc().unwrap();
-    let data = unsafe { proc.data_mut() };
+    let (proc, data) = current_proc_and_data_mut();
 
     // allocate process
     let (new_proc, new_inner) = try_log!(PROC_POOL.alloc());
+    // # Safety: new_proc is not yet runnable, so we are the only ones with access to it
     let new_data = unsafe { new_proc.data_mut() };
 
     // copy user memory from parent to child
-    let new_pagetable = new_data.pagetable.as_mut().unwrap();
-    if let Err(err) = log!(
-        data.pagetable
-            .as_mut()
-            .unwrap()
-            .copy(new_pagetable, data.size)
-    ) {
+    let new_pagetable = new_data.pagetable_mut();
+    let size = data.size;
+    if let Err(err) = log!(data.pagetable_mut().copy(new_pagetable, size)) {
         new_proc.free(new_inner);
         return Err(err.into());
     };
     new_data.size = data.size;
 
     // copy saved user registers
-    let new_trapframe = new_data.trapframe.as_mut().unwrap();
-    let trapframe = data.trapframe.as_ref().unwrap();
+    let new_trapframe = new_data.trapframe_mut();
+    let trapframe = data.trapframe();
     new_trapframe.clone_from(trapframe);
 
     // cause fork to return 0 in the child
@@ -719,10 +759,8 @@ pub fn reparent(original: &Proc, parents: &mut SpinLockGuard<'_, [Option<usize>;
 ///
 /// An exited process remains in the zombie state until its parent calls `wait`.
 pub fn exit(status: isize) -> ! {
-    let proc = CPU_POOL.current_proc().unwrap();
+    let (proc, data) = current_proc_and_data_mut();
     assert!(!proc.is_init_proc(), "init exiting");
-
-    let data = unsafe { proc.data_mut() };
 
     // close all open files
     for file in &mut data.open_files {
@@ -760,7 +798,7 @@ pub fn exit(status: isize) -> ! {
 
 /// Waits for a child process to exit and return its pid or None if there are no children.
 pub fn wait(addr: VA) -> Option<PID> {
-    let current_proc = CPU_POOL.current_proc().unwrap();
+    let current_proc = current_proc();
     let current_id = current_proc.id;
 
     // analogous to wait_lock
@@ -781,18 +819,14 @@ pub fn wait(addr: VA) -> Option<PID> {
                     let pid = inner.pid.0;
 
                     if addr != 0 {
-                        unsafe {
-                            let xstate_bytes = &inner.xstate.to_le_bytes();
-                            log!(
-                                current_proc
-                                    .data_mut()
-                                    .pagetable
-                                    .as_mut()
-                                    .unwrap()
-                                    .copy_out(addr, xstate_bytes)
-                            )
-                            .expect("wait copy out xstate");
-                        }
+                        let xstate_bytes = &inner.xstate.to_le_bytes();
+                        log!(
+                            // # Safety: we are the current proc
+                            unsafe { current_proc.data_mut() }
+                                .pagetable_mut()
+                                .copy_to(xstate_bytes, addr)
+                        )
+                        .expect("wait copy out xstate");
                     }
 
                     // clear the parent relationship
@@ -817,12 +851,16 @@ pub fn wait(addr: VA) -> Option<PID> {
 
 /// Per-CPU process scheduler.
 /// Each CPU calls `scheduler` after setting itself up.
-/// Scheduler never returns.  It loops, doing:
-///  - choose a process to run.
-///  - swtch to start running that process.
-///  - eventually that process transfers control via swtch back to the scheduler.
-pub fn scheduler() -> ! {
-    let cpu = unsafe { &mut *CPU_POOL.current() };
+/// Scheduler never returns. It loops, doing:
+///     - choose a process to run.
+///     - swtch to start running that process.
+///     - eventually that process transfers control via swtch back to the scheduler.
+///
+/// # Safety
+/// Must be called with interrupts disabled.
+pub unsafe fn scheduler() -> ! {
+    // cpu does not change throughout the lifetime of the scheduler
+    let cpu = unsafe { current_cpu() };
 
     cpu.proc.take();
 
@@ -871,10 +909,7 @@ pub fn sched<'a>(
     proc_inner: SpinLockGuard<'a, ProcInner>,
     context: &mut Context,
 ) -> SpinLockGuard<'a, ProcInner> {
-    let cpu = unsafe { &mut *CPU_POOL.current() };
-
-    // might not be needed since we are passing the guard
-    // assert!(!guard.holding(), "sched proc lock");
+    let cpu = unsafe { current_cpu() };
 
     // make sure that interrupts are disabled and there are no nested locks.
     assert_eq!(cpu.num_off, 1, "sched locks");
@@ -888,7 +923,8 @@ pub fn sched<'a>(
     let interrupts_enabled = cpu.interrupts_enabled;
     unsafe { swtch(context, &cpu.context) };
 
-    let cpu = unsafe { &mut *CPU_POOL.current() };
+    // get current cpu again since the process may have been moved to a different cpu.
+    let cpu = unsafe { current_cpu() };
     cpu.interrupts_enabled = interrupts_enabled;
 
     proc_inner
@@ -896,14 +932,13 @@ pub fn sched<'a>(
 
 /// Gives up the CPU for one scheduling round.
 pub fn r#yield() {
-    let proc = CPU_POOL.current_proc().unwrap();
+    let (proc, data) = current_proc_and_data_mut();
 
     // proc lock will be held until after the call to the sched.
     let mut inner = proc.inner.lock();
     inner.state = ProcState::Runnable;
 
-    let context = unsafe { &mut proc.data_mut().context };
-    sched(inner, context);
+    sched(inner, &mut data.context);
 }
 
 /// Entry point for forked child process.
@@ -911,14 +946,12 @@ pub fn r#yield() {
 /// # Safety
 /// This function is not called directly, but used as the return address for context switch.
 pub unsafe extern "C" fn fork_ret() {
+    // This is atomic since multiple CPUs could schedule their first process simultaneously.
     static FIRST: AtomicBool = AtomicBool::new(true);
 
-    unsafe {
-        // Still holding process lock from scheduler.
-        CPU_POOL.current_proc().unwrap().inner.force_unlock();
-    }
+    // Still holding process lock from scheduler.
+    unsafe { current_proc().inner.force_unlock() };
 
-    // TODO: not sure if atomic is needed
     if FIRST
         .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
         .is_ok()
@@ -932,22 +965,15 @@ pub unsafe extern "C" fn fork_ret() {
         // we can invoke `exec()` now that file system is initialized.
         match log!(exec(&Path::new("/init"), &["init"])) {
             Ok(result) => {
-                let trapframe = unsafe {
-                    CPU_POOL
-                        .current_proc()
-                        .unwrap()
-                        .data_mut()
-                        .trapframe
-                        .as_mut()
-                        .unwrap()
-                };
+                // # Safety: we are the current proc
+                let trapframe = unsafe { current_proc().data_mut() }.trapframe_mut();
                 trapframe.a0 = result;
             }
             Err(_) => panic!("fork_ret exec"),
         }
     }
 
-    // return to user space, mimicing `usertrap()`'s return
+    // return to user space, mimicking `usertrap()`'s return
     unsafe { usertrapret() };
 }
 
@@ -955,12 +981,11 @@ pub unsafe extern "C" fn fork_ret() {
 /// Reacquires the condition's lock when awakened.
 pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
-    // unlocking the condition's lock. `wakeup` function must also acquire proc's lock to resolve
-    // the condition, which it cannot do before we release it.
-
+    // unlocking the condition's lock. `wakeup()` must also acquire proc's lock to resolve the
+    // condition, which it cannot do before we release it.
     let condition_mutex;
     {
-        let proc = CPU_POOL.current_proc().unwrap();
+        let proc = current_proc();
         let mut inner = proc.inner.lock();
 
         condition_mutex = SpinLock::unlock(condition_lock);
@@ -970,6 +995,7 @@ pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinL
         inner.state = ProcState::Sleeping;
 
         // this is where we switch to scheduler (to another proc).
+        // # Safety: we are the current proc
         let context = unsafe { &mut proc.data_mut().context };
         inner = sched(inner, context);
         // this is where we switch back to the original proc.
@@ -984,7 +1010,9 @@ pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinL
 /// Wakes up all processes sleeping on channel.
 /// Must be called without any proc lock.
 pub fn wakeup(channel: Channel) {
-    let current_proc = CPU_POOL.current_proc();
+    // do not unwrap current proc here, since it might not exist if it is called from the
+    // scheduler's context.
+    let current_proc = current_proc_opt();
 
     for proc in PROC_POOL.iter() {
         if current_proc.is_some_and(|p| ptr::eq(p, proc)) {
@@ -1000,7 +1028,7 @@ pub fn wakeup(channel: Channel) {
 
 /// Kills the process with the given pid.
 ///
-/// The victim won't exit until it tries to return to user space (see `usertrap` in trap.rs).
+/// The victim won't exit until it tries to return to user space (see `usertrap()` in trap.rs).
 pub fn kill(pid: PID) -> bool {
     for proc in PROC_POOL.iter() {
         let mut inner = proc.inner.lock();
@@ -1008,7 +1036,7 @@ pub fn kill(pid: PID) -> bool {
             inner.killed = true;
 
             if inner.state == ProcState::Sleeping {
-                // Wake process from `sleep()`.
+                // wakeup process from `sleep()`
                 inner.state = ProcState::Runnable;
             }
 
@@ -1019,54 +1047,26 @@ pub fn kill(pid: PID) -> bool {
     false
 }
 
-/// Copies from a user address.
-pub fn copy_out_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
-    unsafe {
-        log!(
-            CPU_POOL
-                .current_proc()
-                .unwrap()
-                .data_mut()
-                .pagetable
-                .as_mut()
-                .unwrap()
-                .copy_out(dst, src)
-        )
-        .map_err(|e| e.into())
-    }
+/// Copies from kernel to user space.
+pub fn copy_to_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
+    log!(
+        // # Safety: we are the current proc
+        unsafe { current_proc().data_mut() }
+            .pagetable_mut()
+            .copy_to(src, dst)
+    )
+    .map_err(|e| e.into())
 }
 
-/// Copies from a kernel address.
-///
-/// # Safety
-/// The caller must ensure that `dst` is valid for writes of `src.len()` bytes.
-pub unsafe fn copy_out_kernel(src: &[u8], dst: *mut u8) {
-    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
-}
-
-/// Copies into a user address.
-pub fn copy_in_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
-    unsafe {
-        log!(
-            CPU_POOL
-                .current_proc()
-                .unwrap()
-                .data_mut()
-                .pagetable
-                .as_mut()
-                .unwrap()
-                .copy_in(dst, src)
-        )
-        .map_err(|e| e.into())
-    }
-}
-
-/// Copies from a kernel address.
-///
-/// # Safety
-/// The caller must ensure that `src` is valid for reads of `dst.len()` bytes.
-pub unsafe fn copy_in_kernel(src: &[u8], dst: *mut u8) {
-    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) }
+/// Copies from user to kernel space.
+pub fn copy_from_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
+    log!(
+        // # Safety: we are the current proc
+        unsafe { current_proc().data_mut() }
+            .pagetable_mut()
+            .copy_from(src, dst)
+    )
+    .map_err(|e| e.into())
 }
 
 /// Initializes the process table.
@@ -1074,10 +1074,9 @@ pub unsafe fn copy_in_kernel(src: &[u8], dst: *mut u8) {
 /// # Safety
 /// Must be called only once during kernel initialization.
 pub unsafe fn init() {
-    unsafe {
-        for proc in PROC_POOL.iter() {
-            proc.data_mut().kstack = VA::from(kstack(proc.id));
-        }
+    for proc in PROC_POOL.iter() {
+        // # Safety: we are during initialization, so we are the only ones with access to the proc
+        unsafe { proc.data_mut() }.kstack = VA::from(kstack(proc.id));
     }
 
     println!("proc init");

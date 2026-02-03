@@ -179,7 +179,7 @@ impl File {
                 let src = unsafe {
                     slice::from_raw_parts(&stat as *const _ as *const u8, mem::size_of::<Stat>())
                 };
-                if log!(proc::copy_out_user(src, addr)).is_err() {
+                if log!(proc::copy_to_user(src, addr)).is_err() {
                     err!(FsError::Copy);
                 }
 

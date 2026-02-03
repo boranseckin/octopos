@@ -7,7 +7,6 @@ use crate::buf::{BCACHE, Buf};
 use crate::log::{self, Operation};
 use crate::param::{NINODE, ROOTDEV};
 use crate::proc;
-use crate::proc::CPU_POOL;
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
 use crate::sync::OnceLock;
@@ -656,12 +655,12 @@ impl Inode {
 
                 if dst_user {
                     let dst_va = VA::from(dst.as_mut_ptr() as usize);
-                    if log!(proc::copy_out_user(src, dst_va)).is_err() {
+                    if log!(proc::copy_to_user(src, dst_va)).is_err() {
                         BCACHE.release(buf);
                         err!(FsError::Read);
                     }
                 } else {
-                    unsafe { proc::copy_out_kernel(src, dst.as_mut_ptr()) };
+                    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
                 }
 
                 BCACHE.release(buf);
@@ -709,12 +708,12 @@ impl Inode {
 
                 if src_user {
                     let src_va = VA::from(src.as_ptr() as usize);
-                    if log!(proc::copy_in_user(src_va, dst)).is_err() {
+                    if log!(proc::copy_from_user(src_va, dst)).is_err() {
                         BCACHE.release(buf);
                         break;
                     }
                 } else {
-                    unsafe { proc::copy_in_kernel(src, dst.as_mut_ptr()) };
+                    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
                 }
 
                 log::write(&buf);
@@ -1007,7 +1006,7 @@ impl<'a> Path<'a> {
         let mut inode = if self.is_absolute() {
             try_log!(Inode::get(ROOTDEV, ROOTINO))
         } else {
-            CPU_POOL.current_proc().unwrap().data().cwd.dup()
+            proc::current_proc().data().cwd.dup()
         };
 
         let mut name = "";

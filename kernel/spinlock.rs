@@ -4,7 +4,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::proc::{CPU, CPU_POOL, InterruptLock};
+use crate::proc::{self, CPU, InterruptLock};
 
 /// A mutual exclusion primitive useful for protecting shared data.
 /// It uses a spinlock to achieve mutual exclusion.
@@ -31,9 +31,11 @@ impl<T> SpinLock<T> {
     }
 
     /// Returns true if the current CPU is holding the lock.
-    /// # Safety: must be called with interrupts disabled.
+    ///
+    /// # Safety
+    /// Must be called with interrupts disabled.
     unsafe fn holding(&self) -> bool {
-        self.cpu.load(Ordering::Relaxed) == unsafe { CPU_POOL.current() }
+        self.cpu.load(Ordering::Relaxed) == unsafe { proc::current_cpu() }
     }
 
     /// Acquires the mutex, blocking the current thread until it is able to do so.
@@ -42,7 +44,7 @@ impl<T> SpinLock<T> {
     ///
     /// Current thread's interrupts will be disabled while holding the lock.
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        let intr_lock = CPU_POOL.lock_current();
+        let intr_lock = proc::lock_current_cpu();
 
         // Safety: interrupts are disabled
         unsafe {
@@ -55,7 +57,7 @@ impl<T> SpinLock<T> {
                 .compare_exchange(
                     ptr::null_mut(),
                     // Safety: interrupts are disabled
-                    unsafe { CPU_POOL.current() },
+                    unsafe { proc::current_cpu() },
                     Ordering::Acquire,
                     Ordering::Relaxed,
                 )
@@ -88,7 +90,7 @@ impl<T> SpinLock<T> {
             assert!(self.holding(), "force_unlock: not locked {}", self.name);
             self.cpu.store(ptr::null_mut(), Ordering::Release);
             // also release interrupt lock (decrement num_off)
-            CPU_POOL.current().unlock();
+            proc::current_cpu().unlock();
         }
     }
 

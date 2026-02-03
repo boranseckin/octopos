@@ -1,6 +1,6 @@
 use core::cell::UnsafeCell;
 
-use crate::proc::{self, CPU_POOL, Channel, PID};
+use crate::proc::{self, Channel, PID};
 use crate::spinlock::SpinLock;
 
 /// Inner state of a SleepLock.
@@ -46,7 +46,7 @@ impl<T> SleepLock<T> {
     pub fn holding(&self) -> bool {
         let inner = self.inner.lock();
 
-        inner.locked && (inner.pid == Some(CPU_POOL.current_proc().unwrap().inner.lock().pid))
+        inner.locked && (inner.pid == Some(proc::current_proc().inner.lock().pid))
     }
 
     /// Acquires the mutex without disabling interrupts or blocking the current thread.
@@ -58,7 +58,7 @@ impl<T> SleepLock<T> {
         }
 
         inner.locked = true;
-        inner.pid = Some(CPU_POOL.current_proc().unwrap().inner.lock().pid);
+        inner.pid = Some(proc::current_proc().inner.lock().pid);
 
         SleepLockGuard { lock: self }
     }

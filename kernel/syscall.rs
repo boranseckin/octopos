@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use crate::abi::Syscall;
 use crate::file::File;
 use crate::param::NOFILE;
-use crate::proc::{CPU_POOL, Proc, TrapFrame};
+use crate::proc::{Proc, TrapFrame, current_proc, current_proc_and_data_mut};
 use crate::sysfile::*;
 use crate::sysproc::*;
 use crate::vm::VA;
@@ -80,7 +80,6 @@ impl<'a> SyscallArgs<'a> {
 
     /// Fetch the nth word-sized system call argument as a file descriptor and return both the
     /// descriptor and the corresponding `File`.
-    // TODO: better error reporting
     pub fn get_file(&self, index: usize) -> Result<(usize, File), SyscallError> {
         let fd: usize = try_log!(
             self.get_int(index)
@@ -92,7 +91,7 @@ impl<'a> SyscallArgs<'a> {
             err!(SyscallError::InvalidArgument("fd out of range"));
         }
 
-        if let Some(file) = &CPU_POOL.current_proc().unwrap().data().open_files[fd] {
+        if let Some(file) = &current_proc().data().open_files[fd] {
             return Ok((fd, file.clone()));
         }
 
@@ -101,19 +100,16 @@ impl<'a> SyscallArgs<'a> {
 
     /// Fetches a null-terminated string from user space.
     pub fn fetch_string(&self, addr: VA, max: usize) -> Result<String, SyscallError> {
-        let proc = CPU_POOL.current_proc().unwrap();
-        let data = unsafe { proc.data_mut() };
+        let (_proc, data) = current_proc_and_data_mut();
 
         let mut result = String::with_capacity(max);
 
         let mut buf = [0u8; 1];
         for i in 0..max {
             try_log!(
-                data.pagetable
-                    .as_mut()
-                    .unwrap()
-                    .copy_in(&mut buf, VA::from(addr.as_usize() + i))
-                    .inspect_err(|e| println!("copy_in failed: {:?}", e))
+                data.pagetable_mut()
+                    .copy_from(VA::from(addr.as_usize() + i), &mut buf)
+                    .inspect_err(|e| println!("copy_from failed: {:?}", e))
                     .map_err(|_| SyscallError::FetchArgument)
             );
 
@@ -129,8 +125,7 @@ impl<'a> SyscallArgs<'a> {
 
     /// Fetches a byte array from user space.
     pub fn fetch_bytes(&self, addr: VA, len: usize) -> Result<Vec<u8>, SyscallError> {
-        let proc = CPU_POOL.current_proc().unwrap();
-        let data = unsafe { proc.data_mut() };
+        let (_proc, data) = current_proc_and_data_mut();
 
         if addr >= data.size || addr + 64 > data.size {
             err!(SyscallError::FetchArgument);
@@ -138,11 +133,9 @@ impl<'a> SyscallArgs<'a> {
 
         let mut result = Vec::with_capacity(len);
         try_log!(
-            data.pagetable
-                .as_mut()
-                .unwrap()
-                .copy_in(&mut result, addr)
-                .inspect_err(|e| println!("copy_in failed: {:?}", e))
+            data.pagetable_mut()
+                .copy_from(addr, &mut result)
+                .inspect_err(|e| println!("copy_from failed: {:?}", e))
                 .map_err(|_| SyscallError::FetchArgument)
         );
 
@@ -187,7 +180,7 @@ impl TryFrom<usize> for Syscall {
 /// Called from `usertrap` in `trap.rs`.
 #[unsafe(no_mangle)]
 pub unsafe fn syscall(trapframe: &mut TrapFrame) {
-    let proc = CPU_POOL.current_proc().unwrap();
+    let proc = current_proc();
     let args = SyscallArgs::new(trapframe, proc);
 
     println!(

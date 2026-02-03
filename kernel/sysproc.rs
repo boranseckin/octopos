@@ -1,4 +1,4 @@
-use crate::proc::{self, CPU_POOL, Channel, PID};
+use crate::proc::{self, Channel, PID, current_proc};
 use crate::syscall::{SyscallArgs, SyscallError};
 use crate::trap::TICKS;
 
@@ -44,7 +44,7 @@ pub fn sys_sleep(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let ticks0 = *ticks;
 
     while *ticks - ticks0 < duration {
-        if CPU_POOL.current_proc().unwrap().is_killed() {
+        if current_proc().is_killed() {
             return Err(SyscallError::Proc("sys_sleep"));
         }
 

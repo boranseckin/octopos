@@ -1,4 +1,4 @@
-use crate::proc::{self, CPU_POOL, Channel};
+use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 use crate::syscall::SyscallError;
 use crate::uart;
@@ -54,7 +54,7 @@ impl Console {
             let src = VA::from(src.as_usize() + i);
             let mut dst = [0u8];
 
-            match proc::copy_in_user(src, &mut dst) {
+            match proc::copy_from_user(src, &mut dst) {
                 Ok(_) => Self::putc(dst[0]),
                 Err(_) => return Ok(i),
             }
@@ -74,7 +74,7 @@ impl Console {
         while len > 0 {
             // wait until interrupt handler has put some input into `buf`.
             while console.r == console.w {
-                if CPU_POOL.current_proc().unwrap().is_killed() {
+                if proc::current_proc().is_killed() {
                     return Err(SyscallError::Console);
                 }
 
@@ -97,7 +97,7 @@ impl Console {
 
             // copy the input byte to the user-space buffer
             let buf = [c];
-            if proc::copy_out_user(&buf, dst).is_err() {
+            if proc::copy_to_user(&buf, dst).is_err() {
                 break;
             }
 

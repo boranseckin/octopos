@@ -76,9 +76,9 @@ macro_rules! err {
     ($e:expr) => {{
         #[cfg(debug_assertions)]
         {
-            let _lock = $crate::proc::CPU_POOL.lock_current();
+            let _lock = $crate::proc::lock_current_cpu();
             #[allow(unused_unsafe)]
-            let cpu_id = unsafe { $crate::proc::CPU_POOL.current_id() };
+            let cpu_id = unsafe { $crate::proc::current_id() };
             $crate::println!(
                 "! hart {} errored at {}:{}: {}",
                 cpu_id,

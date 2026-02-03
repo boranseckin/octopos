@@ -2,7 +2,7 @@ use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::console::Console;
-use crate::proc::CPU_POOL;
+use crate::proc;
 use crate::spinlock::SpinLock;
 
 /// Wrapper around console writer
@@ -65,7 +65,7 @@ pub fn panic(info: &core::panic::PanicInfo) -> ! {
     PRINTF.locking.store(false, Ordering::Relaxed);
 
     // Safety: we are panicked, don't care about the lock
-    let cpu_id = unsafe { CPU_POOL.current_id() };
+    let cpu_id = unsafe { proc::current_id() };
 
     println!("! hart {} {}", cpu_id, info);
 
