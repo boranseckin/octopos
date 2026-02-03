@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(fn_align)]
 #![feature(allocator_api)]
 #![feature(alloc_error_handler)]
 

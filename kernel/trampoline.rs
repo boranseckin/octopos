@@ -26,7 +26,6 @@ unsafe extern "C" {
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
 #[unsafe(link_section = "trampsec")]
-#[rustc_align(4)]
 pub extern "C" fn uservec() {
     naked_asm!(
         // save user a0 in sscratch so a0 can be used to get at TRAPFRAME
