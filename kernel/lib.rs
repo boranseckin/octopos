@@ -18,6 +18,7 @@ pub(crate) mod kernelvec;
 pub(crate) mod log;
 pub(crate) mod memlayout;
 pub(crate) mod param;
+pub(crate) mod pipe;
 pub(crate) mod plic;
 pub(crate) mod proc;
 pub(crate) mod riscv;

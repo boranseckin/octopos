@@ -315,7 +315,12 @@ pub enum Channel {
     Buffer(usize),
     /// Lock
     Lock(usize),
+    /// Log
     Log,
+    /// Read end of pipe.
+    PipeRead(usize),
+    /// Write end of pipe.
+    PipeWrite(usize),
 }
 
 /// Process control block

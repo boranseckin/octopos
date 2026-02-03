@@ -10,6 +10,7 @@ use crate::file::{FILE_TABLE, File, FileType};
 use crate::fs::{Directory, Inode, InodeType, Path};
 use crate::log::Operation;
 use crate::param::{MAXARG, MAXPATH, NDEV};
+use crate::pipe::Pipe;
 use crate::proc::current_proc_and_data_mut;
 use crate::riscv::PGSIZE;
 use crate::syscall::{SyscallArgs, SyscallError};
@@ -391,6 +392,40 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SyscallError> {
     log!(exec(&path, &argv)).map_err(|_| SyscallError::File("sys_exec exec"))
 }
 
-pub fn sys_pipe(_args: &SyscallArgs) -> Result<usize, SyscallError> {
-    unimplemented!()
+pub fn sys_pipe(args: &SyscallArgs) -> Result<usize, SyscallError> {
+    // user pointer to array of two integers
+    let fd_array = args.get_addr(0);
+
+    let (_proc, data) = current_proc_and_data_mut();
+
+    let Ok((mut read, mut write)) = log!(Pipe::alloc()) else {
+        err!(SyscallError::File("sys_pipe alloc"));
+    };
+
+    let Ok(fd0) = log!(fd_alloc(read.clone())) else {
+        read.close();
+        write.close();
+        err!(SyscallError::File("sys_pipe fd_alloc"));
+    };
+
+    let Ok(fd1) = log!(fd_alloc(write.clone())) else {
+        data.open_files[fd0] = None;
+        read.close();
+        write.close();
+        err!(SyscallError::File("sys_pipe fd_alloc"));
+    };
+
+    let pagetable = data.pagetable_mut();
+
+    if log!(pagetable.copy_to(&fd0.to_le_bytes(), fd_array)).is_err()
+        || log!(pagetable.copy_to(&fd1.to_le_bytes(), fd_array + size_of_val(&fd1))).is_err()
+    {
+        data.open_files[fd0] = None;
+        data.open_files[fd1] = None;
+        read.close();
+        write.close();
+        err!(SyscallError::File("sys_pipe copy_to"));
+    }
+
+    Ok(0)
 }

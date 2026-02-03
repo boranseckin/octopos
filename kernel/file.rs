@@ -1,22 +1,25 @@
 use core::mem::{self, MaybeUninit};
 use core::slice;
 
+use alloc::sync::Arc;
+
 use crate::abi::CONSOLE;
 use crate::console::Console;
 use crate::fs::{BSIZE, Inode};
 use crate::fs::{FsError, Stat};
 use crate::log::Operation;
 use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
+use crate::pipe::Pipe;
 use crate::proc;
 use crate::sleeplock::SleepLock;
 use crate::spinlock::SpinLock;
 use crate::syscall::SyscallError;
 use crate::vm::VA;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum FileType {
     None,
-    Pipe { pipe: () },
+    Pipe { pipe: Arc<Pipe> },
     Inode { inode: Inode },
     Device { inode: Inode, major: u16 },
 }
@@ -157,8 +160,8 @@ impl File {
 
         match inner_copy.r#type {
             FileType::None => {}
-            FileType::Pipe { pipe: _ } => {
-                todo!("pipeclose");
+            FileType::Pipe { pipe } => {
+                pipe.close(inner_copy.writeable);
             }
             FileType::Inode { inode } | FileType::Device { inode, .. } => {
                 let _op = Operation::begin();
@@ -200,9 +203,9 @@ impl File {
 
         match &mut file_inner.r#type {
             FileType::None => panic!("fileread"),
-            FileType::Pipe { pipe: _ } => {
-                unimplemented!()
-            }
+
+            FileType::Pipe { pipe } => pipe.read(addr, n),
+
             FileType::Inode { inode } => {
                 let inode = inode.clone();
                 let mut inode_inner = inode.lock();
@@ -222,6 +225,7 @@ impl File {
                     err!(SyscallError::Read);
                 }
             }
+
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.read)(addr, n),
                 None => err!(SyscallError::Read),
@@ -240,9 +244,7 @@ impl File {
         match &mut file_inner.r#type {
             FileType::None => panic!("filewrite"),
 
-            FileType::Pipe { pipe: _ } => {
-                unimplemented!()
-            }
+            FileType::Pipe { pipe } => pipe.write(addr, n),
 
             FileType::Inode { inode } => {
                 let inode = inode.clone();
