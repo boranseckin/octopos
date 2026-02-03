@@ -1,8 +1,5 @@
 #![no_std]
 #![feature(allocator_api)]
-#![feature(alloc_error_handler)]
-
-use core::sync::atomic::{AtomicBool, Ordering};
 
 extern crate alloc;
 
@@ -39,6 +36,8 @@ pub(crate) mod virtio_disk;
 pub(crate) mod vm;
 
 pub mod abi;
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 

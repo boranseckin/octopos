@@ -30,11 +30,6 @@ unsafe impl GlobalAlloc for Kmem {
     }
 }
 
-#[alloc_error_handler]
-fn handle_alloc_error(layout: Layout) -> ! {
-    panic!("alloc error: {:?}", layout)
-}
-
 /// Initialize kernel memory allocator.
 ///
 /// # Safety
