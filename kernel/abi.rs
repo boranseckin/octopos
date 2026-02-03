@@ -24,3 +24,17 @@ pub enum Syscall {
     Mkdir = 20,
     Close = 21,
 }
+
+/// File open flags
+pub struct OpenFlag;
+
+impl OpenFlag {
+    pub const READ_ONLY: usize = 0x000;
+    pub const WRITE_ONLY: usize = 0x001;
+    pub const READ_WRITE: usize = 0x002;
+    pub const CREATE: usize = 0x200;
+    pub const TRUNCATE: usize = 0x400;
+}
+
+/// Console device major number
+pub const CONSOLE: usize = 1;

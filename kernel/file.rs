@@ -1,6 +1,7 @@
 use core::mem::{self, MaybeUninit};
 use core::slice;
 
+use crate::abi::CONSOLE;
 use crate::console::Console;
 use crate::fs::{BSIZE, Inode};
 use crate::fs::{FsError, Stat};
@@ -289,13 +290,6 @@ impl File {
             },
         }
     }
-
-    /// Open file flags
-    pub const O_RDONLY: i32 = 0x000;
-    pub const O_WRONLY: i32 = 0x001;
-    pub const O_RDWR: i32 = 0x002;
-    pub const O_CREATE: i32 = 0x200;
-    pub const O_TRUNC: i32 = 0x400;
 }
 
 /// Device interface
@@ -304,9 +298,6 @@ pub struct Device {
     pub read: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
     pub write: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
 }
-
-/// Console device major number
-pub const CONSOLE: usize = 1;
 
 /// Device table
 pub static DEVICES: [Option<Device>; NDEV] = {

@@ -4,6 +4,7 @@ use core::slice;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::abi::OpenFlag;
 use crate::exec::exec;
 use crate::file::{FILE_TABLE, File, FileType};
 use crate::fs::{Directory, Inode, InodeType, Path};
@@ -204,7 +205,7 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize, SyscallError> {
 }
 
 pub fn sys_open(args: &SyscallArgs) -> Result<usize, SyscallError> {
-    let o_mode = args.get_int(1) as i32;
+    let o_mode = args.get_int(1) as usize;
     let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
     let path = Path::new(&path);
 
@@ -213,7 +214,7 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let (mut inode, mut inode_inner);
 
     // either create a new file or find the file from the path
-    if (o_mode & File::O_CREATE) != 0 {
+    if (o_mode & OpenFlag::CREATE) != 0 {
         (inode, inode_inner) = match log!(Inode::create(&path, InodeType::File, 0, 0)) {
             Ok(i) => i,
             Err(_) => {
@@ -231,7 +232,7 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SyscallError> {
         inode_inner = inode.lock();
 
         // if it is a directory, cannot open with write mode
-        if inode_inner.r#type == InodeType::Directory && o_mode != File::O_RDONLY {
+        if inode_inner.r#type == InodeType::Directory && o_mode != OpenFlag::READ_ONLY {
             inode.unlock_put(inode_inner);
             err!(SyscallError::File("sys_open directory write"));
         }
@@ -272,10 +273,11 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SyscallError> {
         };
         file_inner.offset = 0;
     }
-    file_inner.readable = (o_mode & File::O_WRONLY) == 0;
-    file_inner.writeable = (o_mode & File::O_WRONLY) != 0 || (o_mode & File::O_RDWR != 0);
+    file_inner.readable = (o_mode & OpenFlag::WRITE_ONLY) == 0;
+    file_inner.writeable =
+        (o_mode & OpenFlag::WRITE_ONLY) != 0 || (o_mode & OpenFlag::READ_WRITE != 0);
 
-    if (o_mode & File::O_TRUNC) != 0 && inode_inner.r#type == InodeType::File {
+    if (o_mode & OpenFlag::TRUNCATE) != 0 && inode_inner.r#type == InodeType::File {
         inode.trunc(&mut inode_inner);
     }
 

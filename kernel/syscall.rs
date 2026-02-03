@@ -183,6 +183,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
     let proc = current_proc();
     let args = SyscallArgs::new(trapframe, proc);
 
+    #[cfg(debug_assertions)]
     println!(
         "syscall {} called from proc {} ({})",
         trapframe.a7,
@@ -227,5 +228,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             )
         })
         .unwrap_or(usize::MAX);
+
+    #[cfg(debug_assertions)]
     println!("syscall {} -> {}", trapframe.a7, trapframe.a0);
 }

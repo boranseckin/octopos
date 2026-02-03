@@ -62,7 +62,6 @@ pub extern "C" fn main() -> ! {
             plic::init();
             plic::init_hart();
             buf::init();
-
             virtio_disk::init();
             proc::user_init();
         }
