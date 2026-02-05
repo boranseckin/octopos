@@ -11,14 +11,14 @@ default-run = "octopos"
 
 [lib]
 name = "kernel"
-path = "lib.rs"
+path = "src/lib.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
 name = "octopos"
-path = "main.rs"
+path = "src/main.rs"
 test = false
 doctest = false
 bench = false
