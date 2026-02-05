@@ -1,9 +1,11 @@
 // Disk Layout:
 // [ boot block | sb block | log | inode blocks | free bit map | data blocks ]
 
-use std::fs::File;
+use std::env::args;
+use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::os::unix::fs::FileExt;
-use std::{env::args, fs::OpenOptions};
+use std::path::Path;
 
 use bytemuck::{Pod, Zeroable};
 
@@ -74,7 +76,7 @@ struct InodeType(u16);
 impl InodeType {
     const _FREE: Self = Self(0);
     const DIRECTORY: Self = Self(1);
-    const _FILE: Self = Self(2);
+    const FILE: Self = Self(2);
     const _DEVICE: Self = Self(3);
 }
 
@@ -170,6 +172,32 @@ fn main() {
 
     de.name[..2].copy_from_slice(b"..");
     append_inode(&file, &mut free_block, rootino, bytemuck::bytes_of(&de));
+
+    for path in &args[2..] {
+        let name = Path::new(path).file_name().expect("invalid file name");
+        assert!(name.len() < DIRSIZE);
+
+        println!("adding file {path} as {name:?}");
+
+        let mut prog = File::open(path).expect("failed to open input file");
+        let inum = allocate_inode(&file, InodeType::FILE, &mut free_inode);
+
+        let de = Directory {
+            inum: inum as u16,
+            name: {
+                let mut n = [0u8; DIRSIZE];
+                n[..name.len()].copy_from_slice(name.to_str().unwrap().as_bytes());
+                n
+            },
+        };
+
+        append_inode(&file, &mut free_block, rootino, bytemuck::bytes_of(&de));
+
+        let mut prog_buf = Vec::new();
+        prog.read_to_end(&mut prog_buf)
+            .expect("failed to read input file");
+        append_inode(&file, &mut free_block, inum, &prog_buf);
+    }
 
     // fix size of root inode dir
     let mut din = read_inode(&file, rootino);
@@ -283,6 +311,7 @@ fn append_inode(file: &File, free_block: &mut u32, inum: u32, mut data: &[u8]) {
 
 fn allocate_block(file: &File, used: u32, bmapstart: u32) {
     println!("first {used} blocks have been allocated");
+
     assert!(used < BPB);
 
     let mut buf = [0u8; BSIZE as usize];
@@ -291,6 +320,7 @@ fn allocate_block(file: &File, used: u32, bmapstart: u32) {
         buf[i / 8] |= 0x1 << (i % 8);
     }
 
-    println!("write bitmap block at sector {bmapstart}");
     write_sector(file, bmapstart, &buf);
+
+    println!("wrote bitmap block at sector {bmapstart}");
 }
