@@ -372,7 +372,7 @@ impl PageTable {
             err!(VmError::InvalidAddress);
         }
 
-        let pte = self.walk(va, false)?;
+        let pte = try_log!(self.walk(va, false));
 
         if !pte.is_v() || !pte.is_u() {
             err!(VmError::InvalidPte);
@@ -444,7 +444,7 @@ impl PageTable {
     ) -> Result<(), VmError> {
         let mut n: usize;
         for i in (0..size).step_by(PGSIZE) {
-            let pa = self.walk_addr(va)?;
+            let pa = try_log!(self.walk_addr(va + i));
 
             if size - i < PGSIZE {
                 n = size - i;
@@ -453,7 +453,7 @@ impl PageTable {
             }
 
             let dst = unsafe { core::slice::from_raw_parts_mut(pa.as_usize() as *mut u8, n) };
-            match inode.read(inner, offset + i as u32, dst, false) {
+            match log!(inode.read(inner, offset + i as u32, dst, false)) {
                 Ok(read) if read as usize == dst.len() => {}
                 _ => err!(VmError::Fs),
             }

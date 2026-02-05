@@ -364,10 +364,7 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SyscallError> {
         // fetch pointer argv[i] from user space
         let mut uarg: usize = 0;
         let dst = unsafe {
-            slice::from_raw_parts_mut(
-                &mut uarg as *mut usize as *mut u8,
-                core::mem::size_of::<usize>(),
-            )
+            slice::from_raw_parts_mut(&mut uarg as *mut usize as *mut u8, size_of::<usize>())
         };
         if log!(
             data.pagetable_mut()
