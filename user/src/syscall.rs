@@ -1,7 +1,4 @@
-#![no_std]
-
 use core::arch::asm;
-use core::panic::PanicInfo;
 
 use kernel::abi::Syscall;
 
@@ -149,94 +146,7 @@ pub fn close(fd: usize) -> usize {
     syscall1(Syscall::Close, fd)
 }
 
-/// Converts a C-style string pointer to a Rust `&'static str`.
-///
-/// # Safety
-/// The caller must ensure that `ptr` is a valid pointer to a null-terminated UTF-8 string.
-pub unsafe fn str_from_cstr<'a>(ptr: *const u8) -> &'a str {
-    unsafe {
-        let mut len = 0;
-        while *ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len))
-    }
-}
-
-pub struct Stdout;
-
-impl core::fmt::Write for Stdout {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let len = write(1, s.as_bytes());
-        if len == s.len() {
-            Ok(())
-        } else {
-            Err(core::fmt::Error)
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {
-        <$crate::Stdout as core::fmt::Write>::write_fmt(
-            &mut $crate::Stdout,
-            format_args!($($arg)*),
-        ).unwrap();
-    };
-}
-
-#[macro_export]
-macro_rules! println {
-    () => {
-        $crate::print!("\n")
-    };
-
-    ($($arg:tt)*) => {
-        $crate::print!("{}\n", format_args!($($arg)*))
-    };
-}
-
-pub struct Stderr;
-
-impl core::fmt::Write for Stderr {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let len = write(2, s.as_bytes());
-        if len == s.len() {
-            Ok(())
-        } else {
-            Err(core::fmt::Error)
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! eprint {
-    ($($arg:tt)*) => {
-        <$crate::Stderr as core::fmt::Write>::write_fmt(
-            &mut $crate::Stderr,
-            format_args!($($arg)*),
-        ).unwrap();
-    };
-}
-
-#[macro_export]
-macro_rules! eprintln {
-    () => {
-        $crate::eprint!("\n")
-    };
-
-    ($($arg:tt)*) => {
-        $crate::eprint!("{}\n", format_args!($($arg)*))
-    };
-}
-
 pub fn exit_with_msg(msg: &str) -> ! {
     eprintln!("{}", msg);
     exit(1);
-}
-
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    exit(1)
 }

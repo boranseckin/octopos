@@ -1,16 +1,13 @@
 #![no_std]
 #![no_main]
 
-use kernel::abi::{CONSOLE, OpenFlag};
-
 use user::*;
 
 static SH: &[u8] = b"/sh\0";
 static SH_NAME: &[u8] = b"sh\0";
 
 #[unsafe(no_mangle)]
-#[unsafe(link_section = ".text.entry")]
-extern "C" fn _start() -> ! {
+fn main(_args: Args) {
     if open(b"console\0", OpenFlag::READ_WRITE) == usize::MAX {
         mknod(b"console\0", CONSOLE, 0);
         open(b"console\0", OpenFlag::READ_WRITE);

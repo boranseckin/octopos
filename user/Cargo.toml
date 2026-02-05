@@ -10,7 +10,7 @@ keywords = ["riscv", "xv6"]
 
 [lib]
 name = "user"
-path = "lib.rs"
+path = "src/lib.rs"
 test = false
 doctest = false
 bench = false
@@ -25,6 +25,13 @@ bench = false
 [[bin]]
 name = "sh"
 path = "bin/sh.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
+name = "cat"
+path = "bin/cat.rs"
 test = false
 doctest = false
 bench = false
