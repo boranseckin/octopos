@@ -17,9 +17,11 @@ pub const MAXARG: usize = 32;
 /// max # of blocks any FS op writes
 pub const MAXOPBLOCKS: usize = 10;
 /// max data blocks in on-disk log
-pub const LOGSIZE: usize = MAXOPBLOCKS * 3;
+pub const LOGBLOCKS: usize = MAXOPBLOCKS * 3;
 /// size of disk block cache
 pub const NBUF: usize = MAXOPBLOCKS * 3;
+/// size of file system in blocks
+pub const FSSIZE: usize = 2000;
 /// maximum file path name
 pub const MAXPATH: usize = 128;
 /// kernel stack pages per process (debug needs more stack to dump)

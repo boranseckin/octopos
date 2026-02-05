@@ -1,0 +1,18 @@
+[package]
+name = "mkfs"
+version = "0.1.0"
+edition = "2024"
+authors = ["Boran Seckin <boran@boranseckin.com>"]
+description = "mkfs tool for octopos"
+repository = "https://github.com/boranseckin/octopos"
+license = "MIT"
+keywords = ["riscv", "xv6"]
+
+[[bin]]
+name = "mkfs"
+test = false
+doctest = false
+bench = false
+
+[dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }

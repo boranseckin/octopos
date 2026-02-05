@@ -1,6 +1,4 @@
 [workspace]
-members = [
-  "kernel",
-  "user",
-]
+members = ["kernel", "user" ]
+exclude = ["mkfs"]
 resolver = "3"

@@ -162,6 +162,4 @@ impl Console {
 /// Must be called only once during kernel initialization.
 pub unsafe fn init() {
     unsafe { uart::init() };
-
-    // TODO: system calls
 }

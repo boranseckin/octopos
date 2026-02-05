@@ -19,7 +19,7 @@
 
 use crate::buf::{BCACHE, Buf};
 use crate::fs::{BSIZE, SuperBlock};
-use crate::param::{LOGSIZE, MAXOPBLOCKS};
+use crate::param::{LOGBLOCKS, MAXOPBLOCKS};
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
@@ -29,7 +29,7 @@ use crate::spinlock::SpinLock;
 #[derive(Debug)]
 pub struct LogHeader {
     n: u32,
-    blocks: [u32; LOGSIZE],
+    blocks: [u32; LOGBLOCKS],
 }
 
 #[derive(Debug)]
@@ -61,7 +61,7 @@ impl Log {
                     dev: 0,
                     header: LogHeader {
                         n: 0,
-                        blocks: [0; LOGSIZE],
+                        blocks: [0; LOGBLOCKS],
                     },
                 },
                 "log",
@@ -230,7 +230,8 @@ fn begin_op() {
     loop {
         if inner.committing {
             inner = proc::sleep(Channel::Log, inner);
-        } else if inner.header.n as usize + (inner.outstanding as usize + 1) * MAXOPBLOCKS > LOGSIZE
+        } else if inner.header.n as usize + (inner.outstanding as usize + 1) * MAXOPBLOCKS
+            > LOGBLOCKS
         {
             // this op might exhaust log space; wait for commit
             inner = proc::sleep(Channel::Log, inner);
@@ -308,7 +309,7 @@ fn commit() {
 pub fn write(buf: &Buf<'_>) {
     let mut inner = LOG.inner.lock();
 
-    if inner.header.n as usize >= LOGSIZE || inner.header.n >= inner.size - 1 {
+    if inner.header.n as usize >= LOGBLOCKS || inner.header.n >= inner.size - 1 {
         panic!("log_write: transaction too big");
     }
 
