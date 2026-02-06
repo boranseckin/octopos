@@ -10,16 +10,14 @@ fn cat(fd: usize) {
 
     while n > 0 && n != usize::MAX {
         if write(1, &buf[..n]) != n {
-            eprintln!("cat: write error");
-            exit(1);
+            exit_with_msg("cat: write error")
         }
 
         n = read(fd, &mut buf);
     }
 
     if n == usize::MAX {
-        eprintln!("cat: read error");
-        exit(1);
+        exit_with_msg("cat: read error")
     }
 }
 
@@ -27,16 +25,14 @@ fn cat(fd: usize) {
 fn main(args: Args) {
     if args.len() <= 1 {
         cat(0);
-        exit(0);
+        return;
     }
 
-    for i in 1..args.len() {
-        let path = args.get(i).expect("cat: invalid argument");
-        let fd = open(path, OpenFlag::READ_ONLY);
-        if fd == usize::MAX {
-            eprintln!("cat: cannot open file");
-            exit(1);
-        }
+    for path in args.args_as_str() {
+        let Ok(fd) = open(path, OpenFlag::READ_ONLY) else {
+            exit_with_msg("cat: cannot open file");
+        };
+
         cat(fd);
         close(fd);
     }

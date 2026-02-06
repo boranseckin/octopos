@@ -8,9 +8,9 @@ static SH_NAME: &[u8] = b"sh\0";
 
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
-    if open(b"console\0", OpenFlag::READ_WRITE) == usize::MAX {
+    if open("console", OpenFlag::READ_WRITE).is_err() {
         mknod(b"console\0", CONSOLE, 0);
-        open(b"console\0", OpenFlag::READ_WRITE);
+        open("console", OpenFlag::READ_WRITE).expect("init: cannot open console");
     }
 
     dup(0); // stdout

@@ -1,6 +1,12 @@
 use core::arch::asm;
 
-use kernel::abi::Syscall;
+use kernel::abi::{Stat, Syscall};
+
+#[derive(Debug, Clone, Copy)]
+pub enum SysError {
+    PathTooLong,
+    Open,
+}
 
 #[inline(always)]
 fn syscall0(syscall: Syscall) -> usize {
@@ -90,8 +96,8 @@ pub fn exec(path: &[u8], argv: &[*const u8]) -> usize {
     )
 }
 
-pub fn fstat(fd: usize, stat: *mut u8) -> usize {
-    syscall2(Syscall::Fstat, fd, stat as usize)
+pub fn fstat(fd: usize, stat: &mut Stat) -> usize {
+    syscall2(Syscall::Fstat, fd, stat as *mut Stat as usize)
 }
 
 pub fn chdir(path: &[u8]) -> usize {
@@ -118,8 +124,23 @@ pub fn uptime() -> usize {
     syscall0(Syscall::Uptime)
 }
 
-pub fn open(path: &[u8], flags: usize) -> usize {
+fn sys_open(path: &[u8], flags: usize) -> usize {
     syscall2(Syscall::Open, path.as_ptr() as usize, flags)
+}
+
+pub fn open(path: &str, flags: usize) -> Result<usize, SysError> {
+    let mut buf = [0u8; 128];
+    if path.len() >= buf.len() {
+        return Err(SysError::PathTooLong);
+    }
+
+    // null terminator is already included since array is zeroed
+    buf[..path.len()].copy_from_slice(path.as_bytes());
+
+    match sys_open(&buf, flags) {
+        usize::MAX => Err(SysError::Open),
+        fd => Ok(fd),
+    }
 }
 
 pub fn write(fd: usize, buf: &[u8]) -> usize {
