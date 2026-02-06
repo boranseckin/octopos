@@ -1,4 +1,6 @@
-use crate::syscall::write;
+use core::str;
+
+use crate::syscall::{read, write};
 
 pub struct Stdout;
 
@@ -66,4 +68,27 @@ macro_rules! eprintln {
     ($($arg:tt)*) => {
         $crate::eprint!("{}\n", format_args!($($arg)*))
     };
+}
+
+/// Reads a line from `stdin` into `buf`.
+/// Returns slice of what was read.
+pub fn gets(buf: &mut [u8]) -> Option<&str> {
+    let mut i = 0;
+
+    while i < buf.len() - 1 {
+        let mut c = [0u8; 1];
+        if read(0, &mut c) != 1 {
+            return None; // EOF or error
+        }
+
+        if c[0] == b'\n' || c[0] == b'\r' {
+            break;
+        }
+
+        buf[i] = c[0];
+        i += 1;
+    }
+
+    buf[i] = 0; // null terminate
+    str::from_utf8(&buf[..i]).ok()
 }
