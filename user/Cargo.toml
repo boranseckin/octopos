@@ -65,6 +65,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "ln"
+path = "bin/ln.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "kill"
 path = "bin/kill.rs"
 test = false

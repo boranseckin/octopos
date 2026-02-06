@@ -73,6 +73,11 @@ impl Args {
         }
     }
 
+    /// Gets the argument at the specified index as a `&str`.
+    pub fn get_str(&self, index: usize) -> Option<&'static str> {
+        self.get(index).and_then(|arg| str::from_utf8(arg).ok())
+    }
+
     /// Iterates args, including the program name.
     pub fn iter(&self) -> ArgsIter {
         ArgsIter {
