@@ -72,7 +72,7 @@ fn exec_cmd(cmd: &str, args: &[&str]) {
 fn main(_args: Args) {
     // ensure that three file dsescriptors are open
     loop {
-        let fd = open("console", OpenFlag::READ_ONLY).expect("sh: cannot open console");
+        let fd = open("console", OpenFlag::READ_WRITE).expect("sh: cannot open console");
         if fd >= 3 {
             close(fd);
             break;
@@ -83,6 +83,7 @@ fn main(_args: Args) {
 
     loop {
         write(2, b"$ ");
+
         let Some(line) = gets(&mut buf) else {
             break; // EOF
         };
