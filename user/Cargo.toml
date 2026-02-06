@@ -51,6 +51,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "rm"
+path = "bin/rm.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "mkdir"
 path = "bin/mkdir.rs"
 test = false
