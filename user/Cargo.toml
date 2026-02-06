@@ -36,5 +36,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "ls"
+path = "bin/ls.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { path = "../kernel" }
