@@ -646,6 +646,22 @@ impl ProcPool {
 
         Err(KernelError::OutOfProc)
     }
+
+    /// Prints a process listing to the console.
+    /// For debugging only, it does not lock to avoid creating more problems.
+    pub unsafe fn dump(&self) {
+        println!("");
+
+        for proc in &self.pool {
+            let proc = unsafe { &*proc.get() };
+            let inner = unsafe { proc.inner.get_mut_unchecked() };
+            if inner.state == ProcState::Unused {
+                continue;
+            }
+
+            println!("{} {:?} {}", inner.pid.0, inner.state, proc.data().name);
+        }
+    }
 }
 
 impl Default for ProcPool {
