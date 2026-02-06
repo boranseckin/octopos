@@ -9,10 +9,9 @@ fn main(args: Args) {
         exit_with_msg("usage: mkdir directory...");
     }
 
-    for dir in args.args() {
-        if mkdir(dir) == usize::MAX {
-            let name = unsafe { str_from_cstr(dir).expect("name to be utf8") };
-            eprintln!("mkdir: failed to create {}", name);
+    for dir in args.args_as_str() {
+        if let Err(e) = mkdir(dir) {
+            eprintln!("mkdir: {}: {}", dir, e);
             break;
         }
     }

@@ -13,6 +13,8 @@ fn main(args: Args) {
         let pid = pid.parse::<usize>().unwrap_or_else(|_| {
             exit_with_msg("kill: invalid pid");
         });
-        kill(pid);
+        if kill(pid).is_err() {
+            eprintln!("kill: failed to kill {}", pid);
+        }
     }
 }

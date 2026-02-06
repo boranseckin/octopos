@@ -1,16 +1,14 @@
 use core::str;
 
-use crate::syscall::{read, write};
+use crate::syscall::{read, write, Fd};
 
 pub struct Stdout;
 
 impl core::fmt::Write for Stdout {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let len = write(1, s.as_bytes());
-        if len == s.len() {
-            Ok(())
-        } else {
-            Err(core::fmt::Error)
+        match write(Fd::STDOUT, s.as_bytes()) {
+            Ok(len) if len == s.len() => Ok(()),
+            _ => Err(core::fmt::Error),
         }
     }
 }
@@ -40,11 +38,9 @@ pub struct Stderr;
 
 impl core::fmt::Write for Stderr {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let len = write(2, s.as_bytes());
-        if len == s.len() {
-            Ok(())
-        } else {
-            Err(core::fmt::Error)
+        match write(Fd::STDERR, s.as_bytes()) {
+            Ok(len) if len == s.len() => Ok(()),
+            _ => Err(core::fmt::Error),
         }
     }
 }
@@ -77,9 +73,9 @@ pub fn gets(buf: &mut [u8]) -> Option<&str> {
 
     while i < buf.len() - 1 {
         let mut c = [0u8; 1];
-        if read(0, &mut c) != 1 {
+        let Ok(1) = read(Fd::STDIN, &mut c) else {
             return None; // EOF or error
-        }
+        };
 
         if c[0] == b'\n' || c[0] == b'\r' {
             break;

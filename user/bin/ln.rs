@@ -12,7 +12,7 @@ fn main(args: Args) {
     let old = args.get_str(1).expect("old to be str");
     let new = args.get_str(2).expect("new to be str");
 
-    if link(old.as_bytes(), new.as_bytes()) == usize::MAX {
-        eprintln!("ln: failed to link {} to {}", old, new);
+    if let Err(e) = link(old, new) {
+        eprintln!("ln: {} -> {}: {}", old, new, e);
     }
 }

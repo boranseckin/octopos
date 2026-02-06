@@ -19,9 +19,9 @@ fn ls(path: &str) {
     };
 
     let mut stat = Stat::default();
-    if fstat(fd, &mut stat) == usize::MAX {
+    if fstat(fd, &mut stat).is_err() {
         eprintln!("ls: cannot stat {}", path);
-        close(fd);
+        let _ = close(fd);
         return;
     }
 
@@ -29,7 +29,7 @@ fn ls(path: &str) {
         InodeType::Free => {}
         InodeType::Directory => {
             let mut buf = [0u8; size_of::<Directory>()];
-            while read(fd, &mut buf) == buf.len() {
+            while read(fd, &mut buf) == Ok(buf.len()) {
                 let dir: &Directory = unsafe { &*(buf.as_ptr() as *const Directory) };
 
                 if dir.inum == 0 {
@@ -61,9 +61,9 @@ fn ls(path: &str) {
                 };
 
                 let mut file_stat = Stat::default();
-                if fstat(file_fd, &mut file_stat) == usize::MAX {
+                if fstat(file_fd, &mut file_stat).is_err() {
                     eprintln!("ls: cannot stat {}", file_name);
-                    close(file_fd);
+                    let _ = close(file_fd);
                     continue;
                 }
 
@@ -75,7 +75,7 @@ fn ls(path: &str) {
                     file_name,
                 );
 
-                close(file_fd);
+                let _ = close(file_fd);
             }
         }
         InodeType::File | InodeType::Device => {
@@ -89,7 +89,7 @@ fn ls(path: &str) {
         }
     }
 
-    close(fd);
+    let _ = close(fd);
 }
 
 #[unsafe(no_mangle)]

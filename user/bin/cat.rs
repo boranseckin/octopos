@@ -3,28 +3,26 @@
 
 use user::*;
 
-fn cat(fd: usize) {
+fn cat(fd: Fd) {
     let mut buf = [0u8; 512];
 
-    let mut n = read(fd, &mut buf);
-
-    while n > 0 && n != usize::MAX {
-        if write(1, &buf[..n]) != n {
-            exit_with_msg("cat: write error")
+    loop {
+        match read(fd, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if write(Fd::STDOUT, &buf[..n]) != Ok(n) {
+                    exit_with_msg("cat: write error");
+                }
+            }
+            Err(_) => exit_with_msg("cat: read error"),
         }
-
-        n = read(fd, &mut buf);
-    }
-
-    if n == usize::MAX {
-        exit_with_msg("cat: read error")
     }
 }
 
 #[unsafe(no_mangle)]
 fn main(args: Args) {
     if args.len() <= 1 {
-        cat(0);
+        cat(Fd::STDIN);
         return;
     }
 
@@ -34,6 +32,6 @@ fn main(args: Args) {
         };
 
         cat(fd);
-        close(fd);
+        let _ = close(fd);
     }
 }

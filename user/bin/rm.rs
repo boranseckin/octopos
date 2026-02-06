@@ -9,10 +9,9 @@ fn main(args: Args) {
         exit_with_msg("usage: rm files...");
     }
 
-    for file in args.args() {
-        if unlink(file) == usize::MAX {
-            let name = unsafe { str_from_cstr(file).expect("name to be utf8") };
-            eprintln!("rm: failed to remove {}", name);
+    for name in args.args_as_str() {
+        if let Err(e) = unlink(name) {
+            eprintln!("rm: {}: {}", name, e);
             break;
         }
     }
