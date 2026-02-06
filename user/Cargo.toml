@@ -64,5 +64,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "kill"
+path = "bin/kill.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { path = "../kernel" }
