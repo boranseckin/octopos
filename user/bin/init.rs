@@ -17,7 +17,6 @@ fn main(_args: Args) {
     dup(0); // stderr
 
     loop {
-        println!("init: starting");
         let pid = fork();
         if pid == usize::MAX {
             exit_with_msg("init: fork failed");
