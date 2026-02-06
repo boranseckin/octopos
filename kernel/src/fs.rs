@@ -798,7 +798,7 @@ impl Inode {
                     &inode,
                     &mut inode_inner,
                     "..",
-                    inode.inum as u16
+                    parent.inum as u16
                 ))
                 .is_err())
         {
