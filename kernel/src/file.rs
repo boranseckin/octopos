@@ -3,10 +3,8 @@ use core::slice;
 
 use alloc::sync::Arc;
 
-use crate::abi::CONSOLE;
 use crate::console::Console;
-use crate::fs::{BSIZE, Inode};
-use crate::fs::{FsError, Stat};
+use crate::fs::{BSIZE, FsError, Inode, Stat};
 use crate::log::Operation;
 use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
 use crate::pipe::Pipe;
@@ -181,7 +179,7 @@ impl File {
                 inode.unlock(inode_inner);
 
                 let src = unsafe {
-                    slice::from_raw_parts(&stat as *const _ as *const u8, mem::size_of::<Stat>())
+                    slice::from_raw_parts(&stat as *const _ as *const u8, size_of::<Stat>())
                 };
                 if log!(proc::copy_to_user(src, addr)).is_err() {
                     err!(FsError::Copy);
@@ -294,12 +292,26 @@ impl File {
     }
 }
 
+/// File open flags
+pub struct OpenFlag;
+
+impl OpenFlag {
+    pub const READ_ONLY: usize = 0x000;
+    pub const WRITE_ONLY: usize = 0x001;
+    pub const READ_WRITE: usize = 0x002;
+    pub const CREATE: usize = 0x200;
+    pub const TRUNCATE: usize = 0x400;
+}
+
 /// Device interface
 #[derive(Debug, Clone, Copy)]
 pub struct Device {
     pub read: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
     pub write: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
 }
+
+/// Console device major number
+pub const CONSOLE: usize = 1;
 
 /// Device table
 pub static DEVICES: [Option<Device>; NDEV] = {

@@ -177,8 +177,9 @@ impl Block {
 
 /// Inode types
 #[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InodeType {
+    #[default]
     Free = 0,
     Directory = 1,
     File = 2,
@@ -219,7 +220,7 @@ impl DiskInode {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Stat {
     pub dev: u32,
     pub ino: u32,
@@ -838,7 +839,7 @@ impl Inode {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Directory {
     pub inum: u16,
     pub name: [u8; DIRSIZE],
