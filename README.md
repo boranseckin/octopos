@@ -2,6 +2,27 @@
 
 xv6 for RISC-V in Rust
 
+## Usage
+
+### Prerequisites
+
+- Rust nightly toolchain (see `rust-toolchain.toml`)
+- `qemu-system-riscv64`
+
+### Build and Run
+
+```bash
+# Build kernel and user programs
+cargo build --release
+
+# Create and populate the filesystem image
+qemu-img create target/fs.img 2G
+./mkfs.sh
+
+# Run in QEMU
+cargo run --release
+```
+
 ## Current State
 
 The kernel boots, initializes all subsystems, and runs a userspace init process that forks and execs
