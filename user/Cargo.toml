@@ -30,6 +30,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "echo"
+path = "bin/echo.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "cat"
 path = "bin/cat.rs"
 test = false
