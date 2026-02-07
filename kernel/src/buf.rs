@@ -104,7 +104,11 @@ impl BCache {
                 i += 1;
             }
 
-            unsafe { mem::transmute(array) }
+            unsafe {
+                mem::transmute::<[MaybeUninit<SleepLock<BufData>>; 30], [SleepLock<BufData>; 30]>(
+                    array,
+                )
+            }
         };
 
         let meta = {
@@ -117,7 +121,7 @@ impl BCache {
                 i += 1;
             }
 
-            unsafe { mem::transmute(array) }
+            unsafe { mem::transmute::<[MaybeUninit<BufMeta>; 30], [BufMeta; 30]>(array) }
         };
 
         Self {
