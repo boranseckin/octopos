@@ -1,7 +1,6 @@
 use core::fmt::Display;
 
 use alloc::string::String;
-use alloc::vec::Vec;
 
 use crate::file::File;
 use crate::param::NOFILE;
@@ -118,25 +117,6 @@ impl<'a> SyscallArgs<'a> {
 
             result.push(buf[0] as char);
         }
-
-        Ok(result)
-    }
-
-    /// Fetches a byte array from user space.
-    pub fn fetch_bytes(&self, addr: VA, len: usize) -> Result<Vec<u8>, SyscallError> {
-        let (_proc, data) = current_proc_and_data_mut();
-
-        if addr >= data.size || addr + 64 > data.size {
-            err!(SyscallError::FetchArgument);
-        }
-
-        let mut result = Vec::with_capacity(len);
-        try_log!(
-            data.pagetable_mut()
-                .copy_from(addr, &mut result)
-                .inspect_err(|e| println!("copy_from failed: {:?}", e))
-                .map_err(|_| SyscallError::FetchArgument)
-        );
 
         Ok(result)
     }

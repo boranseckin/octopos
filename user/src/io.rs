@@ -1,6 +1,6 @@
 use core::str;
 
-use crate::syscall::{read, write, Fd};
+use crate::syscall::{Fd, read, write};
 
 pub struct Stdout;
 

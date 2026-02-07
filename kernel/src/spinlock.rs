@@ -94,16 +94,6 @@ impl<T> SpinLock<T> {
         }
     }
 
-    /// Consumes the mutex and returns the inner data.
-    pub fn into_inner(self) -> T {
-        self.data.into_inner()
-    }
-
-    /// Returns a mutable reference to the inner data.
-    pub fn get_mut(&mut self) -> &mut T {
-        self.data.get_mut()
-    }
-
     /// Returns a reference to the inner data from a shared reference to the mutex.
     ///
     /// # Safety

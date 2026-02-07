@@ -142,13 +142,6 @@ pub fn current_proc() -> &'static Proc {
     current_proc_opt().expect("no current process")
 }
 
-/// Returns a shared reference to this CPU's [`Proc`] and its underlying [`ProcData`].
-pub fn current_proc_and_data() -> (&'static Proc, &'static ProcData) {
-    let proc = current_proc();
-    let data = proc.data();
-    (proc, data)
-}
-
 /// Returns a shared reference to this CPU's [`Proc`] and exclusive reference to its underlying [`ProcData`].
 pub fn current_proc_and_data_mut() -> (&'static Proc, &'static mut ProcData) {
     let proc = current_proc();
@@ -265,14 +258,6 @@ pub struct TrapFrame {
     /* 264 */ pub t4: usize,
     /* 272 */ pub t5: usize,
     /* 280 */ pub t6: usize,
-}
-
-impl TrapFrame {
-    pub fn try_new() -> Result<Self, KernelError> {
-        let memory: Box<MaybeUninit<Self>> = try_log!(Box::try_new_zeroed());
-        let memory = unsafe { memory.assume_init() };
-        Ok(*memory)
-    }
 }
 
 /// Wrapper around usize to represent process IDs.

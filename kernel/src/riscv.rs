@@ -165,6 +165,7 @@ pub mod registers {
                 self.bits() & (1 << (usize::BITS as usize - 1)) != 0
             }
 
+            #[allow(dead_code)]
             pub fn is_exception(&self) -> bool {
                 !self.is_interrupt()
             }

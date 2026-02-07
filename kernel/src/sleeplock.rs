@@ -42,13 +42,6 @@ impl<T> SleepLock<T> {
         }
     }
 
-    /// Returns true if the current process is holding the lock.
-    pub fn holding(&self) -> bool {
-        let inner = self.inner.lock();
-
-        inner.locked && (inner.pid == Some(proc::current_proc().inner.lock().pid))
-    }
-
     /// Acquires the mutex without disabling interrupts or blocking the current thread.
     pub fn lock(&self) -> SleepLockGuard<'_, T> {
         let mut inner = self.inner.lock();
@@ -61,11 +54,6 @@ impl<T> SleepLock<T> {
         inner.pid = Some(proc::current_proc().inner.lock().pid);
 
         SleepLockGuard { lock: self }
-    }
-
-    /// Consumes the mutex and returns the inner data.
-    pub fn into_inner(self) -> T {
-        self.data.into_inner()
     }
 
     /// Returns a reference to the inner data from a shared reference to the mutex.

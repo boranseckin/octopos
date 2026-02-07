@@ -197,6 +197,7 @@ impl Operation {
     }
 }
 
+#[allow(unused)]
 impl<F: FnOnce()> Operation<F> {
     pub fn begin_with(on_err: F) -> Self {
         begin_op();

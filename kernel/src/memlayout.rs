@@ -33,8 +33,6 @@ pub const VIRTIO0_IRQ: usize = 1;
 // Platform-Level Interrupt Controller (PLIC)
 // https://github.com/riscv/riscv-plic-spec/blob/master/riscv-plic.adoc
 pub const PLIC: usize = 0x0C00_0000;
-pub const PLIC_PRIORITY: u32 = PLIC as u32;
-pub const PLIC_PENDING: u32 = (PLIC + 0x1000) as u32;
 pub const fn PLIC_SENABLE(hart: usize) -> u32 {
     (PLIC + 0x2080 + (hart * 0x100)) as u32
 }

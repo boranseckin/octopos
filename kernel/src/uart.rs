@@ -129,30 +129,6 @@ impl Uart {
 }
 
 impl SpinLock<Uart> {
-    /// Adds a character to the output buffer and tell UART to start sending if it isn't already.
-    ///
-    /// Blocks if the output buffer is full.
-    /// Because it may block, it can't be called from interrupts; only suitable for use by `write()`.
-    pub fn putc(&self, c: u8) {
-        let mut uart = self.lock();
-
-        if PRINTF.is_panicked() {
-            #[allow(clippy::empty_loop)]
-            loop {}
-        }
-
-        // buffer is full, sleep until there is space
-        while uart.tx_w == uart.tx_r + Wrapping(UART_TX_BUF_SIZE) {
-            uart = proc::sleep(Channel::Buffer(&uart.tx_r as *const _ as usize), uart)
-        }
-
-        let index = uart.tx_w.0 % UART_TX_BUF_SIZE;
-        *uart.tx_buf.get_mut(index).unwrap() = c;
-        uart.tx_w += 1;
-
-        uart.start();
-    }
-
     /// Reads one input character form UART.
     /// Returns None if there is no input waiting.
     pub fn getc(&self) -> Option<u8> {
