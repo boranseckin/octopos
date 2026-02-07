@@ -1,4 +1,4 @@
-use crate::proc::{self, Channel, PROC_POOL};
+use crate::proc::{self, Channel, PROC_TABLE};
 use crate::spinlock::SpinLock;
 use crate::syscall::SyscallError;
 use crate::uart;
@@ -130,7 +130,7 @@ impl Console {
             }
 
             c if c == ctrl(b'P') => {
-                unsafe { PROC_POOL.dump() };
+                unsafe { PROC_TABLE.dump() };
             }
 
             // normal character

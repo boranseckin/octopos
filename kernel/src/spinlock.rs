@@ -4,14 +4,14 @@ use core::ops::{Deref, DerefMut};
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::proc::{self, CPU, InterruptLock};
+use crate::proc::{self, Cpu, InterruptLock};
 
 /// A mutual exclusion primitive useful for protecting shared data.
 /// It uses a spinlock to achieve mutual exclusion.
 #[derive(Debug)]
 pub struct SpinLock<T> {
     name: &'static str,
-    cpu: AtomicPtr<CPU>,
+    cpu: AtomicPtr<Cpu>,
     data: UnsafeCell<T>,
 }
 

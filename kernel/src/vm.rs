@@ -6,7 +6,7 @@ use core::ptr::{self, NonNull};
 
 use crate::fs::{Inode, InodeInner};
 use crate::memlayout::{KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0};
-use crate::proc::{self, PROC_POOL};
+use crate::proc::{self, PROC_TABLE};
 use crate::riscv::{
     MAXVA, PGSIZE, PTE_R, PTE_U, PTE_V, PTE_W, PTE_X, pa_to_pte, pg_round_down, pg_round_up,
     pte_flags, pte_to_pa, px,
@@ -151,7 +151,7 @@ impl_ops!(PA, BitXor, bitxor, BitXorAssign, bitxor_assign);
 impl_cmp!(PA);
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct VA(usize);
 
 impl VA {
@@ -520,7 +520,7 @@ impl Kvm {
             PTE_R | PTE_X,
         );
 
-        unsafe { PROC_POOL.map_stacks(self) };
+        unsafe { PROC_TABLE.map_stacks(self) };
     }
 }
 

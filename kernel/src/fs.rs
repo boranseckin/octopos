@@ -281,7 +281,7 @@ impl InodeMeta {
 /// In-memory inode structure
 /// `id` is the index to the actual data in the inode table.
 /// Also holds device and inode numbers for quick lookup.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Inode {
     /// Inode table index
     pub id: usize,

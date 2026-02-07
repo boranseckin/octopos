@@ -14,8 +14,7 @@ use crate::fs::{self, Inode, Path};
 use crate::log::Operation;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
 use crate::param::{NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV};
-use crate::riscv::registers::tp;
-use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts};
+use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts, registers::tp};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::swtch::swtch;
 use crate::sync::OnceLock;
@@ -23,17 +22,19 @@ use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
 use crate::vm::{Kvm, PA, PageTable, Uvm, VA};
 
-pub static CPU_POOL: CPUPool = CPUPool::new();
+pub static CPU_TABLE: CpuTable = CpuTable::new();
+pub static PROC_TABLE: ProcTable = ProcTable::new();
+pub static INIT_PROC: OnceLock<&Proc> = OnceLock::new();
 
 /// Per-CPU state
-pub struct CPU {
+pub struct Cpu {
     pub proc: Option<&'static Proc>,
     pub context: Context,
     pub num_off: isize,
     pub interrupts_enabled: bool,
 }
 
-impl CPU {
+impl Cpu {
     const fn new() -> Self {
         Self {
             proc: None,
@@ -64,23 +65,23 @@ impl CPU {
     }
 }
 
-/// Pool of CPUs.
-pub struct CPUPool([UnsafeCell<CPU>; NCPU]);
+/// Table of CPUs
+pub struct CpuTable([UnsafeCell<Cpu>; NCPU]);
 
-impl CPUPool {
-    /// Creates a new CPU pool.
+impl CpuTable {
+    /// Creates a new CPU table.
     const fn new() -> Self {
         let mut array: [MaybeUninit<_>; NCPU] = unsafe { MaybeUninit::uninit().assume_init() };
         let mut i = 0;
         while i < NCPU {
-            array[i] = MaybeUninit::new(UnsafeCell::new(CPU::new()));
+            array[i] = MaybeUninit::new(UnsafeCell::new(Cpu::new()));
             i += 1;
         }
         unsafe { transmute(array) }
     }
 }
 
-unsafe impl Sync for CPUPool {}
+unsafe impl Sync for CpuTable {}
 
 /// A lock that releases the CPU lock when dropped.
 #[derive(Debug)]
@@ -106,11 +107,11 @@ pub unsafe fn current_id() -> usize {
 ///
 /// # Safety
 /// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
-pub unsafe fn current_cpu() -> &'static mut CPU {
+pub unsafe fn current_cpu() -> &'static mut Cpu {
     unsafe {
         assert!(!interrupts::get(), "mycpu interrupts enabled");
         let id = current_id();
-        &mut *CPU_POOL.0[id].get()
+        &mut *CPU_TABLE.0[id].get()
     }
 }
 
@@ -212,18 +213,15 @@ impl Context {
     }
 }
 
-// per-process data for the trap handling code in trampoline.S.
-// sits in a page by itself just under the trampoline page in the
-// user page table. not specially mapped in the kernel page table.
-// uservec in trampoline.S saves user registers in the trapframe,
-// then initializes registers from the trapframe's
-// kernel_sp, kernel_hartid, kernel_satp, and jumps to kernel_trap.
-// usertrapret() and userret in trampoline.S set up
-// the trapframe's kernel_*, restore user registers from the
-// trapframe, switch to the user page table, and enter user space.
-// the trapframe includes callee-saved user registers like s0-s11 because the
-// return-to-user path via usertrapret() doesn't return through
-// the entire kernel call stack.
+/// Per-process data for the trap handling code in `trampoline.rs`.
+/// Sits in a page by itself just under the trampoline page in the user page table. Not specially
+/// mapped in the kernel page table. `uservec` in `trampoline.rs` saves user registers in the
+/// trapframe, then initializes registers from the trapframe's kernel_sp, kernel_hartid,
+/// kernel_satp, and jumps to kernel_trap. `usertrapret()` and `userret()` in `trampoline.rs` set up
+/// the trapframe's `kernel_*`, restore user registers from the trapframe, switch to the user page
+/// table, and enter user space. the trapframe includes callee-saved user registers like s0-s11
+/// because the return-to-user path via usertrapret() doesn't return through the entire kernel call
+/// stack.
 #[derive(Debug, Clone)]
 #[repr(C, align(4096))]
 pub struct TrapFrame {
@@ -274,23 +272,27 @@ impl TrapFrame {
 }
 
 /// Wrapper around usize to represent process IDs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PID(usize);
+/// It must be created using `Pid::alloc()` to ensure uniqueness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Pid(usize);
 
-impl PID {
+impl Pid {
+    /// Allocates a new PID by incrementing a global counter.
     pub fn alloc() -> Self {
         static PID_COUNT: AtomicUsize = AtomicUsize::new(1);
-        PID(PID_COUNT.fetch_add(1, Ordering::Relaxed))
+        Pid(PID_COUNT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Creates a PID from a usize.
+    ///
+    /// # Safety
+    /// The caller must ensure the `Pid` has been already allocated via `Pid::alloc()`.
+    pub unsafe fn from_usize(value: usize) -> Self {
+        Pid(value)
     }
 }
 
-impl From<usize> for PID {
-    fn from(value: usize) -> Self {
-        PID(value)
-    }
-}
-
-impl core::ops::Deref for PID {
+impl core::ops::Deref for Pid {
     type Target = usize;
 
     fn deref(&self) -> &Self::Target {
@@ -298,13 +300,7 @@ impl core::ops::Deref for PID {
     }
 }
 
-impl core::ops::DerefMut for PID {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-/// Channel type for sleep/wakeup
+/// Channel type for `sleep`/`wakeup`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
     /// `proc.id` for `sleep()` / `wakeup()`.
@@ -326,15 +322,16 @@ pub enum Channel {
 /// Process control block
 #[derive(Debug)]
 pub struct Proc {
-    /// NOT PID. Used for indexing in PROC_POOL and matching parent-child relationships.
+    /// NOT `Pid`. Used for indexing in `PROC_TABLE` and matching parent-child relationships.
     pub id: usize,
     pub inner: SpinLock<ProcInner>,
     data: UnsafeCell<ProcData>,
 }
 
 /// The state of a process.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub enum ProcState {
+    #[default]
     Unused,
     Used,
     Sleeping,
@@ -346,7 +343,7 @@ pub enum ProcState {
 /// Public fields for Proc
 ///
 /// Process lock must be held when accessing these.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ProcInner {
     /// Process state
     pub state: ProcState,
@@ -357,7 +354,7 @@ pub struct ProcInner {
     /// Exit status to be returned to parent's wait
     pub xstate: isize,
     /// Process ID
-    pub pid: PID,
+    pub pid: Pid,
 }
 
 impl ProcInner {
@@ -367,13 +364,13 @@ impl ProcInner {
             channel: None,
             killed: false,
             xstate: 0,
-            pid: PID(0),
+            pid: Pid(0),
         }
     }
 }
 
 /// Private fields for Proc
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ProcData {
     /// Virtual address of kernel stack
     pub kstack: VA,
@@ -407,26 +404,27 @@ impl ProcData {
         }
     }
 
+    /// Returns a reference to the trapframe.
     pub fn trapframe(&self) -> &TrapFrame {
         self.trapframe.as_ref().unwrap()
     }
 
+    /// Returns a mutable reference to the trapframe.
     pub fn trapframe_mut(&mut self) -> &mut TrapFrame {
         self.trapframe.as_mut().unwrap()
     }
 
+    /// Returns a reference to the user page table.
     pub fn pagetable(&self) -> &Uvm {
         self.pagetable.as_ref().unwrap()
     }
 
+    /// Returns a mutable reference to the user page table.
     pub fn pagetable_mut(&mut self) -> &mut Uvm {
         self.pagetable.as_mut().unwrap()
     }
 
-    pub fn pagetable_and_trapframe(&self) -> (&Uvm, &TrapFrame) {
-        (self.pagetable(), self.trapframe())
-    }
-
+    /// Returns a mutable reference to both the pagetable and trapframe.
     pub fn pagetable_and_trapframe_mut(&mut self) -> (&mut Uvm, &mut TrapFrame) {
         (
             self.pagetable.as_mut().unwrap(),
@@ -522,7 +520,7 @@ impl Proc {
         }
 
         data.size = 0;
-        inner.pid = PID(0);
+        inner.pid = Pid(0);
         data.name.clear();
         inner.channel = None;
         inner.killed = false;
@@ -533,32 +531,29 @@ impl Proc {
 
 unsafe impl Sync for Proc {}
 
-pub static PROC_POOL: ProcPool = ProcPool::new();
-pub static INIT_PROC: OnceLock<&Proc> = OnceLock::new();
-
-/// Pool of processes.
-pub struct ProcPool {
-    pub pool: [UnsafeCell<Proc>; NPROC],
+/// Table of processes
+pub struct ProcTable {
+    pub table: [UnsafeCell<Proc>; NPROC],
     // instead of having a global mutex and individual parent fields on each proc, combining all
-    // parents to one vector guarded by a mutex is better.
+    // parents to one array guarded by a mutex is better.
     // parents[child.id] == Some(parent.id)
     pub parents: SpinLock<[Option<usize>; NPROC]>,
 }
 
-impl ProcPool {
+impl ProcTable {
     pub const fn new() -> Self {
-        let mut pool: [MaybeUninit<UnsafeCell<Proc>>; NPROC] =
+        let mut table: [MaybeUninit<UnsafeCell<Proc>>; NPROC] =
             unsafe { MaybeUninit::uninit().assume_init() };
 
         let mut i = 0;
         while i < NPROC {
-            pool[i] = MaybeUninit::new(UnsafeCell::new(Proc::new(i)));
+            table[i] = MaybeUninit::new(UnsafeCell::new(Proc::new(i)));
             i += 1;
         }
 
         Self {
-            pool: unsafe {
-                transmute::<[MaybeUninit<UnsafeCell<Proc>>; 64], [UnsafeCell<Proc>; 64]>(pool)
+            table: unsafe {
+                transmute::<[MaybeUninit<UnsafeCell<Proc>>; 64], [UnsafeCell<Proc>; 64]>(table)
             },
             parents: SpinLock::new([None; NPROC], "parents"),
         }
@@ -566,7 +561,7 @@ impl ProcPool {
 
     /// Returns a reference to the process at the given index.
     pub fn get(&self, index: usize) -> &Proc {
-        unsafe { &*self.pool[index].get() }
+        unsafe { &*self.table[index].get() }
     }
 
     /// Returns an iterator over all processes.
@@ -585,7 +580,7 @@ impl ProcPool {
     /// The caller must ensure that the kernel page table is not used concurrently.
     /// Which should be the case when initializing the page.
     pub unsafe fn map_stacks(&self, kvm: &mut Kvm) {
-        for (i, _) in self.pool.iter().enumerate() {
+        for (i, _) in self.table.iter().enumerate() {
             let base_va = VA::from(kstack(i));
 
             for page in 0..NKSTACK_PAGES {
@@ -607,7 +602,7 @@ impl ProcPool {
         for proc in self.iter() {
             let mut inner = proc.inner.lock();
             if inner.state == ProcState::Unused {
-                inner.pid = PID::alloc();
+                inner.pid = Pid::alloc();
                 inner.state = ProcState::Used;
 
                 // # Safety: proc is not yet runnable, so we are the only ones with access to it
@@ -652,7 +647,7 @@ impl ProcPool {
     pub unsafe fn dump(&self) {
         println!("");
 
-        for proc in &self.pool {
+        for proc in &self.table {
             let proc = unsafe { &*proc.get() };
             let inner = unsafe { proc.inner.get_mut_unchecked() };
             if inner.state == ProcState::Unused {
@@ -664,17 +659,11 @@ impl ProcPool {
     }
 }
 
-impl Default for ProcPool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-unsafe impl Sync for ProcPool {}
+unsafe impl Sync for ProcTable {}
 
 /// Sets up first user process.
 pub fn user_init() {
-    let (proc, mut inner) = log!(PROC_POOL.alloc()).unwrap();
+    let (proc, mut inner) = log!(PROC_TABLE.alloc()).unwrap();
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
 
     // # Safety: during initialization, we are the only ones with access to this proc
@@ -714,11 +703,11 @@ pub unsafe fn grow(n: isize) -> Result<usize, KernelError> {
 
 /// Crates a new process, copying the parent.
 /// Sets up the child kernel stack to return as if from `fork()` system call.
-pub fn fork() -> Result<PID, KernelError> {
+pub fn fork() -> Result<Pid, KernelError> {
     let (proc, data) = current_proc_and_data_mut();
 
     // allocate process
-    let (new_proc, new_inner) = try_log!(PROC_POOL.alloc());
+    let (new_proc, new_inner) = try_log!(PROC_TABLE.alloc());
     // # Safety: new_proc is not yet runnable, so we are the only ones with access to it
     let new_data = unsafe { new_proc.data_mut() };
 
@@ -755,7 +744,7 @@ pub fn fork() -> Result<PID, KernelError> {
     drop(new_inner);
 
     {
-        let mut parents = PROC_POOL.parents.lock();
+        let mut parents = PROC_TABLE.parents.lock();
         parents[new_proc.id] = Some(proc.id);
     }
 
@@ -766,7 +755,7 @@ pub fn fork() -> Result<PID, KernelError> {
     Ok(pid)
 }
 
-/// Pass `original`'s abandoned children to init.
+/// Passes `original`'s abandoned children to init.
 pub fn reparent(original: &Proc, parents: &mut SpinLockGuard<'_, [Option<usize>; NPROC]>) {
     for proc in parents.iter_mut() {
         if *proc == Some(original.id) {
@@ -796,7 +785,7 @@ pub fn exit(status: isize) -> ! {
         cwd.put();
     }
 
-    let mut parents = PROC_POOL.parents.lock();
+    let mut parents = PROC_TABLE.parents.lock();
 
     // give any children to init
     reparent(proc, &mut parents);
@@ -818,18 +807,18 @@ pub fn exit(status: isize) -> ! {
 }
 
 /// Waits for a child process to exit and return its pid or None if there are no children.
-pub fn wait(addr: VA) -> Option<PID> {
+pub fn wait(addr: VA) -> Option<Pid> {
     let current_proc = current_proc();
     let current_id = current_proc.id;
 
     // analogous to wait_lock
-    let mut parents = PROC_POOL.parents.lock();
+    let mut parents = PROC_TABLE.parents.lock();
 
     loop {
         let mut have_kids = false;
 
         // Scan through table looking for exited children.
-        for proc in PROC_POOL.iter() {
+        for proc in PROC_TABLE.iter() {
             if parents[proc.id] == Some(current_id) {
                 // make sure the child isn't still in exit() or swtch().
                 let inner = proc.inner.lock();
@@ -855,7 +844,7 @@ pub fn wait(addr: VA) -> Option<PID> {
 
                     proc.free(inner);
 
-                    return Some(PID(pid));
+                    return Some(Pid(pid));
                 }
             }
         }
@@ -894,7 +883,7 @@ pub unsafe fn scheduler() -> ! {
 
         let mut found = false;
 
-        for proc in PROC_POOL.iter() {
+        for proc in PROC_TABLE.iter() {
             let mut inner = proc.inner.lock();
 
             if inner.state == ProcState::Runnable {
@@ -1035,7 +1024,7 @@ pub fn wakeup(channel: Channel) {
     // scheduler's context.
     let current_proc = current_proc_opt();
 
-    for proc in PROC_POOL.iter() {
+    for proc in PROC_TABLE.iter() {
         if current_proc.is_some_and(|p| ptr::eq(p, proc)) {
             continue;
         }
@@ -1050,8 +1039,8 @@ pub fn wakeup(channel: Channel) {
 /// Kills the process with the given pid.
 ///
 /// The victim won't exit until it tries to return to user space (see `usertrap()` in trap.rs).
-pub fn kill(pid: PID) -> bool {
-    for proc in PROC_POOL.iter() {
+pub fn kill(pid: Pid) -> bool {
+    for proc in PROC_TABLE.iter() {
         let mut inner = proc.inner.lock();
         if inner.pid == pid {
             inner.killed = true;
@@ -1095,7 +1084,7 @@ pub fn copy_from_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
 /// # Safety
 /// Must be called only once during kernel initialization.
 pub unsafe fn init() {
-    for proc in PROC_POOL.iter() {
+    for proc in PROC_TABLE.iter() {
         // # Safety: we are during initialization, so we are the only ones with access to the proc
         unsafe { proc.data_mut() }.kstack = VA::from(kstack(proc.id));
     }

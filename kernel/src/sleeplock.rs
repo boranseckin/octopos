@@ -1,6 +1,6 @@
 use core::cell::UnsafeCell;
 
-use crate::proc::{self, Channel, PID};
+use crate::proc::{self, Channel, Pid};
 use crate::spinlock::SpinLock;
 
 /// Inner state of a SleepLock.
@@ -8,7 +8,7 @@ use crate::spinlock::SpinLock;
 #[derive(Debug)]
 pub struct SleepLockInner {
     locked: bool,
-    pid: Option<PID>,
+    pid: Option<Pid>,
 }
 
 /// A lock that causes the caller to sleep while waiting.

@@ -1,4 +1,4 @@
-use crate::proc::{self, Channel, PID, current_proc};
+use crate::proc::{self, Channel, Pid, current_proc};
 use crate::syscall::{SyscallArgs, SyscallError};
 use crate::trap::TICKS;
 
@@ -57,7 +57,8 @@ pub fn sys_sleep(args: &SyscallArgs) -> Result<usize, SyscallError> {
 pub fn sys_kill(args: &SyscallArgs) -> Result<usize, SyscallError> {
     let pid = args.get_int(0);
 
-    Ok(proc::kill(PID::from(pid as usize)).into())
+    // Safety: kernel will return an error if the process does not exist.
+    Ok(proc::kill(unsafe { Pid::from_usize(pid as usize) }).into())
 }
 
 pub fn sys_uptime(_args: &SyscallArgs) -> Result<usize, SyscallError> {
