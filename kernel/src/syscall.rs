@@ -3,38 +3,131 @@ use core::fmt::Display;
 use alloc::string::String;
 
 use crate::file::File;
+use crate::fs::FsError;
 use crate::param::NOFILE;
 use crate::proc::{Proc, TrapFrame, current_proc, current_proc_and_data_mut};
 use crate::sysfile::*;
 use crate::sysproc::*;
 use crate::vm::VA;
 
+/// Syscall error codes using POSIX-standard numeric values.
+///
+/// Kernel encodes `-(error_code as isize)` in the return register (`a0`).
+/// User space decodes negative values back into `SysError` variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyscallError {
-    Unknown(usize),
-    InvalidArgument(&'static str),
-    FetchArgument,
-    Proc(&'static str),
-    File(&'static str),
-    Console,
-    Read,
-    Write,
+#[repr(u16)]
+pub enum SysError {
+    NotPermitted = 1,
+    NoEntry = 2,
+    NoProcess = 3,
+    Interrupted = 4,
+    IoError = 5,
+    InvalidExecutable = 8,
+    BadDescriptor = 9,
+    NoChildren = 10,
+    ResourceUnavailable = 11,
+    OutOfMemory = 12,
+    BadAddress = 14,
+    AlreadyExists = 17,
+    CrossDeviceLink = 18,
+    NotDirectory = 20,
+    IsDirectory = 21,
+    InvalidArgument = 22,
+    FileTableFull = 23,
+    TooManyFiles = 24,
+    NoSpace = 28,
+    TooManyLinks = 31,
+    BrokenPipe = 32,
+    NameTooLong = 36,
+    NotImplemented = 38,
+    NotEmpty = 39,
 }
 
-impl Display for SyscallError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            SyscallError::Unknown(i) => write!(f, "unknown syscall {i}"),
-            SyscallError::InvalidArgument(s) => write!(f, "invalid argument {s}"),
-            SyscallError::FetchArgument => write!(f, "fetch argument"),
-            SyscallError::Proc(s) => write!(f, "{s}"),
-            SyscallError::File(s) => write!(f, "{s}"),
-            SyscallError::Console => write!(f, "console error"),
-            SyscallError::Read => write!(f, "read error"),
-            SyscallError::Write => write!(f, "write error"),
+impl SysError {
+    /// Returns the error code for this error.
+    pub fn as_code(self) -> u16 {
+        self as u16
+    }
+
+    /// Decodes an error code into a `SysError` variant.
+    pub fn from_code(code: u16) -> Self {
+        match code {
+            1 => Self::NotPermitted,
+            2 => Self::NoEntry,
+            3 => Self::NoProcess,
+            4 => Self::Interrupted,
+            5 => Self::IoError,
+            8 => Self::InvalidExecutable,
+            9 => Self::BadDescriptor,
+            10 => Self::NoChildren,
+            11 => Self::ResourceUnavailable,
+            12 => Self::OutOfMemory,
+            14 => Self::BadAddress,
+            17 => Self::AlreadyExists,
+            18 => Self::CrossDeviceLink,
+            20 => Self::NotDirectory,
+            21 => Self::IsDirectory,
+            22 => Self::InvalidArgument,
+            23 => Self::FileTableFull,
+            24 => Self::TooManyFiles,
+            28 => Self::NoSpace,
+            31 => Self::TooManyLinks,
+            32 => Self::BrokenPipe,
+            36 => Self::NameTooLong,
+            38 => Self::NotImplemented,
+            39 => Self::NotEmpty,
+            _ => Self::InvalidArgument,
         }
     }
 }
+
+impl Display for SysError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SysError::NotPermitted => write!(f, "operation not permitted"),
+            SysError::NoEntry => write!(f, "no such file or directory"),
+            SysError::NoProcess => write!(f, "no such process"),
+            SysError::Interrupted => write!(f, "interrupted"),
+            SysError::IoError => write!(f, "input/output error"),
+            SysError::InvalidExecutable => write!(f, "exec format error"),
+            SysError::BadDescriptor => write!(f, "bad file descriptor"),
+            SysError::NoChildren => write!(f, "no child processes"),
+            SysError::ResourceUnavailable => write!(f, "resource temporarily unavailable"),
+            SysError::OutOfMemory => write!(f, "cannot allocate memory"),
+            SysError::BadAddress => write!(f, "bad address"),
+            SysError::AlreadyExists => write!(f, "file exists"),
+            SysError::CrossDeviceLink => write!(f, "cross-device link"),
+            SysError::NotDirectory => write!(f, "not a directory"),
+            SysError::IsDirectory => write!(f, "is a directory"),
+            SysError::InvalidArgument => write!(f, "invalid argument"),
+            SysError::FileTableFull => write!(f, "too many open files in system"),
+            SysError::TooManyFiles => write!(f, "too many open files"),
+            SysError::NoSpace => write!(f, "no space left on device"),
+            SysError::TooManyLinks => write!(f, "too many links"),
+            SysError::BrokenPipe => write!(f, "broken pipe"),
+            SysError::NameTooLong => write!(f, "file name too long"),
+            SysError::NotImplemented => write!(f, "function not implemented"),
+            SysError::NotEmpty => write!(f, "directory not empty"),
+        }
+    }
+}
+
+impl From<FsError> for SysError {
+    fn from(e: FsError) -> Self {
+        match e {
+            FsError::OutOfBlock | FsError::OutOfInode => SysError::NoSpace,
+            FsError::OutOfFile | FsError::OutOfPipe => SysError::FileTableFull,
+            FsError::OutOfRange => SysError::InvalidArgument,
+            FsError::Read | FsError::Write => SysError::IoError,
+            FsError::Create => SysError::NoSpace,
+            FsError::Link => SysError::AlreadyExists,
+            FsError::Resolve => SysError::NoEntry,
+            FsError::Type => SysError::InvalidArgument,
+            FsError::Copy => SysError::BadAddress,
+        }
+    }
+}
+
 /// Wrapper for extracting typed syscall arguments from trapframe.
 pub struct SyscallArgs<'a> {
     trapframe: &'a TrapFrame,
@@ -78,26 +171,26 @@ impl<'a> SyscallArgs<'a> {
 
     /// Fetch the nth word-sized system call argument as a file descriptor and return both the
     /// descriptor and the corresponding `File`.
-    pub fn get_file(&self, index: usize) -> Result<(usize, File), SyscallError> {
+    pub fn get_file(&self, index: usize) -> Result<(usize, File), SysError> {
         let fd: usize = try_log!(
             self.get_int(index)
                 .try_into()
-                .or(Err(SyscallError::InvalidArgument("fd conversion failed")))
+                .or(Err(SysError::BadDescriptor))
         );
 
         if fd >= NOFILE {
-            err!(SyscallError::InvalidArgument("fd out of range"));
+            err!(SysError::BadDescriptor);
         }
 
         if let Some(file) = &current_proc().data().open_files[fd] {
             return Ok((fd, file.clone()));
         }
 
-        err!(SyscallError::InvalidArgument("fd not open"));
+        err!(SysError::BadDescriptor);
     }
 
     /// Fetches a null-terminated string from user space.
-    pub fn fetch_string(&self, addr: VA, max: usize) -> Result<String, SyscallError> {
+    pub fn fetch_string(&self, addr: VA, max: usize) -> Result<String, SysError> {
         let (_proc, data) = current_proc_and_data_mut();
 
         let mut result = String::with_capacity(max);
@@ -107,8 +200,7 @@ impl<'a> SyscallArgs<'a> {
             try_log!(
                 data.pagetable_mut()
                     .copy_from(VA::from(addr.as_usize() + i), &mut buf)
-                    .inspect_err(|e| println!("copy_from failed: {:?}", e))
-                    .map_err(|_| SyscallError::FetchArgument)
+                    .map_err(|_| SysError::BadAddress)
             );
 
             if buf[0] == 0 {
@@ -150,7 +242,7 @@ pub enum Syscall {
 }
 
 impl TryFrom<usize> for Syscall {
-    type Error = SyscallError;
+    type Error = SysError;
 
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         match value {
@@ -175,7 +267,7 @@ impl TryFrom<usize> for Syscall {
             19 => Ok(Syscall::Link),
             20 => Ok(Syscall::Mkdir),
             21 => Ok(Syscall::Close),
-            _ => Err(SyscallError::Unknown(value)),
+            _ => Err(SysError::NotImplemented),
         }
     }
 }
@@ -224,16 +316,19 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
         Err(e) => Err(e),
     };
 
-    trapframe.a0 = log!(result)
-        .inspect_err(|e| {
+    trapframe.a0 = match log!(result) {
+        Ok(v) => v,
+        Err(error) => {
+            #[cfg(debug_assertions)]
             println!(
                 "! syscall error ({}) from proc {} ({})",
-                e,
+                error,
                 *proc.inner.lock().pid,
                 proc.data().name,
-            )
-        })
-        .unwrap_or(usize::MAX);
+            );
+            (-(error.as_code() as isize)) as usize
+        }
+    };
 
     #[cfg(debug_assertions)]
     println!("syscall {} -> {}", trapframe.a7, trapframe.a0);

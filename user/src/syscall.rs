@@ -4,8 +4,8 @@ pub mod raw {
     use kernel::abi::{Stat, Syscall};
 
     #[inline(always)]
-    fn syscall0(syscall: Syscall) -> usize {
-        let ret: usize;
+    fn syscall0(syscall: Syscall) -> isize {
+        let ret: isize;
         unsafe {
             asm!(
                 "ecall",
@@ -17,26 +17,26 @@ pub mod raw {
     }
 
     #[inline(always)]
-    fn syscall1(syscall: Syscall, a0: usize) -> usize {
-        let ret: usize;
+    fn syscall1(syscall: Syscall, a0: usize) -> isize {
+        let ret: isize;
         unsafe {
             asm!(
                 "ecall",
                 in("a7") syscall as usize,
-                inlateout("a0") a0 => ret,
+                inlateout("a0") a0 as isize => ret,
             );
         }
         ret
     }
 
     #[inline(always)]
-    fn syscall2(syscall: Syscall, a0: usize, a1: usize) -> usize {
-        let ret: usize;
+    fn syscall2(syscall: Syscall, a0: usize, a1: usize) -> isize {
+        let ret: isize;
         unsafe {
             asm!(
                 "ecall",
                 in("a7") syscall as usize,
-                inlateout("a0") a0 => ret,
+                inlateout("a0") a0 as isize => ret,
                 in("a1") a1,
             );
         }
@@ -44,13 +44,13 @@ pub mod raw {
     }
 
     #[inline(always)]
-    fn syscall3(syscall: Syscall, a0: usize, a1: usize, a2: usize) -> usize {
-        let ret: usize;
+    fn syscall3(syscall: Syscall, a0: usize, a1: usize, a2: usize) -> isize {
+        let ret: isize;
         unsafe {
             asm!(
                 "ecall",
                 in("a7") syscall as usize,
-                inlateout("a0") a0 => ret,
+                inlateout("a0") a0 as isize => ret,
                 in("a1") a1,
                 in("a2") a2,
             );
@@ -58,7 +58,7 @@ pub mod raw {
         ret
     }
 
-    pub fn fork() -> usize {
+    pub fn fork() -> isize {
         syscall0(Syscall::Fork)
     }
 
@@ -67,105 +67,84 @@ pub mod raw {
         unreachable!();
     }
 
-    pub fn wait(status: *mut usize) -> usize {
+    pub fn wait(status: *mut usize) -> isize {
         syscall1(Syscall::Wait, status as usize)
     }
 
-    pub fn pipe(fds: *mut usize) -> usize {
+    pub fn pipe(fds: *mut usize) -> isize {
         syscall1(Syscall::Pipe, fds as usize)
     }
 
-    pub fn read(fd: usize, buf: *mut u8, len: usize) -> usize {
+    pub fn read(fd: usize, buf: *mut u8, len: usize) -> isize {
         syscall3(Syscall::Read, fd, buf as usize, len)
     }
 
-    pub fn write(fd: usize, buf: *const u8, len: usize) -> usize {
+    pub fn write(fd: usize, buf: *const u8, len: usize) -> isize {
         syscall3(Syscall::Write, fd, buf as usize, len)
     }
 
-    pub fn kill(pid: usize) -> usize {
+    pub fn kill(pid: usize) -> isize {
         syscall1(Syscall::Kill, pid)
     }
 
-    pub fn exec(path: *const u8, argv: *const *const u8) -> usize {
+    pub fn exec(path: *const u8, argv: *const *const u8) -> isize {
         syscall2(Syscall::Exec, path as usize, argv as usize)
     }
 
-    pub fn fstat(fd: usize, stat: *mut Stat) -> usize {
+    pub fn fstat(fd: usize, stat: *mut Stat) -> isize {
         syscall2(Syscall::Fstat, fd, stat as usize)
     }
 
-    pub fn chdir(path: *const u8) -> usize {
+    pub fn chdir(path: *const u8) -> isize {
         syscall1(Syscall::Chdir, path as usize)
     }
 
-    pub fn dup(fd: usize) -> usize {
+    pub fn dup(fd: usize) -> isize {
         syscall1(Syscall::Dup, fd)
     }
 
-    pub fn getpid() -> usize {
+    pub fn getpid() -> isize {
         syscall0(Syscall::Getpid)
     }
 
-    pub fn sbrk(n: usize) -> usize {
+    pub fn sbrk(n: usize) -> isize {
         syscall1(Syscall::Sbrk, n)
     }
 
-    pub fn sleep(ticks: usize) -> usize {
+    pub fn sleep(ticks: usize) -> isize {
         syscall1(Syscall::Sleep, ticks)
     }
 
-    pub fn uptime() -> usize {
+    pub fn uptime() -> isize {
         syscall0(Syscall::Uptime)
     }
 
-    pub fn open(path: *const u8, flags: usize) -> usize {
+    pub fn open(path: *const u8, flags: usize) -> isize {
         syscall2(Syscall::Open, path as usize, flags)
     }
 
-    pub fn close(fd: usize) -> usize {
+    pub fn close(fd: usize) -> isize {
         syscall1(Syscall::Close, fd)
     }
 
-    pub fn mknod(path: *const u8, major: usize, minor: usize) -> usize {
+    pub fn mknod(path: *const u8, major: usize, minor: usize) -> isize {
         syscall3(Syscall::Mknod, path as usize, major, minor)
     }
 
-    pub fn unlink(path: *const u8) -> usize {
+    pub fn unlink(path: *const u8) -> isize {
         syscall1(Syscall::Unlink, path as usize)
     }
 
-    pub fn link(old: *const u8, new: *const u8) -> usize {
+    pub fn link(old: *const u8, new: *const u8) -> isize {
         syscall2(Syscall::Link, old as usize, new as usize)
     }
 
-    pub fn mkdir(path: *const u8) -> usize {
+    pub fn mkdir(path: *const u8) -> isize {
         syscall1(Syscall::Mkdir, path as usize)
     }
 }
 
-use kernel::abi::{MAXPATH, Stat};
-
-/// Error type for syscall wrappers.
-///
-/// The xv6 kernel only returns -1 (mapped to `usize::MAX`) on failure, so we cannot
-/// distinguish specific kernel errors. Callers add their own context in messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SysError {
-    /// Path exceeds `MAXPATH` or contains embedded null bytes.
-    InvalidPath,
-    /// The kernel returned an error.
-    Kernel,
-}
-
-impl core::fmt::Display for SysError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            SysError::InvalidPath => write!(f, "invalid path"),
-            SysError::Kernel => write!(f, "kernel error"),
-        }
-    }
-}
+use kernel::abi::{MAXPATH, Stat, SysError};
 
 /// A file descriptor returned by or passed to syscalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +177,7 @@ struct Path<'a>(&'a str);
 impl<'a> Path<'a> {
     fn new(s: &'a str) -> Result<Self, SysError> {
         if s.len() >= MAXPATH || s.bytes().any(|b| b == 0) {
-            return Err(SysError::InvalidPath);
+            return Err(SysError::NameTooLong);
         }
         Ok(Self(s))
     }
@@ -211,19 +190,19 @@ impl<'a> Path<'a> {
     }
 }
 
-/// Converts a raw syscall return into `Result`, treating `usize::MAX` as error.
+/// Converts a raw signed syscall return into `Result`, treating negative values as error codes.
 #[inline(always)]
-fn check(ret: usize) -> Result<usize, SysError> {
-    if ret == usize::MAX {
-        Err(SysError::Kernel)
+fn check(ret: isize) -> Result<usize, SysError> {
+    if ret >= 0 {
+        Ok(ret as usize)
     } else {
-        Ok(ret)
+        Err(SysError::from_code((-ret) as u16))
     }
 }
 
 /// Converts a raw syscall return into `Result<(), SysError>`.
 #[inline(always)]
-fn check_unit(ret: usize) -> Result<(), SysError> {
+fn check_unit(ret: isize) -> Result<(), SysError> {
     check(ret).map(|_| ())
 }
 
@@ -294,8 +273,9 @@ pub fn exec(path: &str, argv: &[&str]) -> SysError {
     }
     // ptrs is already null-terminated (initialized to null)
 
-    raw::exec(cpath.as_ptr(), ptrs.as_ptr());
-    SysError::Kernel
+    let ret = raw::exec(cpath.as_ptr(), ptrs.as_ptr());
+    // exec only returns on failure
+    SysError::from_code((-ret) as u16)
 }
 
 pub fn fstat(fd: Fd, stat: &mut Stat) -> Result<(), SysError> {
@@ -312,7 +292,7 @@ pub fn dup(fd: Fd) -> Result<Fd, SysError> {
 }
 
 pub fn getpid() -> usize {
-    raw::getpid()
+    raw::getpid() as usize
 }
 
 pub fn sbrk(n: isize) -> Result<usize, SysError> {
@@ -324,7 +304,7 @@ pub fn sleep(ticks: usize) -> Result<(), SysError> {
 }
 
 pub fn uptime() -> usize {
-    raw::uptime()
+    raw::uptime() as usize
 }
 
 pub fn open(path: &str, flags: usize) -> Result<Fd, SysError> {

@@ -1,6 +1,6 @@
 use crate::proc::{self, Channel, PROC_TABLE};
 use crate::spinlock::SpinLock;
-use crate::syscall::SyscallError;
+use crate::syscall::SysError;
 use crate::uart;
 use crate::vm::VA;
 
@@ -48,7 +48,7 @@ impl Console {
 
     /// User `write()`s to the console are handled here.
     /// Currently only handles user addresses.
-    pub fn write(src: VA, len: usize) -> Result<usize, SyscallError> {
+    pub fn write(src: VA, len: usize) -> Result<usize, SysError> {
         // TODO: avoid byte to byte copy_in and use chunks
         for i in 0..len {
             let src = VA::from(src.as_usize() + i);
@@ -65,7 +65,7 @@ impl Console {
 
     /// User `read()`s from the console are handled here.
     /// Currently only handles user addresses.
-    pub fn read(dst: VA, mut len: usize) -> Result<usize, SyscallError> {
+    pub fn read(dst: VA, mut len: usize) -> Result<usize, SysError> {
         let mut console = CONSOLE.lock();
 
         let mut dst = dst;
@@ -75,7 +75,7 @@ impl Console {
             // wait until interrupt handler has put some input into `buf`.
             while console.r == console.w {
                 if proc::current_proc().is_killed() {
-                    return Err(SyscallError::Console);
+                    return Err(SysError::Interrupted);
                 }
 
                 console = proc::sleep(Channel::Buffer(&console.r as *const _ as usize), console);

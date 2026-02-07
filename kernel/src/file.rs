@@ -11,7 +11,7 @@ use crate::pipe::Pipe;
 use crate::proc;
 use crate::sleeplock::SleepLock;
 use crate::spinlock::SpinLock;
-use crate::syscall::SyscallError;
+use crate::syscall::SysError;
 use crate::vm::VA;
 
 #[derive(Debug, Clone)]
@@ -169,7 +169,7 @@ impl File {
     }
 
     /// Gets metadata about file.
-    pub fn stat(&self, addr: VA) -> Result<(), FsError> {
+    pub fn stat(&self, addr: VA) -> Result<(), SysError> {
         let file_inner = FILE_TABLE.inner[self.id].lock();
 
         match &file_inner.r#type {
@@ -182,21 +182,21 @@ impl File {
                     slice::from_raw_parts(&stat as *const _ as *const u8, size_of::<Stat>())
                 };
                 if log!(proc::copy_to_user(src, addr)).is_err() {
-                    err!(FsError::Copy);
+                    err!(SysError::BadAddress);
                 }
 
                 Ok(())
             }
-            _ => Err(FsError::Type),
+            _ => Err(SysError::BadDescriptor),
         }
     }
 
     /// Reads from file.
-    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SyscallError> {
+    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SysError> {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.readable {
-            err!(SyscallError::Read);
+            err!(SysError::BadDescriptor);
         }
 
         match &mut file_inner.r#type {
@@ -220,23 +220,23 @@ impl File {
                 if let Ok(read) = read {
                     Ok(read as usize)
                 } else {
-                    err!(SyscallError::Read);
+                    err!(SysError::IoError);
                 }
             }
 
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.read)(addr, n),
-                None => err!(SyscallError::Read),
+                None => err!(SysError::NoEntry),
             },
         }
     }
 
     /// Writes to a file.
-    pub fn write(&mut self, addr: VA, n: usize) -> Result<usize, SyscallError> {
+    pub fn write(&mut self, addr: VA, n: usize) -> Result<usize, SysError> {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.writeable {
-            err!(SyscallError::Write);
+            err!(SysError::BadDescriptor);
         }
 
         match &mut file_inner.r#type {
@@ -280,13 +280,13 @@ impl File {
                 if i == n {
                     Ok(n)
                 } else {
-                    err!(SyscallError::Write);
+                    err!(SysError::IoError);
                 }
             }
 
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
                 Some(dev) => (dev.write)(addr, n),
-                None => err!(SyscallError::Write),
+                None => err!(SysError::NoEntry),
             },
         }
     }
@@ -306,8 +306,8 @@ impl OpenFlag {
 /// Device interface
 #[derive(Debug, Clone, Copy)]
 pub struct Device {
-    pub read: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
-    pub write: fn(addr: VA, n: usize) -> Result<usize, SyscallError>,
+    pub read: fn(addr: VA, n: usize) -> Result<usize, SysError>,
+    pub write: fn(addr: VA, n: usize) -> Result<usize, SysError>,
 }
 
 /// Console device major number

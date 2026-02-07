@@ -4,7 +4,7 @@ use crate::file::{FILE_TABLE, File, FileType};
 use crate::fs::FsError;
 use crate::proc::{self, Channel, current_proc_and_data_mut};
 use crate::spinlock::SpinLock;
-use crate::syscall::SyscallError;
+use crate::syscall::SysError;
 use crate::vm::VA;
 
 const PIPESIZE: usize = 512;
@@ -104,15 +104,18 @@ impl Pipe {
     }
 
     /// Writes to the pipe from the user space
-    pub fn write(&self, addr: VA, n: usize) -> Result<usize, SyscallError> {
+    pub fn write(&self, addr: VA, n: usize) -> Result<usize, SysError> {
         let (proc, data) = current_proc_and_data_mut();
 
         let mut inner = self.inner.lock();
 
         let mut i = 0;
         while i < n {
-            if !inner.read_open || proc.is_killed() {
-                err!(SyscallError::Write);
+            if proc.is_killed() {
+                err!(SysError::Interrupted);
+            }
+            if !inner.read_open {
+                err!(SysError::BrokenPipe);
             }
 
             if inner.num_write == inner.num_read + PIPESIZE {
@@ -137,7 +140,7 @@ impl Pipe {
     }
 
     /// Reads from the pipe into the user space
-    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SyscallError> {
+    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SysError> {
         let (proc, data) = current_proc_and_data_mut();
 
         let mut inner = self.inner.lock();
@@ -146,7 +149,7 @@ impl Pipe {
 
         while inner.num_read == inner.num_write && inner.write_open {
             if proc.is_killed() {
-                err!(SyscallError::Read);
+                err!(SysError::Interrupted);
             }
 
             inner = proc::sleep(Channel::PipeRead(self.pipe_id()), inner);
@@ -159,7 +162,7 @@ impl Pipe {
 
             let ch = inner.data[inner.num_read % PIPESIZE];
             if log!(data.pagetable_mut().copy_to(&[ch], addr + i)).is_err() {
-                err!(SyscallError::Read);
+                err!(SysError::BadAddress);
             }
 
             inner.num_read += 1;
