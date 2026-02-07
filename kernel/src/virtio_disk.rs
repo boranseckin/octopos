@@ -479,5 +479,3 @@ pub unsafe fn init() {
         disk.write(VIRTIO_MMIO_STATUS, status);
     }
 }
-
-unsafe impl Send for Disk {}

@@ -10,10 +10,14 @@ unsafe extern "C" {
     static end: [u8; 0];
 }
 
+/// Kernel memory allocator
 #[global_allocator]
 static KMEM: Kmem = Kmem(SpinLock::new(None, "kmem"));
 
 struct Kmem(SpinLock<Option<BuddyAlloc>>);
+
+/// # Safety
+/// Even though `BuddyAlloc` is not thread safe, `Kmem` is thread safe because it is guarded by a `SpinLock`.
 unsafe impl Sync for Kmem {}
 
 unsafe impl GlobalAlloc for Kmem {

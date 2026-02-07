@@ -77,5 +77,14 @@ impl<T> Default for OnceLock<T> {
     }
 }
 
+/// # Safety
+/// The lock can give `&T` from multiple threads, therefore `T` must be `Sync` to ensure that it is
+/// safe to share the inner data across threads.
+/// The lock can also call `initialize()` and `get_or_init()`, which may initialize the inner data.
+/// Therefore, `T` must be `Send` to ensure that it is safe to send the inner data across threads.
 unsafe impl<T: Sync + Send> Sync for OnceLock<T> {}
+
+/// # Safety
+/// `Send`ing the lock also transfers the ownership of the inner data `T`.
+/// Therefore, `T` must be `Send` to ensure that it is safe to send the inner data across threads.
 unsafe impl<T: Send> Send for OnceLock<T> {}

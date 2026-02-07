@@ -103,9 +103,16 @@ impl<T> core::ops::DerefMut for SleepLockGuard<'_, T> {
     }
 }
 
-// Safety: Since the holder can call `into_inner`, if we are sharing a reference, the inner type
-// must also be thread safe to Send.
+/// # Safety
+/// The lock can give `&mut T` to whichever thread acquires it and can call `into_inner()`.
+/// Therefore, `T` must be `Send` to ensure that it is safe to send the inner data across threads.
 unsafe impl<T> Sync for SleepLock<T> where T: Send {}
 
-// Safety: SpinLock can be sent to another thread if T can be sent.
+/// # Safety
+/// `Send`ing the lock also transfers the ownership of the inner data `T`.
+/// Therefore, `T` must be `Send` to ensure that it is safe to send the inner data across threads.
 unsafe impl<T> Send for SleepLock<T> where T: Send {}
+
+// Note: `SleepLockGuard` is intentionally `!Sync` (no `Sync` impl). Unlike `SpinLockGuard`, a
+// sleep lock guard is always held by a single sleeping process and never shared across threads, so
+// there is no need to allow `&SleepLockGuard` to cross thread boundaries.

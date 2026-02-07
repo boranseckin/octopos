@@ -524,8 +524,11 @@ impl Kvm {
     }
 }
 
-/// Safety: Kvm is immutable after initialization.
+/// # Safety
+/// Kvm is immutable after initialization.
 unsafe impl Sync for Kvm {}
+/// # Safety
+/// Kvm is immutable after initialization.
 unsafe impl Send for Kvm {}
 
 /// User Page Table

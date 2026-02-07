@@ -81,6 +81,10 @@ impl CpuTable {
     }
 }
 
+/// # Safety
+/// `Cpu` contains an `UnsafeCell`, so it is not `Sync` by default. However, we ensure that each CPU
+/// only accesses its own `Cpu` struct while interrupts are disabled, so it is safe to implement
+/// `Sync` for `Cpu` and `CpuTable`.
 unsafe impl Sync for CpuTable {}
 
 /// A lock that releases the CPU lock when dropped.
@@ -103,7 +107,7 @@ pub unsafe fn current_id() -> usize {
     unsafe { tp::read() }
 }
 
-/// Returns a mutable pointer to the current CPU's [`CPU`] struct.
+/// Returns a mutable pointer to the current CPU's [`Cpu`] struct.
 ///
 /// # Safety
 /// Must be called with interrupts disabled to prevent race with process being moved to a different CPU.
@@ -529,6 +533,10 @@ impl Proc {
     }
 }
 
+/// # Safety
+/// `Proc` contains an `UnsafeCell`, so it is not `Sync` by default. However, we ensure that each
+/// process's `ProcData` is only accessed by the owning/current CPU, so it is safe to implement
+/// `Sync` for `Proc`.
 unsafe impl Sync for Proc {}
 
 /// Table of processes
@@ -659,6 +667,10 @@ impl ProcTable {
     }
 }
 
+/// # Safety
+/// `ProcTable` contains `UnsafeCell`s, so it is not `Sync` by default. However, individual `Proc`
+/// entries are accessed through their own spinlocks, and the table itself is only mutated during
+/// const initialization.
 unsafe impl Sync for ProcTable {}
 
 /// Sets up first user process.
