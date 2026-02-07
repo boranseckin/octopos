@@ -21,14 +21,9 @@ pub mod registers {
         use core::arch::asm;
 
         pub const MPP_MASK: usize = 3 << 11;
-        pub const MIE: usize = 1 << 3; // Machine Mode Interrupt enable
 
         /// Machine Previous Privilege Mode
-        pub enum MPP {
-            Machine = 3,
-            Supervisor = 1,
-            User = 0,
-        }
+        pub const MPP_SUPERVISOR: usize = 1;
 
         #[inline]
         pub unsafe fn read() -> usize {
@@ -47,11 +42,11 @@ pub mod registers {
         }
 
         #[inline]
-        pub fn set_mpp(mpp: MPP) {
+        pub fn set_mpp(mode: usize) {
             unsafe {
                 let mut value = read();
                 value &= !MPP_MASK;
-                value |= (mpp as usize) << 11;
+                value |= mode << 11;
                 write(value);
             }
         }
@@ -61,11 +56,12 @@ pub mod registers {
     pub mod sstatus {
         use core::arch::asm;
 
-        pub const SPP: usize = 1 << 8; // Previous mode, 1=Supervisor, 0=User
-        pub const SPIE: usize = 1 << 5; // Supervisor Previous Interrupt Enable
-        pub const UPIE: usize = 1 << 4; // User Previous Interrupt Enable
-        pub const SIE: usize = 1 << 1; // Supervisor Interrupt Enable
-        pub const UIE: usize = 1 << 0; // User Interrupt Enable
+        /// Supervisor Previous Privilege, 1=Supervisor, 0=User
+        pub const SPP: usize = 1 << 8;
+        /// Supervisor Previous Interrupt Enable
+        pub const SPIE: usize = 1 << 5;
+        /// Supervisor Interrupt Enable
+        pub const SIE: usize = 1 << 1;
 
         #[inline]
         pub unsafe fn read() -> usize {
@@ -84,7 +80,7 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Trap Cause
+    /// Supervisor Trap Cause, scause
     pub mod scause {
         use core::arch::asm;
 
@@ -198,7 +194,7 @@ pub mod registers {
         }
     }
 
-    /// Machine-mode Counter-Enable
+    /// Machine-mode Counter-Enable, mcounteren
     pub mod mcounteren {
         use core::arch::asm;
 
@@ -219,7 +215,7 @@ pub mod registers {
         }
     }
 
-    /// Machine-mode Cycle Counter
+    /// Machine-mode Cycle Counter, time
     pub mod time {
         use core::arch::asm;
 
@@ -233,18 +229,9 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Trap-Vector Base Address
+    /// Supervisor Trap-Vector Base Address, stvec
     pub mod stvec {
         use core::arch::asm;
-
-        #[inline]
-        pub unsafe fn read() -> usize {
-            unsafe {
-                let bits: usize;
-                asm!("csrr {}, stvec", out(reg) bits);
-                bits
-            }
-        }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
@@ -254,7 +241,7 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Trap Value
+    /// Supervisor Trap Value, stval
     pub mod stval {
         use core::arch::asm;
 
@@ -268,18 +255,9 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Time Comparison Register
+    /// Supervisor Time Comparison Register, stimecmp
     pub mod stimecmp {
         use core::arch::asm;
-
-        #[inline]
-        pub unsafe fn read() -> usize {
-            unsafe {
-                let bits: usize;
-                asm!("csrr {}, stimecmp", out(reg) bits);
-                bits
-            }
-        }
 
         #[inline]
         pub unsafe fn write(bits: usize) {
@@ -289,7 +267,7 @@ pub mod registers {
         }
     }
 
-    /// Machine Environment Configuration Register
+    /// Machine Environment Configuration Register, menvcfg
     pub mod menvcfg {
         use core::arch::asm;
 
@@ -310,7 +288,7 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Exception Program Counter
+    /// Supervisor Exception Program Counter, sepc
     /// Holds the instruction address to which a return from exception will go to.
     pub mod sepc {
         use core::arch::asm;
@@ -332,7 +310,7 @@ pub mod registers {
         }
     }
 
-    /// Machien Exception Program Counter register, mepc
+    /// Machien Exception Program Counter, mepc
     pub mod mepc {
         use core::arch::asm;
 
@@ -344,7 +322,7 @@ pub mod registers {
         }
     }
 
-    /// Machine Exception Delegation register, medeleg
+    /// Machine Exception Delegation, medeleg
     pub mod medeleg {
         use core::arch::asm;
 
@@ -356,7 +334,7 @@ pub mod registers {
         }
     }
 
-    /// Machine Interrupt Delegation register, medeleg
+    /// Machine Interrupt Delegation, medeleg
     pub mod mideleg {
         use core::arch::asm;
 
@@ -368,7 +346,7 @@ pub mod registers {
         }
     }
 
-    /// Physical Memory Protection Config register, pmpcfg0
+    /// Physical Memory Protection Config, pmpcfg0
     pub mod pmpcfg0 {
         use core::arch::asm;
 
@@ -379,7 +357,7 @@ pub mod registers {
         }
     }
 
-    /// Physical Memory Protection Address register, pmpaddr0
+    /// Physical Memory Protection Address, pmpaddr0
     pub mod pmpaddr0 {
         use core::arch::asm;
 
@@ -390,13 +368,16 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Interrupt Enable register, sie
+    /// Supervisor Interrupt Enable, sie
     pub mod sie {
         use core::arch::asm;
 
-        pub const SEIE: usize = 1 << 9; // external
-        pub const STIE: usize = 1 << 5; // timer
-        pub const SSIE: usize = 1 << 1; // software
+        /// External
+        pub const SEIE: usize = 1 << 9;
+        /// Timer
+        pub const STIE: usize = 1 << 5;
+        /// Software
+        pub const SSIE: usize = 1 << 1;
 
         #[inline]
         pub unsafe fn read() -> usize {
@@ -415,14 +396,12 @@ pub mod registers {
         }
     }
 
-    /// Machine Interrupt Enable register, mie
+    /// Machine Interrupt Enable, mie
     pub mod mie {
         use core::arch::asm;
 
-        pub const MEIE: usize = 1 << 11; // external
-        pub const MTIE: usize = 1 << 7; // timer
-        pub const MSIE: usize = 1 << 3; // software
-        pub const STIE: usize = 1 << 5; // supervisor timer
+        /// Supervisor Timer
+        pub const STIE: usize = 1 << 5;
 
         #[inline]
         pub unsafe fn read() -> usize {
@@ -441,32 +420,7 @@ pub mod registers {
         }
     }
 
-    /// Supervisor Interrupt Pending
-    pub mod sip {
-        use core::arch::asm;
-
-        pub const SEIP: usize = 1 << 9; // external
-        pub const STIP: usize = 1 << 5; // timer
-        pub const SSIP: usize = 1 << 1; // software
-
-        #[inline]
-        pub unsafe fn read() -> usize {
-            unsafe {
-                let bits: usize;
-                asm!("csrr {}, sip", out(reg) bits);
-                bits
-            }
-        }
-
-        #[inline]
-        pub unsafe fn write(bits: usize) {
-            unsafe {
-                asm!("csrw sip, {}", in(reg) bits);
-            }
-        }
-    }
-
-    /// Supervisor Address Translation and Protection register, satp
+    /// Supervisor Address Translation and Protection, satp
     /// Holds the address of the page table.
     pub mod satp {
         use core::arch::asm;
@@ -495,7 +449,7 @@ pub mod registers {
         }
     }
 
-    /// Thread Pointer register, tp
+    /// Thread Pointer, tp
     pub mod tp {
         use core::arch::asm;
 

@@ -39,7 +39,7 @@ pub unsafe fn start() -> ! {
         // set previous privilege mode to supervisor
         // when `mret` is called at the end of this function,
         // this is the mode we will be going "back" to
-        mstatus::set_mpp(mstatus::MPP::Supervisor);
+        mstatus::set_mpp(mstatus::MPP_SUPERVISOR);
 
         // set the exception return instruction address to main
         // when `mret` is called at the end of this function,
