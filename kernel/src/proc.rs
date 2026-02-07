@@ -437,9 +437,6 @@ impl ProcData {
     }
 }
 
-unsafe impl Sync for ProcData {}
-unsafe impl Send for ProcData {}
-
 impl Proc {
     const fn new(id: usize) -> Self {
         Self {

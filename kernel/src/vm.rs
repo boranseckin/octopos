@@ -463,6 +463,15 @@ impl PageTable {
     }
 }
 
+/// # Safety
+/// `PageTable` exclusively owns its `NonNull<RawPageTable>` heap allocation (analogous to `Box`).
+/// It is safe to share `&PageTable` across threads (`Sync`) because mutation requires `&mut self`.
+unsafe impl Sync for PageTable {}
+/// # Safety
+/// `PageTable` exclusively owns its `NonNull<RawPageTable>` heap allocation (analogous to `Box`).
+/// It is safe to transfer between threads (`Send`) because the allocation is not aliased.
+unsafe impl Send for PageTable {}
+
 pub static KVM: OnceLock<Kvm> = OnceLock::new();
 
 /// Kernel Page Table
@@ -523,13 +532,6 @@ impl Kvm {
         unsafe { PROC_TABLE.map_stacks(self) };
     }
 }
-
-/// # Safety
-/// Kvm is immutable after initialization.
-unsafe impl Sync for Kvm {}
-/// # Safety
-/// Kvm is immutable after initialization.
-unsafe impl Send for Kvm {}
 
 /// User Page Table
 #[derive(Debug)]
