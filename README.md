@@ -53,7 +53,7 @@ implemented.
 3. Trap handling — user traps (syscall, interrupt, fault) and kernel traps
 4. Context switch (`swtch`) — callee-saved register save/restore
 5. Scheduler — round-robin scheduling with sleep/wakeup
-6. Synchronization — spinlocks, `OnceLock`, `LazyLock`
+6. Synchronization — spinlocks, `OnceLock`
 
 ### Stage 4: Syscalls & Process Management (done)
 
