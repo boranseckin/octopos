@@ -85,5 +85,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "zombie"
+path = "bin/zombie.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { path = "../kernel" }
