@@ -155,7 +155,7 @@ pub unsafe fn str_from_cstr<'a>(cstr: &[u8]) -> Result<&'a str, Utf8Error> {
     let ptr = cstr.as_ptr();
     unsafe {
         let mut len = 0;
-        while *ptr.add(len) != 0 {
+        while len < cstr.len() && *ptr.add(len) != 0 {
             len += 1;
         }
         str::from_utf8(slice::from_raw_parts(ptr, len))
