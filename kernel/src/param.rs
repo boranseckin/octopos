@@ -41,4 +41,4 @@ pub const NKSTACK_PAGES: usize = 8;
 pub const NKSTACK_PAGES: usize = 1;
 
 /// user stack pages
-pub const USERSTACK: usize = 1;
+pub const USERSTACK: usize = 4;

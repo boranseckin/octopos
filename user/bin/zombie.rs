@@ -4,7 +4,7 @@
 use user::*;
 
 #[unsafe(no_mangle)]
-fn main(args: Args) {
+fn main(_args: Args) {
     if fork().unwrap() > 0 {
         let _ = sleep(5);
     }
