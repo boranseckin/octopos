@@ -92,5 +92,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "sleep"
+path = "bin/sleep.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { path = "../kernel" }
