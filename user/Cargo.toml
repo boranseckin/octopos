@@ -99,5 +99,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "uptime"
+path = "bin/uptime.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { path = "../kernel" }
