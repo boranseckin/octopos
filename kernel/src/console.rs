@@ -47,16 +47,24 @@ impl Console {
     }
 
     /// User `write()`s to the console are handled here.
-    /// Currently only handles user addresses.
     pub fn write(src: VA, len: usize) -> Result<usize, SysError> {
-        // TODO: avoid byte to byte copy_in and use chunks
-        for i in 0..len {
-            let src = VA::from(src.as_usize() + i);
-            let mut dst = [0u8];
+        let mut src = src;
+        let mut n = 0;
 
-            match proc::copy_from_user(src, &mut dst) {
-                Ok(_) => Self::putc(dst[0]),
-                Err(_) => return Ok(i),
+        let mut buf = [0u8; 64];
+
+        while n < len {
+            let chunk = 64.min(len - n);
+            match proc::copy_from_user(src, &mut buf[..chunk]) {
+                Ok(_) => {
+                    for c in &buf[..chunk] {
+                        Self::putc(*c);
+                    }
+
+                    n += chunk;
+                    src += chunk;
+                }
+                Err(_) => return Ok(n),
             }
         }
 
