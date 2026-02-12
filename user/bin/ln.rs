@@ -13,6 +13,6 @@ fn main(args: Args) {
     let new = args.get_str(2).expect("new to be str");
 
     if let Err(e) = link(old, new) {
-        eprintln!("ln: {} -> {}: {}", old, new, e);
+        eprintln!("ln: {} ({} -> {})", e, old, new);
     }
 }

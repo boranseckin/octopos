@@ -281,13 +281,13 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
     let proc = current_proc();
     let args = SyscallArgs::new(trapframe, proc);
 
-    #[cfg(debug_assertions)]
-    println!(
-        "syscall {} called from proc {} ({})",
-        trapframe.a7,
-        *proc.inner.lock().pid,
-        proc.data().name,
-    );
+    // #[cfg(debug_assertions)]
+    // println!(
+    //     "syscall {} called from proc {} ({})",
+    //     trapframe.a7,
+    //     *proc.inner.lock().pid,
+    //     proc.data().name,
+    // );
 
     let result = match Syscall::try_from(trapframe.a7) {
         Ok(syscall) => match syscall {
@@ -330,6 +330,6 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
         }
     };
 
-    #[cfg(debug_assertions)]
-    println!("syscall {} -> {}", trapframe.a7, trapframe.a0);
+    // #[cfg(debug_assertions)]
+    // println!("syscall {} -> {}", trapframe.a7, trapframe.a0);
 }

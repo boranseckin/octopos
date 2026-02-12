@@ -11,7 +11,7 @@ fn main(args: Args) {
 
     for name in args.args_as_str() {
         if let Err(e) = unlink(name) {
-            eprintln!("rm: {}: {}", name, e);
+            eprintln!("rm: {} ({})", e, name);
             break;
         }
     }

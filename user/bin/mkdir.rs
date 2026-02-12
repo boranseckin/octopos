@@ -11,7 +11,7 @@ fn main(args: Args) {
 
     for dir in args.args_as_str() {
         if let Err(e) = mkdir(dir) {
-            eprintln!("mkdir: {}: {}", dir, e);
+            eprintln!("mkdir: {} ({})", e, dir);
             break;
         }
     }
