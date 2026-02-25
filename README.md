@@ -23,6 +23,20 @@ qemu-img create target/fs.img 2G
 cargo run --release
 ```
 
+### Debugging
+
+The QEMU runner in `.cargo/config.toml` includes `-s`, which always opens a GDB server on
+`tcp::1234`. To halt the kernel at startup and wait for a debugger to attach, add `-S` to the
+runner flags, then connect from a second terminal:
+
+```bash
+cargo build          # build with debug info
+cargo run            # QEMU starts frozen, waiting for GDB
+
+# in a second terminal:
+riscv64-elf-gdb      # .gdbinit connects to port 1234 and loads symbols automatically
+```
+
 ## Current State
 
 The kernel boots, initializes all subsystems, and runs a full userspace environment including a
