@@ -106,5 +106,19 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "demo"
+path = "bin/demo.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
+name = "primes"
+path = "bin/primes.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { path = "../kernel" }
