@@ -121,4 +121,4 @@ doctest = false
 bench = false
 
 [dependencies]
-kernel = { path = "../kernel", version = "1.0.0" }
+kernel = { package = "octopos", path = "../kernel", version = "1.0.0" }
