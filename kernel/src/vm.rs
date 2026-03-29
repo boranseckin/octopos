@@ -7,7 +7,7 @@ use core::ptr::{self, NonNull};
 use crate::fs::{Inode, InodeInner};
 use crate::kalloc;
 use crate::memlayout::{
-    KERNBASE, PHYSTOP, PLIC, QEMU_POWER, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0,
+    KERNBASE, PCI_ECAM, PCI_MMIO, PHYSTOP, PLIC, QEMU_POWER, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0,
 };
 use crate::proc::{self, PROC_TABLE};
 use crate::riscv::{
@@ -530,6 +530,23 @@ impl Kvm {
 
         // virtio mmio disk interface
         self.map(VA::from(VIRTIO0), PA::from(VIRTIO0), PGSIZE, PTE_R | PTE_W);
+
+        // pci ecam
+        self.map(
+            VA::from(PCI_ECAM),
+            PA::from(PCI_ECAM),
+            // 256 buses * 32 devices * 8 functions * 4KB-page = 0x1000_0000
+            256 * 32 * 8 * PGSIZE,
+            PTE_R | PTE_W,
+        );
+
+        // pci mmio
+        self.map(
+            VA::from(PCI_MMIO),
+            PA::from(PCI_MMIO),
+            0x4000_0000,
+            PTE_R | PTE_W,
+        );
 
         // qemu test device
         self.map(

@@ -477,5 +477,7 @@ pub unsafe fn init() {
         // tell device we are completely ready
         status |= VIRTIO_CONFIG_S_DRIVER_OK;
         disk.write(VIRTIO_MMIO_STATUS, status);
+
+        println!("vio  init");
     }
 }
