@@ -7,5 +7,7 @@ qemu-system-riscv64 -s -machine virt -bios none -m 256M -smp 4 -nographic \
 -global virtio-mmio.force-legacy=false \
 -drive file=target/fs.img,if=none,format=raw,id=x0 \
 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+-netdev user,id=net0,hostfwd=udp::26099-:26099 \
+-device e1000,netdev=net0,bus=pcie.0 \
 -kernel
 """

@@ -9,6 +9,7 @@ pub(crate) mod printf;
 pub(crate) mod error;
 pub(crate) mod buf;
 pub(crate) mod console;
+pub(crate) mod e1000;
 pub(crate) mod entry;
 pub(crate) mod exec;
 pub(crate) mod file;
@@ -18,6 +19,7 @@ pub(crate) mod kernelvec;
 pub(crate) mod log;
 pub(crate) mod memlayout;
 pub(crate) mod param;
+pub(crate) mod pci;
 pub(crate) mod pipe;
 pub(crate) mod plic;
 pub(crate) mod proc;
@@ -63,6 +65,8 @@ pub fn main() -> ! {
             plic::init_hart();
             buf::init();
             virtio_disk::init();
+            pci::init();
+            e1000::init();
             proc::user_init();
         }
 

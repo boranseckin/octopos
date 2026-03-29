@@ -4,19 +4,21 @@
  * qemu -machine virt is set up like this,
  * based on qemu's hw/riscv/virt.c:
  *
- * 00001000 -- boot ROM, provided by qemu
+ * 00001000 -- BOOT ROM, provided by qemu
  * 02000000 -- CLINT
  * 0C000000 -- PLIC
- * 10000000 -- uart0
- * 10001000 -- virtio disk
- * 80000000 -- boot ROM jumps here in machine mode
- *             -kernel loads the kernel here
+ * 10000000 -- UART0
+ * 10001000 -- VIRTIO DISK
+ * 30000000 -- PCI ECAM
+ * 40000000 -- PCI MMIO
+ * 80000000 -- BOOT ROM jumps here in machine mode (kernel loads the kernel here)
+ *
  * unused RAM after 80000000.
  *
  * the kernel uses physical memory thus:
- * 80000000 -- entry.S, then kernel text and data
- * end -- start of kernel page allocation area
- * PHYSTOP -- end RAM used by the kernel
+ * 80000000 -- entry.rs, then kernel text and data
+ * end      -- start of kernel page allocation area
+ * PHYSTOP  -- end RAM used by the kernel
  */
 
 use crate::param::NKSTACK_PAGES;
@@ -32,6 +34,12 @@ pub const UART0_IRQ: usize = 10;
 // virtio mmio interface
 pub const VIRTIO0: usize = 0x1000_1000;
 pub const VIRTIO0_IRQ: usize = 1;
+
+// pci ecam and mmio interfaces
+// 256 MB = 0x1000_0000
+pub const PCI_ECAM: usize = 0x3000_0000;
+// 1 GB = 0x4000_0000
+pub const PCI_MMIO: usize = 0x4000_0000;
 
 // Platform-Level Interrupt Controller (PLIC)
 // https://github.com/riscv/riscv-plic-spec/blob/master/riscv-plic.adoc
