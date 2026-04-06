@@ -31,6 +31,8 @@ const fn get_ecam_offset(bus: usize, device: usize, function: usize) -> usize {
 /// BAR0 register in the device's PCI configuration space. It also assumes that the system's MMIO
 /// region for PCI BARs starts at `PCI_MMIO`.
 unsafe fn setup_bar0(bar0_ptr: *mut u32) -> Option<u64> {
+    // https://wiki.osdev.org/PCI#Base_Address_Registers
+
     unsafe {
         let bar0_lo_ptr = bar0_ptr;
         let bar0_hi_ptr = bar0_ptr.add(1);
@@ -110,6 +112,8 @@ pub unsafe fn init() {
                 // single-function pci, check function 0 only
                 let addr = get_ecam_offset(bus, device, 0) as *const u32;
 
+                // get vendor id (bits 15:0) and device id (bits 31:16)
+                // https://wiki.osdev.org/PCI#Common_Header_Fields
                 let vendor_id = (*addr & 0xFFFF) as u16;
                 let device_id = (*addr >> 16) as u16;
 
@@ -128,6 +132,7 @@ pub unsafe fn init() {
                 };
 
                 // set command register bit 2 (bus master) and bit 1 (memory space)
+                // https://wiki.osdev.org/PCI#Command_Register
                 let command_reg = addr.add(1) as *mut u16;
                 *command_reg |= (1 << 2) + (1 << 1);
 
