@@ -1,9 +1,8 @@
 use core::mem;
 
 use crate::kernelvec::kernelvec;
-use crate::memlayout::{TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
+use crate::memlayout::{E1000_IRQ, TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::param::NKSTACK_PAGES;
-use crate::plic;
 use crate::proc::{self, Channel};
 use crate::riscv::{
     PGSIZE, interrupts,
@@ -15,6 +14,7 @@ use crate::trampoline::{trampoline, userret, uservec};
 use crate::uart;
 use crate::virtio_disk;
 use crate::vm::VA;
+use crate::{e1000, plic};
 
 pub static TICKS: SpinLock<usize> = SpinLock::new(0, "time");
 
@@ -258,6 +258,7 @@ fn device_interrupt(intr: scause::Interrupt) -> Option<InterruptType> {
                 0 => {} // spurious interrupt from PLIC, ignore
                 UART0_IRQ => uart::handle_interrupt(),
                 VIRTIO0_IRQ => virtio_disk::handle_interrupt(),
+                E1000_IRQ => e1000::handle_interrupt(),
                 _ => println!("unexpected interrupt irq = {}", irq),
             }
 
