@@ -1,3 +1,5 @@
+use core::ptr;
+use core::slice;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
@@ -40,7 +42,11 @@ pub static E1000_BASE: AtomicUsize = AtomicUsize::new(0);
 
 static E1000: SpinLock<E1000> = SpinLock::new(E1000::new(), "e1000");
 
-#[repr(C)]
+/// Transmit Descriptor (TxDesc) structure as defined in the e1000 datasheet.
+/// Each descriptor is 16 bytes in size and must be aligned to a 16-byte boundary
+///
+/// Implemented according to 3.3.3 Legacy Transmit Descriptor Format.
+#[repr(C, align(16))]
 #[derive(Debug, Clone, Default)]
 struct TxDesc {
     address: u64,
@@ -66,7 +72,11 @@ impl TxDesc {
     }
 }
 
-#[repr(C)]
+/// Receive Descriptor (RxDesc) structure as defined in the e1000 datasheet.
+/// Each descriptor is 16 bytes in size and must be aligned to a 16-byte boundary.
+///
+/// Implemented according to 3.2.3 Receive Descriptor Format.
+#[repr(C, align(16))]
 #[derive(Debug, Clone, Default)]
 struct RxDesc {
     address: u64,
@@ -111,11 +121,11 @@ impl E1000 {
     }
 
     fn read_reg(&self, offset: usize) -> u32 {
-        unsafe { *(self.base as *const u32).add(offset / 4) }
+        unsafe { ptr::read_volatile((self.base as *const u32).add(offset / 4)) }
     }
 
     fn write_reg(&mut self, offset: usize, value: u32) {
-        unsafe { *(self.base as *mut u32).add(offset / 4) = value }
+        unsafe { ptr::write_volatile((self.base as *mut u32).add(offset / 4), value) }
     }
 
     fn set_mask(&mut self, offset: usize, mask: u32) {
@@ -177,8 +187,46 @@ pub fn receive() -> Result<(), SysError> {
     todo!()
 }
 
+/// Handles an interrupt from the e1000 device by reading the Interrupt Cause Read (ICR) register to
+/// determine the cause of the interrupt, and if it is a receive interrupt (RXT0), it processes all
+/// completed receive descriptors in the receive ring. For each completed descriptor, it reads the
+/// received data from the buffer, prints it, and then clears the status and advances the receive
+/// tail pointer to make the descriptor available for future packets.
 pub fn handle_interrupt() {
-    todo!()
+    let mut state = E1000.lock();
+
+    // reading ICR clears the interrupt
+    let icr = state.read_reg(E1000_MMIO_ICR);
+
+    // check if ICR bit 7 (RXT0) is set
+    if icr & (1 << 7) == 0 {
+        return;
+    }
+
+    // draing rx ring
+    loop {
+        let index = state.rx_index;
+        let desc = &state.rx_rings[index];
+
+        // check DD bit to see if hardware is finished with this descriptor
+        // if not, we consumed all rx descriptors.
+        let status = unsafe { ptr::read_volatile(&desc.status) };
+        if status & 1 == 0 {
+            break;
+        }
+
+        let len = desc.length as usize;
+        let buf = desc.address as *const u8;
+        let data = unsafe { slice::from_raw_parts(buf, len) };
+
+        println!("rx: {:?}", data);
+        // TODO: net::recv()
+
+        // clear status and advance index
+        state.rx_rings[index].status = 0;
+        state.write_reg(E1000_MMIO_RDT, index as u32);
+        state.rx_index = (index + 1) % RX_RING_SIZE;
+    }
 }
 
 /// Initializes the e1000 driver by mapping the MMIO region, resetting the device, setting up

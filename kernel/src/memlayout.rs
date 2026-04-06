@@ -41,6 +41,10 @@ pub const PCI_ECAM: usize = 0x3000_0000;
 // 1 GB = 0x4000_0000
 pub const PCI_MMIO: usize = 0x4000_0000;
 
+// e1000 is device 1; INTA pin fro device 1 according to device tree
+// TODO: make this dynamic from pci discovery
+pub const E1000_IRQ: usize = 33;
+
 // Platform-Level Interrupt Controller (PLIC)
 // https://github.com/riscv/riscv-plic-spec/blob/master/riscv-plic.adoc
 pub const PLIC: usize = 0x0C00_0000;
