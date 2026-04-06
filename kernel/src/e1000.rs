@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
 
+use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 use crate::syscall::SysError;
 
@@ -43,7 +44,7 @@ pub static E1000_BASE: AtomicUsize = AtomicUsize::new(0);
 static E1000: SpinLock<E1000> = SpinLock::new(E1000::new(), "e1000");
 
 /// Transmit Descriptor (TxDesc) structure as defined in the e1000 datasheet.
-/// Each descriptor is 16 bytes in size and must be aligned to a 16-byte boundary
+/// Each descriptor is 16 bytes in size and must be aligned to a 16-byte boundary.
 ///
 /// Implemented according to 3.3.3 Legacy Transmit Descriptor Format.
 #[repr(C, align(16))]
@@ -100,6 +101,10 @@ impl RxDesc {
     }
 }
 
+/// E1000 driver state.
+///
+/// Includes the base MMIO address, transmit and receive descriptor rings, and indices for tracking
+/// the next available descriptors for transmission and reception.
 #[derive(Debug, Clone)]
 struct E1000 {
     base: usize,
@@ -131,11 +136,6 @@ impl E1000 {
     fn set_mask(&mut self, offset: usize, mask: u32) {
         let value = self.read_reg(offset);
         self.write_reg(offset, value | mask);
-    }
-
-    fn unset_mask(&mut self, offset: usize, mask: u32) {
-        let value = self.read_reg(offset);
-        self.write_reg(offset, value & !mask);
     }
 }
 
@@ -183,15 +183,51 @@ pub fn transmit(buf: &[u8]) -> Result<(), SysError> {
     Ok(())
 }
 
-pub fn receive() -> Result<(), SysError> {
-    todo!()
+/// Receives a packet by checking the next receive descriptor for a completed packet, copying the
+/// data into an owned buffer, updating the receive tail pointer to give ownership back to the
+/// hardware, and re-enabling receive interrupts.
+///
+/// If no packet is available, the process will sleep until an interrupt signals that a packet has
+/// been received.
+pub fn receive() -> Box<[u8]> {
+    let mut state = E1000.lock();
+
+    loop {
+        let index = state.rx_index;
+        let status = unsafe { ptr::read_volatile(&state.rx_rings[index].status) };
+
+        // packet found, process it
+        if status & 1 != 0 {
+            let desc = &state.rx_rings[index];
+            let len = desc.length as usize;
+            let buf_ptr = desc.address as *const u8;
+            let data = unsafe { slice::from_raw_parts(buf_ptr, len) };
+
+            // copy the package to an owned Box so that when we give this memory back to the
+            // hardware, our local copy will not be modified.
+            let data = Box::from(data);
+
+            // update RDT, which now gives the hardware ownership of the descriptor back and allows
+            // it to write the next packet into it.
+            state.rx_rings[index].status = 0;
+            state.write_reg(E1000_MMIO_RDT, index as u32);
+            state.rx_index = (index + 1) % RX_RING_SIZE;
+
+            // re-enable rx interrupts (RXT0)
+            state.set_mask(E1000_MMIO_IMS, 1 << 7);
+
+            return data;
+        }
+
+        // no packet found, sleep
+        state = proc::sleep(Channel::Network, state);
+    }
 }
 
-/// Handles an interrupt from the e1000 device by reading the Interrupt Cause Read (ICR) register to
-/// determine the cause of the interrupt, and if it is a receive interrupt (RXT0), it processes all
-/// completed receive descriptors in the receive ring. For each completed descriptor, it reads the
-/// received data from the buffer, prints it, and then clears the status and advances the receive
-/// tail pointer to make the descriptor available for future packets.
+/// Handles an interrupt from the e1000 device by checking the Interrupt Cause Read (ICR) register
+/// to determine the cause of the interrupt. If the interrupt was caused by a received packet
+/// (RXT0), the function disables further RXT0 interrupts until the packet is processed and wakes
+/// up any processes waiting on the network channel.
 pub fn handle_interrupt() {
     let mut state = E1000.lock();
 
@@ -203,30 +239,10 @@ pub fn handle_interrupt() {
         return;
     }
 
-    // draing rx ring
-    loop {
-        let index = state.rx_index;
-        let desc = &state.rx_rings[index];
+    // disable RXT0 interrupts until receive is done
+    state.set_mask(E1000_MMIO_IMC, 1 << 7);
 
-        // check DD bit to see if hardware is finished with this descriptor
-        // if not, we consumed all rx descriptors.
-        let status = unsafe { ptr::read_volatile(&desc.status) };
-        if status & 1 == 0 {
-            break;
-        }
-
-        let len = desc.length as usize;
-        let buf = desc.address as *const u8;
-        let data = unsafe { slice::from_raw_parts(buf, len) };
-
-        println!("rx: {:?}", data);
-        // TODO: net::recv()
-
-        // clear status and advance index
-        state.rx_rings[index].status = 0;
-        state.write_reg(E1000_MMIO_RDT, index as u32);
-        state.rx_index = (index + 1) % RX_RING_SIZE;
-    }
+    proc::wakeup(Channel::Network);
 }
 
 /// Initializes the e1000 driver by mapping the MMIO region, resetting the device, setting up

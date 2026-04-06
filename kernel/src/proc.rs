@@ -299,6 +299,8 @@ pub enum Channel {
     PipeRead(usize),
     /// Write end of pipe.
     PipeWrite(usize),
+    /// Network
+    Network,
 }
 
 /// Process control block
