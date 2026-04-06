@@ -3,9 +3,12 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use alloc::boxed::Box;
 
 use crate::spinlock::SpinLock;
+use crate::syscall::SysError;
 
 const TX_RING_SIZE: usize = 16;
 const RX_RING_SIZE: usize = 16;
+const TX_BUF_SIZE: usize = 2048;
+const RX_BUF_SIZE: usize = 2048;
 
 const E1000_MMIO_CTRL: usize = 0x0000;
 const E1000_MMIO_ICR: usize = 0x00C0;
@@ -35,7 +38,7 @@ const E1000_MMIO_RAH: usize = 0x5404;
 /// To be set by `pci::init()`, if the device is found
 pub static E1000_BASE: AtomicUsize = AtomicUsize::new(0);
 
-static E1000_STATE: SpinLock<E1000State> = SpinLock::new(E1000State::new(), "e1000");
+static E1000: SpinLock<E1000> = SpinLock::new(E1000::new(), "e1000");
 
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
@@ -88,7 +91,7 @@ impl RxDesc {
 }
 
 #[derive(Debug, Clone)]
-struct E1000State {
+struct E1000 {
     base: usize,
     tx_rings: [TxDesc; TX_RING_SIZE],
     rx_rings: [RxDesc; RX_RING_SIZE],
@@ -96,7 +99,7 @@ struct E1000State {
     rx_index: usize,
 }
 
-impl E1000State {
+impl E1000 {
     const fn new() -> Self {
         Self {
             base: 0,
@@ -126,6 +129,58 @@ impl E1000State {
     }
 }
 
+/// Transmits a packet by copying the provided buffer into the next available transmit descriptor
+/// and updating the transmit tail pointer to notify the hardware.
+///
+/// Returns an error if the buffer size exceeds the transmit buffer size or if there are no
+/// available transmit descriptors (i.e., the hardware has not yet processed the previous
+/// descriptors).
+pub fn transmit(buf: &[u8]) -> Result<(), SysError> {
+    if buf.len() >= TX_BUF_SIZE {
+        return Err(SysError::InvalidArgument);
+    }
+
+    let mut state = E1000.lock();
+
+    let index = state.tx_index;
+    let desc = &mut state.tx_rings[index];
+
+    // check if bit 0 of status (DD) is unset; not available to use
+    if desc.status & 1 == 0 {
+        return Err(SysError::ResourceUnavailable);
+    }
+
+    // copy buf into tx desc
+    //
+    // Safety: We assume the caller has provided a valid buffer and that the e1000 device is
+    // properly initialized. The destination address is derived from the tx descriptor, which should
+    // have been set up during initialization to point to a valid transmit buffer.
+    // We also ensure that the length of the buffer does not exceed the size of the transmit buffer.
+    unsafe { (desc.address as *mut u8).copy_from_nonoverlapping(buf.as_ptr(), buf.len()) };
+    desc.length = buf.len() as u16;
+
+    // set cmd EOP, IFCS, RS
+    desc.cmd = (1) | (1 << 1) | (1 << 3);
+
+    // clear status
+    desc.status = 0;
+
+    // update tx index in hardware and software
+    let index = (index + 1) % TX_RING_SIZE;
+    state.tx_index = index;
+    state.write_reg(E1000_MMIO_TDT, index as u32);
+
+    Ok(())
+}
+
+pub fn receive() -> Result<(), SysError> {
+    todo!()
+}
+
+pub fn handle_interrupt() {
+    todo!()
+}
+
 /// Initializes the e1000 driver by mapping the MMIO region, resetting the device, setting up
 /// receive and transmit descriptor rings, configuring the MAC address, and enabling interrupts.
 ///
@@ -143,7 +198,7 @@ pub unsafe fn init() {
         return;
     }
 
-    let mut state = E1000_STATE.lock();
+    let mut state = E1000.lock();
 
     state.base = base;
 
@@ -156,7 +211,7 @@ pub unsafe fn init() {
     for rx_ring in &mut state.rx_rings {
         unsafe {
             rx_ring.address = Box::into_raw(
-                Box::<[u8; 2048]>::try_new_zeroed()
+                Box::<[u8; RX_BUF_SIZE]>::try_new_zeroed()
                     .expect("failed to allocate rx buffer")
                     .assume_init(),
             ) as u64;
@@ -196,8 +251,10 @@ pub unsafe fn init() {
     // each buffer is 2 KB in size by default set in TCTL.BSIZE.
     for tx_ring in &mut state.tx_rings {
         unsafe {
+            // set DD bit to signify it is free
+            tx_ring.status = 1;
             tx_ring.address = Box::into_raw(
-                Box::<[u8; 2048]>::try_new_zeroed()
+                Box::<[u8; TX_BUF_SIZE]>::try_new_zeroed()
                     .expect("failed to allocate tx buffer")
                     .assume_init(),
             ) as u64;
