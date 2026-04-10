@@ -1,3 +1,4 @@
+use core::ptr;
 use core::sync::atomic::Ordering;
 
 use crate::e1000::E1000_BASE;
@@ -38,8 +39,8 @@ unsafe fn setup_bar0(bar0_ptr: *mut u32) -> Option<u64> {
         let bar0_hi_ptr = bar0_ptr.add(1);
 
         // write a mask and read back the value
-        *bar0_lo_ptr = 0xFFFF_FFFF;
-        let bar0_lo = *bar0_lo_ptr;
+        ptr::write_volatile(bar0_lo_ptr, 0xFFFF_FFFF);
+        let bar0_lo = ptr::read_volatile(bar0_lo_ptr);
 
         // if read back is 0 (unimplemented) or bit-0 is set (I/O space BAR), bail.
         // we only handle MMIO space BAR setup, bit-0 is unset.
@@ -51,8 +52,8 @@ unsafe fn setup_bar0(bar0_ptr: *mut u32) -> Option<u64> {
         let is_64bit = bar0_lo & 0x6 == 0x4;
 
         let bar0_hi = if is_64bit {
-            *bar0_hi_ptr = 0xFFFF_FFFF;
-            *bar0_hi_ptr
+            ptr::write_volatile(bar0_hi_ptr, 0xFFFF_FFFF);
+            ptr::read_volatile(bar0_hi_ptr)
         } else {
             0
         };
@@ -86,8 +87,8 @@ unsafe fn setup_bar0(bar0_ptr: *mut u32) -> Option<u64> {
         *cursor = (aligned + size) as usize;
 
         // write the cursor to the BAR
-        *bar0_lo_ptr = (aligned & 0xFFFF_FFFF) as u32;
-        *bar0_hi_ptr = (aligned >> 32) as u32;
+        ptr::write_volatile(bar0_lo_ptr, (aligned & 0xFFFF_FFFF) as u32);
+        ptr::write_volatile(bar0_hi_ptr, (aligned >> 32) as u32);
 
         println!("\tmapped base=0x{:08X}, size=0x{:08X}", aligned, size);
 
@@ -114,8 +115,8 @@ pub unsafe fn init() {
 
                 // get vendor id (bits 15:0) and device id (bits 31:16)
                 // https://wiki.osdev.org/PCI#Common_Header_Fields
-                let vendor_id = (*addr & 0xFFFF) as u16;
-                let device_id = (*addr >> 16) as u16;
+                let vendor_id = ptr::read_volatile(addr) as u16;
+                let device_id = (ptr::read_volatile(addr) >> 16) as u16;
 
                 if vendor_id == 0xFFFF {
                     continue;
@@ -134,7 +135,9 @@ pub unsafe fn init() {
                 // set command register bit 2 (bus master) and bit 1 (memory space)
                 // https://wiki.osdev.org/PCI#Command_Register
                 let command_reg = addr.add(1) as *mut u16;
-                *command_reg |= (1 << 2) + (1 << 1);
+                let mut cmd = ptr::read_volatile(command_reg);
+                cmd |= (1 << 2) + (1 << 1);
+                ptr::write_volatile(command_reg, cmd);
 
                 // save E1000's BAR address
                 if vendor_id == 0x8086 && device_id == 0x100E {
