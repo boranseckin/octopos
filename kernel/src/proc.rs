@@ -1,5 +1,6 @@
 use core::arch::asm;
 use core::cell::UnsafeCell;
+use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -446,6 +447,10 @@ impl Proc {
         ptr::eq(self, *INIT_PROC.get().unwrap())
     }
 
+    pub fn is_kernel_proc(&self) -> bool {
+        self.data().pagetable.is_none()
+    }
+
     /// Returns true if this process has been killed.
     ///
     /// Acquires and releases the proc lock.
@@ -507,6 +512,60 @@ impl Proc {
         inner.killed = false;
         inner.xstate = 0;
         inner.state = ProcState::Unused;
+    }
+
+    /// Sets up this process's trapframe and user page table for running user code.
+    /// It also sets the return address in the trapframe to `fork_ret`, so that when this process
+    /// starts running, it will jump to `fork_ret`, which will return to user space.
+    pub fn setup_user<'a>(
+        &self,
+        inner: SpinLockGuard<'a, ProcInner>,
+    ) -> Result<SpinLockGuard<'a, ProcInner>, KernelError> {
+        // # Safety: the process is not yet runnable, so we are the only one accessing it
+        let data = unsafe { self.data_mut() };
+
+        // Allocate a trapframe page.
+        match log!(Box::<TrapFrame>::try_new_zeroed()) {
+            Ok(trapframe) => {
+                data.trapframe.replace(unsafe { trapframe.assume_init() });
+            }
+            Err(err) => {
+                self.free(inner);
+                return Err(err.into());
+            }
+        }
+
+        // Allocate an empty user page table.
+        match log!(self.create_pagetable()) {
+            Ok(uvm) => {
+                data.pagetable.replace(uvm);
+            }
+            Err(err) => {
+                self.free(inner);
+                return Err(err);
+            }
+        }
+
+        // Set up new context to start executing at fork_ret, which returns to user space.
+        data.context.ra = fork_ret as *const () as usize;
+
+        Ok(inner)
+    }
+
+    /// Sets up this process return address to kernel_thread_entry.
+    /// The kernel thread entry will call the given function `f` in `s1`.
+    pub fn setup_kernel<'a>(
+        &self,
+        inner: SpinLockGuard<'a, ProcInner>,
+        f: fn(),
+    ) -> SpinLockGuard<'a, ProcInner> {
+        // # Safety: the process is not yet runnable, so we are the only one accessing it
+        let data = unsafe { self.data_mut() };
+
+        data.context.ra = kernel_thread_entry as *const () as usize;
+        data.context.s1 = f as *const () as usize;
+
+        inner
     }
 }
 
@@ -578,43 +637,17 @@ impl ProcTable {
     }
 
     /// Searches the process table for an `ProcState::Unused` proc.
-    /// If found, initialize state required to run in the kernel, and return both proc and its
-    /// inner mutex guard.
+    /// If found, return both proc and its inner mutex guard.
     pub fn alloc(&self) -> Result<(&Proc, SpinLockGuard<'_, ProcInner>), KernelError> {
         for proc in self.iter() {
             let mut inner = proc.inner.lock();
+
             if inner.state == ProcState::Unused {
                 inner.pid = Pid::alloc();
                 inner.state = ProcState::Used;
 
-                // # Safety: proc is not yet runnable, so we are the only ones with access to it
                 let data = unsafe { proc.data_mut() };
-
-                // Allocate a trapframe page.
-                match log!(Box::<TrapFrame>::try_new_zeroed()) {
-                    Ok(trapframe) => {
-                        data.trapframe.replace(unsafe { trapframe.assume_init() });
-                    }
-                    Err(err) => {
-                        proc.free(inner);
-                        return Err(err.into());
-                    }
-                }
-
-                // Allocate an empty user page table.
-                match log!(proc.create_pagetable()) {
-                    Ok(uvm) => {
-                        data.pagetable.replace(uvm);
-                    }
-                    Err(err) => {
-                        proc.free(inner);
-                        return Err(err);
-                    }
-                }
-
-                // Set up new context to start executing at forkret, which returns to user space.
                 data.context.zero();
-                data.context.ra = fork_ret as *const () as usize;
                 data.context.sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize();
 
                 return Ok((proc, inner));
@@ -652,6 +685,10 @@ pub fn user_init() {
     let (proc, mut inner) = PROC_TABLE
         .alloc()
         .expect("user_init: failed to allocate process");
+    inner = proc
+        .setup_user(inner)
+        .expect("user_init: failed to setup process");
+
     INIT_PROC.initialize(|| Ok::<_, ()>(proc));
 
     // # Safety: during initialization, we are the only ones with access to this proc
@@ -662,6 +699,21 @@ pub fn user_init() {
     inner.state = ProcState::Runnable;
 
     // inner lock is dropped
+}
+
+/// Spawns a kernel thread to run the given function `f`.
+pub fn spawn_kernel_thread(f: fn(), name: &str) {
+    let (proc, inner) = PROC_TABLE
+        .alloc()
+        .expect("spawn_kernel_thread: failed to allocate process");
+
+    let mut inner = proc.setup_kernel(inner, f);
+
+    let data = unsafe { proc.data_mut() };
+    data.name.push_str(name);
+    data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
+
+    inner.state = ProcState::Runnable;
 }
 
 /// Grows or shrinks user memory by `n` bytes.
@@ -703,8 +755,10 @@ pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize, KernelError> {
 pub fn fork() -> Result<Pid, KernelError> {
     let (proc, data) = current_proc_and_data_mut();
 
-    // allocate process
-    let (new_proc, new_inner) = try_log!(PROC_TABLE.alloc());
+    // allocate and setup new user process
+    let (new_proc, mut new_inner) = try_log!(PROC_TABLE.alloc());
+    new_inner = try_log!(new_proc.setup_user(new_inner));
+
     // # Safety: new_proc is not yet runnable, so we are the only ones with access to it
     let new_data = unsafe { new_proc.data_mut() };
 
@@ -784,12 +838,14 @@ pub fn exit(status: isize) -> ! {
 
     let mut parents = PROC_TABLE.parents.lock();
 
-    // give any children to init
-    reparent(proc, &mut parents);
+    if !proc.is_kernel_proc() {
+        // give any children to init
+        reparent(proc, &mut parents);
 
-    // parent might be sleeping in `wait`
-    let parent_id = parents[proc.id].expect("exit no parent");
-    wakeup(Channel::Proc(parent_id));
+        // parent might be sleeping in `wait`
+        let parent_id = parents[proc.id].expect("exit no parent");
+        wakeup(Channel::Proc(parent_id));
+    }
 
     let mut inner = proc.inner.lock();
     inner.xstate = status;
@@ -982,6 +1038,28 @@ pub unsafe fn fork_ret() {
 
     // return to user space, mimicking `usertrap()`'s return
     unsafe { usertrapret() };
+}
+
+/// Entry point for kernel threads.
+///
+/// # Safety
+/// This function is not called directly, but used as the return address for context switch.
+pub unsafe fn kernel_thread_entry() {
+    // still holding process lock from scheduler.
+    unsafe { current_proc().inner.force_unlock() };
+
+    // retrieve function pointer from s1.
+    let f_ptr: usize;
+    let f: fn() = unsafe {
+        asm!("mv {}, s1", out(reg) f_ptr);
+        mem::transmute(f_ptr)
+    };
+
+    // run the thread function.
+    f();
+
+    // if the function returns, exit gracefully.
+    exit(0);
 }
 
 /// Atomically releases a condition's lock and sleeps on channel.
