@@ -18,6 +18,7 @@ pub(crate) mod kalloc;
 pub(crate) mod kernelvec;
 pub(crate) mod log;
 pub(crate) mod memlayout;
+pub(crate) mod net;
 pub(crate) mod param;
 pub(crate) mod pci;
 pub(crate) mod pipe;
@@ -63,11 +64,12 @@ pub fn main() -> ! {
             trap::init_hart();
             plic::init();
             plic::init_hart();
+            proc::user_init();
             buf::init();
             virtio_disk::init();
             pci::init();
             e1000::init();
-            proc::user_init();
+            net::init();
         }
 
         println!("");
