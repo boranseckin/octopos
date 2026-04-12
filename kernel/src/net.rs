@@ -7,9 +7,6 @@ use crate::e1000;
 use crate::proc;
 use crate::spinlock::SpinLock;
 
-const ETH_TYPE_ARP: u16 = 0x0806;
-const ETH_TYPE_IP4: u16 = 0x0800;
-
 const ARP_HTYPE_ETH: u16 = 0x1;
 const ARP_OP_REQ: u16 = 0x1;
 const ARP_OP_RES: u16 = 0x2;
@@ -34,6 +31,63 @@ struct NetConfig {
     ip: Option<[u8; 4]>,
 }
 
+trait NetworkInt: Sized + Copy {
+    fn to_be(self) -> Self;
+    fn from_be(self) -> Self;
+}
+
+impl NetworkInt for u16 {
+    fn to_be(self) -> Self {
+        u16::to_be(self)
+    }
+
+    fn from_be(self) -> Self {
+        u16::from_be(self)
+    }
+}
+
+impl NetworkInt for u32 {
+    fn to_be(self) -> Self {
+        u32::to_be(self)
+    }
+
+    fn from_be(self) -> Self {
+        u32::from_be(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+struct Be<T: Copy>(T);
+
+impl<T: NetworkInt> Be<T> {
+    fn new(value: T) -> Self {
+        Self(value.to_be())
+    }
+
+    fn get(self) -> T {
+        self.0.from_be()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+enum EtherType {
+    Ipv4 = 0x0800,
+    Arp = 0x0806,
+    Unknown = 0xFFFF,
+}
+
+impl From<Be<u16>> for EtherType {
+    fn from(value: Be<u16>) -> Self {
+        match value.get() {
+            0x0800 => Self::Ipv4,
+            0x0806 => Self::Arp,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Ethernet Frame Header
 /// https://en.wikipedia.org/wiki/Ethernet_frame#Ethernet_II
 #[repr(C, packed)]
@@ -44,7 +98,7 @@ struct EthernetHeader {
     /// Source MAC Address
     src: [u8; 6],
     /// Type
-    eth_type: u16,
+    eth_type: Be<u16>,
 }
 
 impl EthernetHeader {
@@ -57,15 +111,15 @@ impl EthernetHeader {
 #[derive(Debug, Clone, Copy)]
 struct ArpPacket {
     /// Hardware Type
-    htype: u16,
+    htype: Be<u16>,
     /// Protocol Type
-    ptype: u16,
+    ptype: Be<u16>,
     /// Hardware Address Length
     hlen: u8,
     /// Protocol Address Length
     plen: u8,
     /// Operation
-    op: u16,
+    op: Be<u16>,
     /// Sender Hardware Address
     sha: [u8; 6],
     /// Sender Protocol Address
@@ -90,17 +144,17 @@ struct Ipv4Header {
     /// Type of Service
     tos: u8,
     /// Total Length
-    len: u16,
+    len: Be<u16>,
     /// Identification
-    id: u16,
+    id: Be<u16>,
     /// Flags and Fragment Offset
-    off: u16,
+    off: Be<u16>,
     /// Time to Live
     ttl: u8,
     /// Protocol
     proto: u8,
     /// Checksum
-    sum: u16,
+    sum: Be<u16>,
     /// Source IP Address
     src: [u8; 4],
     /// Destination IP Address
@@ -121,9 +175,9 @@ struct IcmpHeader {
     /// Code
     code: u8,
     /// Checksum
-    sum: u16,
+    sum: Be<u16>,
     /// Rest of Header (varies by type/code)
-    rest: u32,
+    rest: Be<u32>,
 }
 
 impl IcmpHeader {
@@ -164,11 +218,11 @@ fn handle_arp(packet: &[u8]) {
         return;
     };
 
-    let op = u16::from_be(arp.op);
-    let htype = u16::from_be(arp.htype);
-    let ptype = u16::from_be(arp.ptype);
+    let op = arp.op.get();
+    let htype = arp.htype.get();
+    let ptype = arp.ptype.get();
 
-    if op == ARP_OP_REQ && htype == ARP_HTYPE_ETH && ptype == ETH_TYPE_IP4 {
+    if op == ARP_OP_REQ && htype == ARP_HTYPE_ETH && ptype == (EtherType::Ipv4 as u16) {
         let ip = {
             let guard = NET_CONFIG.lock();
             guard.ip.unwrap()
@@ -192,15 +246,15 @@ fn send_arp_reply(request: &ArpPacket) {
     let eth = EthernetHeader {
         dst: request.sha,
         src: mac,
-        eth_type: ETH_TYPE_ARP.to_be(),
+        eth_type: Be::new(EtherType::Arp as u16),
     };
 
     let arp = ArpPacket {
-        htype: ARP_HTYPE_ETH.to_be(),
-        ptype: ETH_TYPE_IP4.to_be(),
+        htype: Be::new(ARP_HTYPE_ETH),
+        ptype: request.ptype,
         hlen: 6,
         plen: 4,
-        op: ARP_OP_RES.to_be(),
+        op: Be::new(ARP_OP_RES),
         sha: mac,
         spa: ip.unwrap(),
         tha: request.sha,
@@ -239,28 +293,27 @@ fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u
     };
 
     // pre-allocate packet buffer for Eth + (IP + ICMP)
-    let mut packet =
-        Vec::with_capacity(EthernetHeader::SIZE + u16::from_be(request_ip.len) as usize);
+    let mut packet = Vec::with_capacity(EthernetHeader::SIZE + request_ip.len.get() as usize);
 
     let eth = EthernetHeader {
         dst: dest_mac,
         src: mac,
-        eth_type: ETH_TYPE_IP4.to_be(),
+        eth_type: Be::new(EtherType::Ipv4 as u16),
     };
 
     let mut ip = Ipv4Header {
         ver_ihl: (4 << 4) | (Ipv4Header::SIZE as u8 / 4),
         tos: 0,
         len: request_ip.len,
-        id: 0,
-        off: 0,
+        id: Be::new(0),
+        off: Be::new(0),
         ttl: 64,
         proto: IPV4_PROTO_ICMP,
-        sum: 0, // to be filled later
+        sum: Be::new(0), // to be filled later
         src: request_ip.dst,
         dst: request_ip.src,
     };
-    ip.sum = internet_checksum(ip.as_bytes()).to_be();
+    ip.sum = Be::new(internet_checksum(ip.as_bytes()));
 
     packet.extend_from_slice(eth.as_bytes());
     packet.extend_from_slice(ip.as_bytes());
@@ -268,7 +321,7 @@ fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u
     let icmp = IcmpHeader {
         typ: ICMP_TYPE_ECHO_RES,
         code: 0,
-        sum: 0, // to be filled later
+        sum: Be::new(0), // to be filled later
         rest: IcmpHeader::from_bytes(request_icmp).unwrap().rest,
     };
 
@@ -319,10 +372,10 @@ fn rx(packet: Box<[u8]>) {
 
     let data_packet = &packet[size_of::<EthernetHeader>()..];
 
-    match u16::from_be(eth.eth_type) {
-        ETH_TYPE_ARP => handle_arp(data_packet),
-        ETH_TYPE_IP4 => handle_ipv4(eth, data_packet),
-        _ => {}
+    match EtherType::from(eth.eth_type) {
+        EtherType::Arp => handle_arp(data_packet),
+        EtherType::Ipv4 => handle_ipv4(eth, data_packet),
+        EtherType::Unknown => {}
     }
 }
 
