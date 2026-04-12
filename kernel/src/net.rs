@@ -238,8 +238,6 @@ struct IcmpHeader {
 }
 
 impl IcmpHeader {
-    const SIZE: usize = size_of::<Self>();
-
     fn r#type(&self) -> IcmpType {
         IcmpType::from(self.r#type)
     }
@@ -253,6 +251,12 @@ unsafe trait NetworkHeader: Sized {
 
         // # Safety: the data is long enough, and the alignment is handled by repr(packed).
         Some(unsafe { &*(data.as_ptr() as *const Self) })
+    }
+
+    fn from_bytes_with_rest(data: &[u8]) -> Option<(&Self, &[u8])> {
+        let header = Self::from_bytes(data)?;
+        let rest = &data[size_of::<Self>()..];
+        Some((header, rest))
     }
 
     fn as_bytes(&self) -> &[u8] {
@@ -329,16 +333,15 @@ fn send_arp_reply(request: &ArpPacket) {
 }
 
 fn handle_ipv4(eth_req: &EthernetHeader, packet: &[u8]) {
-    let Some(ipv4) = Ipv4Header::from_bytes(packet) else {
+    let Some((ipv4, data)) = Ipv4Header::from_bytes_with_rest(packet) else {
         return;
     };
 
     match ipv4.proto() {
         Ipv4Proto::ICMP => {
-            let icmp_data = &packet[Ipv4Header::SIZE..];
-            if let Some(icmp) = IcmpHeader::from_bytes(icmp_data) {
+            if let Some((icmp, data)) = IcmpHeader::from_bytes_with_rest(data) {
                 if icmp.r#type() == IcmpType::EchoRequest {
-                    send_icmp_reply(eth_req.src, ipv4, icmp_data);
+                    send_icmp_reply(eth_req.src, ipv4, icmp, data);
                 }
             }
         }
@@ -347,7 +350,12 @@ fn handle_ipv4(eth_req: &EthernetHeader, packet: &[u8]) {
     }
 }
 
-fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u8]) {
+fn send_icmp_reply(
+    dest_mac: [u8; 6],
+    request_ip: &Ipv4Header,
+    request_icmp: &IcmpHeader,
+    request_data: &[u8],
+) {
     let mac = {
         let guard = NET_CONFIG.lock();
         guard.mac
@@ -383,14 +391,14 @@ fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u
         r#type: IcmpType::EchoReply as u8,
         code: 0,
         sum: Be::new(0), // to be filled later
-        rest: IcmpHeader::from_bytes(request_icmp).unwrap().rest,
+        rest: request_icmp.rest,
     };
 
     let icmp_start = packet.len();
 
     // add icmp header and the data from the icmp request
     packet.extend_from_slice(icmp.as_bytes());
-    packet.extend_from_slice(&request_icmp[IcmpHeader::SIZE..]);
+    packet.extend_from_slice(request_data);
 
     // calculate checksum over the whole icmp packet and patch the fields
     let icmp_checksum = internet_checksum(&packet[icmp_start..]);
@@ -427,15 +435,13 @@ fn internet_checksum(data: &[u8]) -> u16 {
 }
 
 fn rx(packet: Box<[u8]>) {
-    let Some(eth) = EthernetHeader::from_bytes(&packet) else {
+    let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&packet) else {
         return;
     };
 
-    let data_packet = &packet[size_of::<EthernetHeader>()..];
-
     match eth.ether_type() {
-        EtherType::Arp => handle_arp(data_packet),
-        EtherType::Ipv4 => handle_ipv4(eth, data_packet),
+        EtherType::Arp => handle_arp(data),
+        EtherType::Ipv4 => handle_ipv4(eth, data),
         EtherType::Unknown => {}
     }
 }
