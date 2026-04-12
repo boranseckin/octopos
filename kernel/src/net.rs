@@ -7,16 +7,6 @@ use crate::e1000;
 use crate::proc;
 use crate::spinlock::SpinLock;
 
-const ARP_HTYPE_ETH: u16 = 0x1;
-const ARP_OP_REQ: u16 = 0x1;
-const ARP_OP_RES: u16 = 0x2;
-
-const IPV4_PROTO_ICMP: u8 = 1;
-const IPV4_PROTO_UDP: u8 = 17;
-
-const ICMP_TYPE_ECHO_REQ: u8 = 8;
-const ICMP_TYPE_ECHO_RES: u8 = 0;
-
 static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
     NetConfig {
         mac: [0x52, 0x54, 0x00, 0x12, 0x34, 0x56],
@@ -75,7 +65,7 @@ impl<T: NetworkInt> Be<T> {
 enum EtherType {
     Ipv4 = 0x0800,
     Arp = 0x0806,
-    Unknown = 0xFFFF,
+    Unknown = u16::MAX,
 }
 
 impl From<Be<u16>> for EtherType {
@@ -98,11 +88,33 @@ struct EthernetHeader {
     /// Source MAC Address
     src: [u8; 6],
     /// Type
-    eth_type: Be<u16>,
+    ether_type: Be<u16>,
 }
 
 impl EthernetHeader {
     const SIZE: usize = size_of::<Self>();
+
+    fn ether_type(&self) -> EtherType {
+        EtherType::from(self.ether_type)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+enum ArpOp {
+    Request = 1,
+    Response = 2,
+    Unknown = u16::MAX,
+}
+
+impl From<Be<u16>> for ArpOp {
+    fn from(value: Be<u16>) -> Self {
+        match value.get() {
+            1 => Self::Request,
+            2 => Self::Response,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// Address Resolution Protocol (ARP) Packet
@@ -132,6 +144,29 @@ struct ArpPacket {
 
 impl ArpPacket {
     const SIZE: usize = size_of::<Self>();
+    const HTYPE_ETH: u16 = 0x1;
+
+    fn op(&self) -> ArpOp {
+        ArpOp::from(self.op)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Ipv4Proto {
+    ICMP = 1,
+    UDP = 17,
+    Unknown = u8::MAX,
+}
+
+impl From<u8> for Ipv4Proto {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => Self::ICMP,
+            17 => Self::UDP,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// IPv4 Header
@@ -163,6 +198,28 @@ struct Ipv4Header {
 
 impl Ipv4Header {
     const SIZE: usize = size_of::<Self>();
+
+    fn proto(&self) -> Ipv4Proto {
+        Ipv4Proto::from(self.proto)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum IcmpType {
+    EchoReply = 0,
+    EchoRequest = 8,
+    Unknown = u8::MAX,
+}
+
+impl From<u8> for IcmpType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::EchoReply,
+            8 => Self::EchoRequest,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// ICMP Header
@@ -171,7 +228,7 @@ impl Ipv4Header {
 #[derive(Debug, Clone, Copy)]
 struct IcmpHeader {
     /// Type
-    typ: u8,
+    r#type: u8,
     /// Code
     code: u8,
     /// Checksum
@@ -182,6 +239,10 @@ struct IcmpHeader {
 
 impl IcmpHeader {
     const SIZE: usize = size_of::<Self>();
+
+    fn r#type(&self) -> IcmpType {
+        IcmpType::from(self.r#type)
+    }
 }
 
 unsafe trait NetworkHeader: Sized {
@@ -218,11 +279,11 @@ fn handle_arp(packet: &[u8]) {
         return;
     };
 
-    let op = arp.op.get();
+    let op = arp.op();
     let htype = arp.htype.get();
     let ptype = arp.ptype.get();
 
-    if op == ARP_OP_REQ && htype == ARP_HTYPE_ETH && ptype == (EtherType::Ipv4 as u16) {
+    if op == ArpOp::Request && htype == ArpPacket::HTYPE_ETH && ptype == (EtherType::Ipv4 as u16) {
         let ip = {
             let guard = NET_CONFIG.lock();
             guard.ip.unwrap()
@@ -246,15 +307,15 @@ fn send_arp_reply(request: &ArpPacket) {
     let eth = EthernetHeader {
         dst: request.sha,
         src: mac,
-        eth_type: Be::new(EtherType::Arp as u16),
+        ether_type: Be::new(EtherType::Arp as u16),
     };
 
     let arp = ArpPacket {
-        htype: Be::new(ARP_HTYPE_ETH),
+        htype: Be::new(ArpPacket::HTYPE_ETH),
         ptype: request.ptype,
         hlen: 6,
         plen: 4,
-        op: Be::new(ARP_OP_RES),
+        op: Be::new(ArpOp::Response as u16),
         sha: mac,
         spa: ip.unwrap(),
         tha: request.sha,
@@ -272,17 +333,17 @@ fn handle_ipv4(eth_req: &EthernetHeader, packet: &[u8]) {
         return;
     };
 
-    match ipv4.proto {
-        IPV4_PROTO_ICMP => {
+    match ipv4.proto() {
+        Ipv4Proto::ICMP => {
             let icmp_data = &packet[Ipv4Header::SIZE..];
             if let Some(icmp) = IcmpHeader::from_bytes(icmp_data) {
-                if icmp.typ == ICMP_TYPE_ECHO_REQ {
+                if icmp.r#type() == IcmpType::EchoRequest {
                     send_icmp_reply(eth_req.src, ipv4, icmp_data);
                 }
             }
         }
-        IPV4_PROTO_UDP => {}
-        _ => {}
+        Ipv4Proto::UDP => {}
+        Ipv4Proto::Unknown => {}
     }
 }
 
@@ -298,7 +359,7 @@ fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u
     let eth = EthernetHeader {
         dst: dest_mac,
         src: mac,
-        eth_type: Be::new(EtherType::Ipv4 as u16),
+        ether_type: Be::new(EtherType::Ipv4 as u16),
     };
 
     let mut ip = Ipv4Header {
@@ -308,7 +369,7 @@ fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u
         id: Be::new(0),
         off: Be::new(0),
         ttl: 64,
-        proto: IPV4_PROTO_ICMP,
+        proto: Ipv4Proto::ICMP as u8,
         sum: Be::new(0), // to be filled later
         src: request_ip.dst,
         dst: request_ip.src,
@@ -319,7 +380,7 @@ fn send_icmp_reply(dest_mac: [u8; 6], request_ip: &Ipv4Header, request_icmp: &[u
     packet.extend_from_slice(ip.as_bytes());
 
     let icmp = IcmpHeader {
-        typ: ICMP_TYPE_ECHO_RES,
+        r#type: IcmpType::EchoReply as u8,
         code: 0,
         sum: Be::new(0), // to be filled later
         rest: IcmpHeader::from_bytes(request_icmp).unwrap().rest,
@@ -372,7 +433,7 @@ fn rx(packet: Box<[u8]>) {
 
     let data_packet = &packet[size_of::<EthernetHeader>()..];
 
-    match EtherType::from(eth.eth_type) {
+    match eth.ether_type() {
         EtherType::Arp => handle_arp(data_packet),
         EtherType::Ipv4 => handle_ipv4(eth, data_packet),
         EtherType::Unknown => {}
