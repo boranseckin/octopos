@@ -288,9 +288,11 @@ fn handle_arp(packet: &[u8]) {
     let ptype = arp.ptype.get();
 
     if op == ArpOp::Request && htype == ArpPacket::HTYPE_ETH && ptype == (EtherType::Ipv4 as u16) {
-        let ip = {
+        let Some(ip) = ({
             let guard = NET_CONFIG.lock();
-            guard.ip.unwrap()
+            guard.ip
+        }) else {
+            return;
         };
 
         if arp.tpa == ip {
@@ -305,7 +307,8 @@ fn send_arp_reply(request: &ArpPacket) {
 
     let (mac, ip) = {
         let guard = NET_CONFIG.lock();
-        (guard.mac, guard.ip)
+        let Some(ip) = guard.ip else { return };
+        (guard.mac, ip)
     };
 
     let eth = EthernetHeader {
@@ -321,7 +324,7 @@ fn send_arp_reply(request: &ArpPacket) {
         plen: 4,
         op: Be::new(ArpOp::Response as u16),
         sha: mac,
-        spa: ip.unwrap(),
+        spa: ip,
         tha: request.sha,
         tpa: request.spa,
     };
@@ -329,7 +332,7 @@ fn send_arp_reply(request: &ArpPacket) {
     eth.append_to(&mut packet, &mut offset);
     arp.append_to(&mut packet, &mut offset);
 
-    e1000::transmit(&packet).unwrap();
+    e1000::transmit(&packet).expect("failed to send arp reply");
 }
 
 fn handle_ipv4(eth_req: &EthernetHeader, packet: &[u8]) {
@@ -406,7 +409,7 @@ fn send_icmp_reply(
     packet[icmp_start + 2] = sum_bytes[0];
     packet[icmp_start + 3] = sum_bytes[1];
 
-    e1000::transmit(&packet).unwrap();
+    e1000::transmit(&packet).expect("failed to send icmp reply");
 }
 
 /// Computes the one's-complement Internet checksum used by IP and ICMP (RFC 1071).
