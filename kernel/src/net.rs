@@ -464,6 +464,10 @@ fn handle_ipv4(req_eth: &EthernetHeader, packet: &[u8]) {
         return;
     };
 
+    // Remove extra padding bytes added by the NIC, if any.
+    let ipv4_payload_len = req_ipv4.len.get() as usize - Ipv4Header::SIZE;
+    let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
+
     match req_ipv4.proto() {
         Ipv4Proto::ICMP => {
             if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
