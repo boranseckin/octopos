@@ -9,18 +9,21 @@ use crate::spinlock::SpinLock;
 
 static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
     NetConfig {
-        mac: [0x52, 0x54, 0x00, 0x12, 0x34, 0x56],
-        ip: Some([192, 168, 10, 2]),
+        mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
+        // TODO: use dhcp
+        ip: Some(Ipv4Addr([192, 168, 10, 2])),
     },
     "net_config",
 );
 
+/// Network configuration, including our MAC address and optionally our IP address (if configured).
 #[derive(Debug)]
 struct NetConfig {
-    mac: [u8; 6],
-    ip: Option<[u8; 4]>,
+    mac: MacAddr,
+    ip: Option<Ipv4Addr>,
 }
 
+/// Trait for integer types that can be converted to/from network byte order (big-endian).
 trait NetworkInt: Sized + Copy {
     fn to_be(self) -> Self;
     fn from_be(self) -> Self;
@@ -46,6 +49,8 @@ impl NetworkInt for u32 {
     }
 }
 
+/// Wrapper type for network byte order (big-endian) integers, providing methods to convert to/from
+/// host byte order.
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 struct Be<T: Copy>(T);
@@ -57,6 +62,32 @@ impl<T: NetworkInt> Be<T> {
 
     fn get(self) -> T {
         self.0.from_be()
+    }
+}
+
+/// MAC Address
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct MacAddr([u8; 6]);
+
+impl core::fmt::Display for MacAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+        )
+    }
+}
+
+/// IPv4 Address
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct Ipv4Addr([u8; 4]);
+
+impl core::fmt::Display for Ipv4Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])
     }
 }
 
@@ -84,9 +115,9 @@ impl From<Be<u16>> for EtherType {
 #[derive(Debug, Clone, Copy)]
 struct EthernetHeader {
     /// Destination MAC Address
-    dst: [u8; 6],
+    dst: MacAddr,
     /// Source MAC Address
-    src: [u8; 6],
+    src: MacAddr,
     /// Type
     ether_type: Be<u16>,
 }
@@ -96,6 +127,30 @@ impl EthernetHeader {
 
     fn ether_type(&self) -> EtherType {
         EtherType::from(self.ether_type)
+    }
+
+    fn new_reply(request: &Self, our_mac: MacAddr) -> Self {
+        Self {
+            dst: request.src,
+            src: our_mac,
+            ether_type: request.ether_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+enum ArpHType {
+    Ethernet = 1,
+    Unknown = u16::MAX,
+}
+
+impl From<Be<u16>> for ArpHType {
+    fn from(value: Be<u16>) -> Self {
+        match value.get() {
+            1 => Self::Ethernet,
+            _ => Self::Unknown,
+        }
     }
 }
 
@@ -133,21 +188,38 @@ struct ArpPacket {
     /// Operation
     op: Be<u16>,
     /// Sender Hardware Address
-    sha: [u8; 6],
+    sha: MacAddr,
     /// Sender Protocol Address
-    spa: [u8; 4],
+    spa: Ipv4Addr,
     /// Target Hardware Address
-    tha: [u8; 6],
+    tha: MacAddr,
     /// Target Protocol Address
-    tpa: [u8; 4],
+    tpa: Ipv4Addr,
 }
 
 impl ArpPacket {
     const SIZE: usize = size_of::<Self>();
-    const HTYPE_ETH: u16 = 0x1;
+
+    fn htype(&self) -> ArpHType {
+        ArpHType::from(self.htype)
+    }
 
     fn op(&self) -> ArpOp {
         ArpOp::from(self.op)
+    }
+
+    fn new_reply(request: &Self, our_mac: MacAddr, our_ip: Ipv4Addr) -> Self {
+        Self {
+            htype: request.htype,
+            ptype: request.ptype,
+            hlen: request.hlen,
+            plen: request.plen,
+            op: Be::new(ArpOp::Response as u16),
+            sha: our_mac,
+            spa: our_ip,
+            tha: request.sha,
+            tpa: request.spa,
+        }
     }
 }
 
@@ -191,9 +263,9 @@ struct Ipv4Header {
     /// Checksum
     sum: Be<u16>,
     /// Source IP Address
-    src: [u8; 4],
+    src: Ipv4Addr,
     /// Destination IP Address
-    dst: [u8; 4],
+    dst: Ipv4Addr,
 }
 
 impl Ipv4Header {
@@ -201,6 +273,32 @@ impl Ipv4Header {
 
     fn proto(&self) -> Ipv4Proto {
         Ipv4Proto::from(self.proto)
+    }
+
+    fn new_reply(request: &Self, payload_len: usize) -> Self {
+        Self {
+            ver_ihl: request.ver_ihl,
+            tos: 0,
+            len: Be::new((Self::SIZE + payload_len) as u16),
+            id: Be::new(0),
+            off: Be::new(0),
+            ttl: 64,
+            proto: request.proto,
+            sum: Be::new(0), // to be filled later
+            src: request.dst,
+            dst: request.src,
+        }
+    }
+
+    fn calculate_checksum(&self) -> u16 {
+        let mut header = *self;
+        header.sum = Be::new(0);
+        internet_checksum(header.as_bytes())
+    }
+
+    fn add_checksum(mut self) -> Self {
+        self.sum = Be::new(self.calculate_checksum());
+        self
     }
 }
 
@@ -238,31 +336,71 @@ struct IcmpHeader {
 }
 
 impl IcmpHeader {
+    const SIZE: usize = size_of::<Self>();
+
     fn r#type(&self) -> IcmpType {
         IcmpType::from(self.r#type)
     }
+
+    fn new_echo_reply(request: &IcmpHeader) -> Self {
+        Self {
+            r#type: IcmpType::EchoReply as u8,
+            code: 0,
+            sum: Be::new(0), // to be filled later
+            rest: request.rest,
+        }
+    }
+
+    fn calculate_checksum(&self, data: &[u8]) -> u16 {
+        // TODO: do this without vec
+        let mut packet = Vec::with_capacity(Self::SIZE + data.len());
+        packet.extend_from_slice(self.as_bytes());
+        packet.extend_from_slice(data);
+        internet_checksum(&packet)
+    }
+
+    fn add_checksum(mut self, data: &[u8]) -> Self {
+        self.sum = Be::new(self.calculate_checksum(data));
+        self
+    }
 }
 
+/// Trait for parsing and serializing network headers.
+///
+/// # Safety
+/// Implementors must ensure that the struct is `repr(C, packed)` and contains only plain data
+/// fields, so that it can be safely transmuted to/from a byte slice without violating Rust's
+/// aliasing or alignment rules.
 unsafe trait NetworkHeader: Sized {
+    /// Parses a header from the start of the given byte slice, returning `None` if the data is too
+    /// short.
     fn from_bytes(data: &[u8]) -> Option<&Self> {
         if data.len() < size_of::<Self>() {
             return None;
         }
 
-        // # Safety: the data is long enough, and the alignment is handled by repr(packed).
+        // # Safety: the data is long enough, and the alignment is handled by the invariant of this
+        // trait that the struct is `repr(C, packed)` with only plain data fields.
         Some(unsafe { &*(data.as_ptr() as *const Self) })
     }
 
+    /// Parses a header from the start of the given byte slice, returning the header and a slice of
+    /// the remaining data after the header, or `None` if the data is too short.
     fn from_bytes_with_rest(data: &[u8]) -> Option<(&Self, &[u8])> {
         let header = Self::from_bytes(data)?;
         let rest = &data[size_of::<Self>()..];
         Some((header, rest))
     }
 
+    /// Returns a byte slice view of this header, for use in checksum calculations and serialization.
     fn as_bytes(&self) -> &[u8] {
+        // # Safety: the struct is `repr(C, packed)` with only plain data fields, so it can be
+        // safe to view it as a byte slice of the appropriate length.
         unsafe { slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
     }
 
+    /// Appends the byte representation of this header to the given buffer at the specified offset,
+    /// and advances the offset by the size of this header.
     fn append_to(&self, buf: &mut [u8], offset: &mut usize) {
         let bytes = self.as_bytes();
         let len = bytes.len();
@@ -278,30 +416,32 @@ unsafe impl NetworkHeader for ArpPacket {}
 unsafe impl NetworkHeader for Ipv4Header {}
 unsafe impl NetworkHeader for IcmpHeader {}
 
-fn handle_arp(packet: &[u8]) {
-    let Some(arp) = ArpPacket::from_bytes(packet) else {
+/// Handles an incoming ARP packet by parsing the header and, if it is a request for our IP, sending
+/// a reply with our MAC address.
+fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) {
+    let Some(req_arp) = ArpPacket::from_bytes(req_data) else {
         return;
     };
 
-    let op = arp.op();
-    let htype = arp.htype.get();
-    let ptype = arp.ptype.get();
-
-    if op == ArpOp::Request && htype == ArpPacket::HTYPE_ETH && ptype == (EtherType::Ipv4 as u16) {
-        let Some(ip) = ({
+    if req_arp.op() == ArpOp::Request
+        && req_arp.htype() == ArpHType::Ethernet
+        && EtherType::from(req_arp.ptype) == EtherType::Ipv4
+    {
+        let ip = {
             let guard = NET_CONFIG.lock();
-            guard.ip
-        }) else {
-            return;
+            let Some(ip) = guard.ip else { return };
+            ip
         };
 
-        if arp.tpa == ip {
-            send_arp_reply(arp);
+        if req_arp.tpa == ip {
+            send_arp_reply(req_eth, req_arp);
         }
     }
 }
 
-fn send_arp_reply(request: &ArpPacket) {
+/// Sends an ARP Reply in response to the given ARP Request, swapping source/destination addresses
+/// and filling in our MAC/IP as needed.
+fn send_arp_reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
@@ -311,40 +451,24 @@ fn send_arp_reply(request: &ArpPacket) {
         (guard.mac, ip)
     };
 
-    let eth = EthernetHeader {
-        dst: request.sha,
-        src: mac,
-        ether_type: Be::new(EtherType::Arp as u16),
-    };
-
-    let arp = ArpPacket {
-        htype: Be::new(ArpPacket::HTYPE_ETH),
-        ptype: request.ptype,
-        hlen: 6,
-        plen: 4,
-        op: Be::new(ArpOp::Response as u16),
-        sha: mac,
-        spa: ip,
-        tha: request.sha,
-        tpa: request.spa,
-    };
-
-    eth.append_to(&mut packet, &mut offset);
-    arp.append_to(&mut packet, &mut offset);
+    EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
+    ArpPacket::new_reply(req_arp, mac, ip).append_to(&mut packet, &mut offset);
 
     e1000::transmit(&packet).expect("failed to send arp reply");
 }
 
-fn handle_ipv4(eth_req: &EthernetHeader, packet: &[u8]) {
-    let Some((ipv4, data)) = Ipv4Header::from_bytes_with_rest(packet) else {
+/// Handles an incoming IPv4 packet by parsing the header and dispatching to the appropriate
+/// protocol handler.
+fn handle_ipv4(req_eth: &EthernetHeader, packet: &[u8]) {
+    let Some((req_ipv4, req_data)) = Ipv4Header::from_bytes_with_rest(packet) else {
         return;
     };
 
-    match ipv4.proto() {
+    match req_ipv4.proto() {
         Ipv4Proto::ICMP => {
-            if let Some((icmp, data)) = IcmpHeader::from_bytes_with_rest(data) {
-                if icmp.r#type() == IcmpType::EchoRequest {
-                    send_icmp_reply(eth_req.src, ipv4, icmp, data);
+            if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
+                if req_icmp.r#type() == IcmpType::EchoRequest {
+                    send_icmp_reply(req_eth, req_ipv4, req_icmp, req_data);
                 }
             }
         }
@@ -353,11 +477,15 @@ fn handle_ipv4(eth_req: &EthernetHeader, packet: &[u8]) {
     }
 }
 
+/// Sends an ICMP Echo Reply in response to the given Echo Request, swapping source/destination
+/// addresses and recalculating checksums as needed.
+///
+/// This function uses heap allocation to build the packet, since the data payload size is variable.
 fn send_icmp_reply(
-    dest_mac: [u8; 6],
-    request_ip: &Ipv4Header,
-    request_icmp: &IcmpHeader,
-    request_data: &[u8],
+    req_eth: &EthernetHeader,
+    req_ipv4: &Ipv4Header,
+    req_icmp: &IcmpHeader,
+    req_data: &[u8],
 ) {
     let mac = {
         let guard = NET_CONFIG.lock();
@@ -365,58 +493,26 @@ fn send_icmp_reply(
     };
 
     // pre-allocate packet buffer for Eth + (IP + ICMP)
-    let mut packet = Vec::with_capacity(EthernetHeader::SIZE + request_ip.len.get() as usize);
+    let mut packet = Vec::with_capacity(EthernetHeader::SIZE + req_ipv4.len.get() as usize);
 
-    let eth = EthernetHeader {
-        dst: dest_mac,
-        src: mac,
-        ether_type: Be::new(EtherType::Ipv4 as u16),
-    };
-
-    let mut ip = Ipv4Header {
-        ver_ihl: (4 << 4) | (Ipv4Header::SIZE as u8 / 4),
-        tos: 0,
-        len: request_ip.len,
-        id: Be::new(0),
-        off: Be::new(0),
-        ttl: 64,
-        proto: Ipv4Proto::ICMP as u8,
-        sum: Be::new(0), // to be filled later
-        src: request_ip.dst,
-        dst: request_ip.src,
-    };
-    ip.sum = Be::new(internet_checksum(ip.as_bytes()));
+    let eth = EthernetHeader::new_reply(req_eth, mac);
+    let icmp = IcmpHeader::new_echo_reply(req_icmp).add_checksum(req_data);
+    let ipv4 = Ipv4Header::new_reply(req_ipv4, IcmpHeader::SIZE + req_data.len()).add_checksum();
 
     packet.extend_from_slice(eth.as_bytes());
-    packet.extend_from_slice(ip.as_bytes());
-
-    let icmp = IcmpHeader {
-        r#type: IcmpType::EchoReply as u8,
-        code: 0,
-        sum: Be::new(0), // to be filled later
-        rest: request_icmp.rest,
-    };
-
-    let icmp_start = packet.len();
-
-    // add icmp header and the data from the icmp request
+    packet.extend_from_slice(ipv4.as_bytes());
     packet.extend_from_slice(icmp.as_bytes());
-    packet.extend_from_slice(request_data);
-
-    // calculate checksum over the whole icmp packet and patch the fields
-    let icmp_checksum = internet_checksum(&packet[icmp_start..]);
-    let sum_bytes = icmp_checksum.to_be_bytes();
-    packet[icmp_start + 2] = sum_bytes[0];
-    packet[icmp_start + 3] = sum_bytes[1];
+    packet.extend_from_slice(req_data);
 
     e1000::transmit(&packet).expect("failed to send icmp reply");
 }
 
 /// Computes the one's-complement Internet checksum used by IP and ICMP (RFC 1071).
 ///
-/// The algorithm sums all 16-bit big-endian words, folds any carry bits back
-/// into the low 16 bits, then returns the one's complement. Before calling
-/// this, zero out the checksum field in the header so it is not included.
+/// The algorithm sums all 16-bit big-endian words, folds any carry bits back into the low 16 bits,
+/// then returns the one's complement.
+///
+/// Before calling this, zero out the checksum field in the header so it is not included.
 fn internet_checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
 
@@ -424,6 +520,7 @@ fn internet_checksum(data: &[u8]) -> u16 {
     for chunk in &mut chunks {
         sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
     }
+
     // If there is a trailing odd byte, pad it with a zero on the right.
     if let Some(&byte) = chunks.remainder().first() {
         sum += (byte as u32) << 8;
@@ -437,25 +534,29 @@ fn internet_checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+/// Receives a packet, parses the Ethernet header, and dispatches to the appropriate handler based
+/// on the EtherType.
 fn rx(packet: Box<[u8]>) {
     let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&packet) else {
         return;
     };
 
     match eth.ether_type() {
-        EtherType::Arp => handle_arp(data),
+        EtherType::Arp => handle_arp(eth, data),
         EtherType::Ipv4 => handle_ipv4(eth, data),
         EtherType::Unknown => {}
     }
 }
 
-fn thread() {
+/// Kernel thread that continuously receives packets from the e1000 driver and processes them.
+fn net_thread() {
     loop {
         let data = e1000::receive();
         rx(data);
     }
 }
 
+/// Initializes the network stack by spawning a kernel thread to handle incoming packets.
 pub fn init() {
-    proc::spawn_kernel_thread(thread, "net");
+    proc::spawn_kernel_thread(net_thread, "net");
 }
