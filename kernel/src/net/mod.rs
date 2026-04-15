@@ -18,6 +18,13 @@ pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
 
+/// Network configuration, including our MAC address and optionally our IP address (if configured).
+#[derive(Debug)]
+struct NetConfig {
+    mac: MacAddr,
+    ip: Option<Ipv4Addr>,
+}
+
 static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
     NetConfig {
         // default MAC address for QEMU e1000
@@ -28,11 +35,15 @@ static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
     "net_config",
 );
 
-/// Network configuration, including our MAC address and optionally our IP address (if configured).
-#[derive(Debug)]
-struct NetConfig {
-    mac: MacAddr,
-    ip: Option<Ipv4Addr>,
+impl NetConfig {
+    pub fn ip() -> Option<Ipv4Addr> {
+        NET_CONFIG.lock().ip
+    }
+
+    pub fn mac_and_ip() -> Option<(MacAddr, Ipv4Addr)> {
+        let guard = NET_CONFIG.lock();
+        guard.ip.map(|ip| (guard.mac, ip))
+    }
 }
 
 /// Trait for integer types that can be converted to/from network byte order (big-endian).
@@ -246,10 +257,8 @@ fn transmit_raw(packet: &[u8]) {
 ///
 /// Currently only support IPv4 packets.
 fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, payload: &[u8]) {
-    let (src_mac, src_ip) = {
-        let guard = NET_CONFIG.lock();
-        let Some(ip) = guard.ip else { return };
-        (guard.mac, ip)
+    let Some((src_mac, src_ip)) = NetConfig::mac_and_ip() else {
+        return;
     };
 
     let eth = EthernetHeader::new(MacAddr::UNSPECIFIED, src_mac, EtherType::Ipv4);
