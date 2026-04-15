@@ -1,12 +1,14 @@
 use core::slice;
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use crate::e1000;
+use crate::net::arp::ArpCache;
 use crate::net::eth::{EtherType, EthernetHeader};
+use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::proc;
 use crate::spinlock::SpinLock;
-use crate::syscall::SysError;
 
 pub(crate) mod arp;
 pub(crate) mod eth;
@@ -81,6 +83,7 @@ impl<T: NetworkInt> Be<T> {
 pub struct MacAddr([u8; 6]);
 
 impl MacAddr {
+    const UNSPECIFIED: Self = Self([0x00; 6]);
     const BROADCAST: Self = Self([0xff; 6]);
 }
 
@@ -154,7 +157,7 @@ impl OutgoingQueue {
                 // patch destination mac address
                 // always the first 6 bytes of an ethernet frame
                 entry.packet[..6].copy_from_slice(&mac.0);
-                transmit(&entry.packet);
+                let _ = log!(e1000::transmit(&entry.packet));
 
                 *slot = None;
             }
@@ -235,9 +238,41 @@ fn internet_checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+fn transmit_raw(packet: &[u8]) {
+    let _ = log!(e1000::transmit(packet));
+}
+
 /// Transmits a packet by passing it to the e1000 driver, and logs an error if transmission fails.
-fn transmit(buf: &[u8]) {
-    let _ = log!(e1000::transmit(buf));
+///
+/// Currently only support IPv4 packets.
+fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, payload: &[u8]) {
+    let (src_mac, src_ip) = {
+        let guard = NET_CONFIG.lock();
+        let Some(ip) = guard.ip else { return };
+        (guard.mac, ip)
+    };
+
+    let eth = EthernetHeader::new(MacAddr::UNSPECIFIED, src_mac, EtherType::Ipv4);
+    let ipv4 = Ipv4Header::new(src_ip, dest_ip, proto, payload.len()).add_checksum();
+
+    let mut packet = Vec::with_capacity(EthernetHeader::SIZE + ipv4.len() as usize);
+
+    packet.extend_from_slice(eth.as_bytes());
+    packet.extend_from_slice(ipv4.as_bytes());
+    packet.extend_from_slice(payload);
+
+    let mut packet = packet.into_boxed_slice();
+
+    // if we have the destination MAC address cached, fill it in and transmit immediately, otherwise
+    // queue the packet and send an ARP request to resolve the MAC address, which will trigger
+    // transmission when the reply is received.
+    if let Some(dest_mac) = ArpCache::lookup(dest_ip) {
+        packet[..6].copy_from_slice(&dest_mac.0);
+        transmit_raw(&packet);
+    } else {
+        let _ = log!(OutgoingQueue::enqueue(dest_ip, packet));
+        arp::request(dest_ip);
+    }
 }
 
 /// Receives a packet, parses the Ethernet header, and dispatches to the appropriate handler based
@@ -249,7 +284,7 @@ fn receive(packet: Box<[u8]>) {
 
     match eth.ether_type() {
         EtherType::Arp => arp::handle_arp(eth, data),
-        EtherType::Ipv4 => ipv4::handle_ipv4(eth, data),
+        EtherType::Ipv4 => ipv4::handle_ipv4(data),
         EtherType::Unknown => {}
     }
 }

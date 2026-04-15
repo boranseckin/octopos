@@ -1,4 +1,3 @@
-use crate::net::eth::EthernetHeader;
 use crate::net::icmp::{self, IcmpHeader, IcmpType};
 use crate::net::{self, Be, Ipv4Addr, NetworkHeader};
 
@@ -44,7 +43,7 @@ pub struct Ipv4Header {
     /// Source IP Address
     src: Ipv4Addr,
     /// Destination IP Address
-    dst: Ipv4Addr,
+    dest: Ipv4Addr,
 }
 
 impl Ipv4Header {
@@ -69,22 +68,7 @@ impl Ipv4Header {
             proto: proto as u8,
             sum: Be::new(0), // to be filled later
             src,
-            dst,
-        }
-    }
-
-    pub fn new_reply(request: &Self, payload_len: usize) -> Self {
-        Self {
-            ver_ihl: request.ver_ihl,
-            tos: 0,
-            len: Be::new((Self::SIZE + payload_len) as u16),
-            id: Be::new(0),
-            off: Be::new(0),
-            ttl: 64,
-            proto: request.proto,
-            sum: Be::new(0), // to be filled later
-            src: request.dst,
-            dst: request.src,
+            dest: dst,
         }
     }
 
@@ -104,20 +88,25 @@ unsafe impl NetworkHeader for Ipv4Header {}
 
 /// Handles an incoming IPv4 packet by parsing the header and dispatching to the appropriate
 /// protocol handler.
-pub fn handle_ipv4(req_eth: &EthernetHeader, packet: &[u8]) {
+pub fn handle_ipv4(packet: &[u8]) {
     let Some((req_ipv4, req_data)) = Ipv4Header::from_bytes_with_rest(packet) else {
         return;
     };
 
+    // Make sure the packet is not malformed so that the len is smaller than the header size.
+    let total_len = req_ipv4.len() as usize;
+    if total_len < Ipv4Header::SIZE {
+        return;
+    }
     // Remove extra padding bytes added by the NIC, if any.
-    let ipv4_payload_len = req_ipv4.len.get() as usize - Ipv4Header::SIZE;
+    let ipv4_payload_len = total_len - Ipv4Header::SIZE;
     let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
 
     match req_ipv4.proto() {
         Ipv4Proto::ICMP => {
             if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
                 if req_icmp.r#type() == IcmpType::EchoRequest {
-                    icmp::echo_reply(req_eth, req_ipv4, req_icmp, req_data);
+                    icmp::echo_reply(req_ipv4.src, req_icmp, req_data);
                 }
             }
         }

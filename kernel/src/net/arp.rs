@@ -20,7 +20,7 @@ pub struct ArpCache {
     eviction_index: usize,
 }
 
-pub static ARP_CACHE: SpinLock<ArpCache> = SpinLock::new(
+static ARP_CACHE: SpinLock<ArpCache> = SpinLock::new(
     ArpCache {
         entries: [None; ARP_CACHE_SIZE],
         eviction_index: 0,
@@ -48,11 +48,11 @@ impl ArpCache {
             *entry = Some(ArpCacheEntry { ip, mac });
         } else {
             // drop a "random" entry if the cache is full
+            // randomness comes from the randomness of network traffic
             let index = cache.eviction_index;
             cache.entries[index] = Some(ArpCacheEntry { ip, mac });
+            cache.eviction_index = (cache.eviction_index + 1) % ARP_CACHE_SIZE;
         }
-
-        cache.eviction_index = (cache.eviction_index + 1) % ARP_CACHE_SIZE;
     }
 }
 
@@ -208,7 +208,7 @@ fn reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) {
     EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
     ArpPacket::new_reply(req_arp, mac, ip).append_to(&mut packet, &mut offset);
 
-    net::transmit(&packet);
+    net::transmit_raw(&packet);
 }
 
 pub fn request(dest_ip: Ipv4Addr) {
@@ -225,5 +225,5 @@ pub fn request(dest_ip: Ipv4Addr) {
         .append_to(&mut packet, &mut offset);
     ArpPacket::new_request(dest_ip, mac, ip).append_to(&mut packet, &mut offset);
 
-    net::transmit(&packet);
+    net::transmit_raw(&packet);
 }

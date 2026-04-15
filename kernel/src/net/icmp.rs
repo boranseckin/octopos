@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
 
-use crate::net::eth::EthernetHeader;
-use crate::net::ipv4::Ipv4Header;
-use crate::net::{self, Be, NET_CONFIG, NetworkHeader};
+use crate::net::ipv4::Ipv4Proto;
+use crate::net::{self, Be, Ipv4Addr, NetworkHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -69,32 +68,16 @@ impl IcmpHeader {
 
 unsafe impl NetworkHeader for IcmpHeader {}
 
-/// Sends an ICMP Echo Reply in response to the given Echo Request, swapping source/destination
-/// addresses and recalculating checksums as needed.
+/// Sends an ICMP Echo Reply in response to the given ICMP Echo Request.
 ///
 /// This function uses heap allocation to build the packet, since the data payload size is variable.
-pub fn echo_reply(
-    req_eth: &EthernetHeader,
-    req_ipv4: &Ipv4Header,
-    req_icmp: &IcmpHeader,
-    req_data: &[u8],
-) {
-    let mac = {
-        let guard = NET_CONFIG.lock();
-        guard.mac
-    };
+pub fn echo_reply(dest_ip: Ipv4Addr, req_icmp: &IcmpHeader, req_data: &[u8]) {
+    let mut packet = Vec::with_capacity(IcmpHeader::SIZE + req_data.len());
 
-    // pre-allocate packet buffer for Eth + (IP + ICMP)
-    let mut packet = Vec::with_capacity(EthernetHeader::SIZE + req_ipv4.len() as usize);
-
-    let eth = EthernetHeader::new_reply(req_eth, mac);
     let icmp = IcmpHeader::new_echo_reply(req_icmp).add_checksum(req_data);
-    let ipv4 = Ipv4Header::new_reply(req_ipv4, IcmpHeader::SIZE + req_data.len()).add_checksum();
 
-    packet.extend_from_slice(eth.as_bytes());
-    packet.extend_from_slice(ipv4.as_bytes());
     packet.extend_from_slice(icmp.as_bytes());
     packet.extend_from_slice(req_data);
 
-    net::transmit(&packet);
+    net::transmit(dest_ip, Ipv4Proto::ICMP, &packet);
 }
