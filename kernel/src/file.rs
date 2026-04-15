@@ -5,6 +5,7 @@ use alloc::sync::Arc;
 use crate::console::Console;
 use crate::fs::{BSIZE, FsError, Inode, Stat};
 use crate::log::Operation;
+use crate::net::udp::SocketTable;
 use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
 use crate::pipe::Pipe;
 use crate::proc;
@@ -19,6 +20,7 @@ pub enum FileType {
     Pipe { pipe: Arc<Pipe> },
     Inode { inode: Inode },
     Device { inode: Inode, major: u16 },
+    Socket { socket_id: usize },
 }
 
 /// File metadata protected by table-wide spinlock
@@ -134,6 +136,7 @@ impl File {
                 let _op = Operation::begin();
                 inode.put();
             }
+            FileType::Socket { socket_id } => SocketTable::close(socket_id),
         }
     }
 
@@ -197,6 +200,11 @@ impl File {
                 Some(dev) => (dev.read)(addr, n),
                 None => err!(SysError::NoEntry),
             },
+
+            FileType::Socket { socket_id: _ } => {
+                // reads from socket should go through recv()
+                err!(SysError::InvalidArgument);
+            }
         }
     }
 
@@ -257,6 +265,11 @@ impl File {
                 Some(dev) => (dev.write)(addr, n),
                 None => err!(SysError::NoEntry),
             },
+
+            FileType::Socket { socket_id: _ } => {
+                // writes to socket should go through send()
+                err!(SysError::InvalidArgument);
+            }
         }
     }
 

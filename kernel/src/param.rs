@@ -19,6 +19,9 @@ pub const NDEV: usize = 10;
 /// device nubmer of file system root disk
 pub const ROOTDEV: u32 = 1;
 
+/// open sockets per system
+pub const NSOCKET: usize = 16;
+
 /// max exec arguments
 pub const MAXARG: usize = 32;
 

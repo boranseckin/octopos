@@ -35,8 +35,6 @@ pub struct IcmpHeader {
 }
 
 impl IcmpHeader {
-    const SIZE: usize = size_of::<Self>();
-
     pub fn r#type(&self) -> IcmpType {
         IcmpType::from(self.r#type)
     }
@@ -65,8 +63,6 @@ impl IcmpHeader {
 unsafe impl NetworkHeader for IcmpHeader {}
 
 /// Sends an ICMP Echo Reply in response to the given ICMP Echo Request.
-///
-/// This function uses heap allocation to build the packet, since the data payload size is variable.
 pub fn echo_reply(
     dest_ip: Ipv4Addr,
     req_icmp: &IcmpHeader,
@@ -79,4 +75,21 @@ pub fn echo_reply(
         Ipv4Proto::ICMP,
         &[icmp.as_bytes(), req_data]
     ))
+}
+
+/// Handles an incoming ICMP packet.
+/// If it's an Echo Request, sends back an Echo Reply.
+/// Otherwise, ignores it.
+pub fn handle_icmp(dest_ip: Ipv4Addr, req_data: &[u8]) -> Result<(), NetError> {
+    if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
+        match req_icmp.r#type() {
+            IcmpType::EchoRequest => {
+                log!(echo_reply(dest_ip, req_icmp, req_data))
+            }
+            IcmpType::EchoReply => Ok(()),
+            IcmpType::Unknown => Ok(()),
+        }
+    } else {
+        err!(NetError::MalformedPacket)
+    }
 }

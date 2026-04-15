@@ -1,4 +1,5 @@
-use crate::net::icmp::{self, IcmpHeader, IcmpType};
+use crate::net::icmp;
+use crate::net::udp;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,17 +104,8 @@ pub fn handle_ipv4(packet: &[u8]) -> Result<(), NetError> {
     let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
 
     match req_ipv4.proto() {
-        Ipv4Proto::ICMP => {
-            if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
-                if req_icmp.r#type() == IcmpType::EchoRequest {
-                    try_log!(icmp::echo_reply(req_ipv4.src, req_icmp, req_data))
-                }
-                Ok(())
-            } else {
-                err!(NetError::MalformedPacket)
-            }
-        }
-        Ipv4Proto::UDP => Ok(()),
+        Ipv4Proto::ICMP => log!(icmp::handle_icmp(req_ipv4.src, req_data)),
+        Ipv4Proto::UDP => log!(udp::handle_udp(req_ipv4.src, req_data)),
         Ipv4Proto::Unknown => Ok(()),
     }
 }
