@@ -6,6 +6,7 @@ use crate::e1000;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::proc;
 use crate::spinlock::SpinLock;
+use crate::syscall::SysError;
 
 pub(crate) mod arp;
 pub(crate) mod eth;
@@ -13,8 +14,11 @@ pub(crate) mod icmp;
 pub(crate) mod ipv4;
 pub(crate) mod udp;
 
+const OUTGOING_QUEUE_SIZE: usize = 16;
+
 static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
     NetConfig {
+        // default MAC address for QEMU e1000
         mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
         // TODO: use dhcp
         ip: Some(Ipv4Addr([192, 168, 10, 2])),
@@ -98,6 +102,63 @@ pub struct Ipv4Addr([u8; 4]);
 impl core::fmt::Display for Ipv4Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OutgoingQueueEntry {
+    dest_ip: Ipv4Addr,
+    packet: Box<[u8]>,
+}
+
+/// Queue of outgoing packets that needs ARP resolution before they can be transmitted.
+///
+/// Destination MAC address is filled in when the ARP reply is received, and then the packet is
+/// transmitted.
+#[derive(Debug)]
+struct OutgoingQueue {
+    slot: [Option<OutgoingQueueEntry>; OUTGOING_QUEUE_SIZE],
+}
+
+static OUTGOING_QUEUE: SpinLock<OutgoingQueue> = SpinLock::new(
+    OutgoingQueue {
+        slot: [const { None }; OUTGOING_QUEUE_SIZE],
+    },
+    "net_out",
+);
+
+impl OutgoingQueue {
+    /// Enqueues a packet for the given destination IP address, to be transmitted once the MAC
+    /// address is resolved via ARP.
+    ///
+    /// Returns an error if the queue is full.
+    fn enqueue(dest_ip: Ipv4Addr, packet: Box<[u8]>) -> Result<(), ()> {
+        let mut queue = OUTGOING_QUEUE.lock();
+
+        if let Some(slot) = queue.slot.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(OutgoingQueueEntry { dest_ip, packet });
+            Ok(())
+        } else {
+            // TODO: use NetError maybe?
+            Err(())
+        }
+    }
+
+    /// Dispatches any queued packets for the given IP address by filling in the destination MAC
+    /// address and transmitting them.
+    pub fn dispatch(ip: Ipv4Addr, mac: MacAddr) {
+        let mut queue = OUTGOING_QUEUE.lock();
+
+        for slot in queue.slot.iter_mut() {
+            if let Some(entry) = slot.as_mut().filter(|s| s.dest_ip == ip) {
+                // patch destination mac address
+                // always the first 6 bytes of an ethernet frame
+                entry.packet[..6].copy_from_slice(&mac.0);
+                transmit(&entry.packet);
+
+                *slot = None;
+            }
+        }
     }
 }
 
