@@ -1,17 +1,10 @@
 use crate::net::{
     self, Be, EtherType, EthernetHeader, Ipv4Addr, MacAddr, NET_CONFIG, NetworkHeader,
+    OutgoingQueue,
 };
 use crate::spinlock::SpinLock;
 
 const ARP_CACHE_SIZE: usize = 64;
-
-pub static ARP_CACHE: SpinLock<ArpCache> = SpinLock::new(
-    ArpCache {
-        entries: [None; ARP_CACHE_SIZE],
-        eviction_index: 0,
-    },
-    "arp_cache",
-);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ArpCacheEntry {
@@ -27,26 +20,39 @@ pub struct ArpCache {
     eviction_index: usize,
 }
 
+pub static ARP_CACHE: SpinLock<ArpCache> = SpinLock::new(
+    ArpCache {
+        entries: [None; ARP_CACHE_SIZE],
+        eviction_index: 0,
+    },
+    "arp_cache",
+);
+
 impl ArpCache {
     /// Looks up the given IP address in the ARP cache and returns the corresponding MAC address if
     /// found.
-    pub fn lookup(&self, ip: Ipv4Addr) -> Option<MacAddr> {
-        self.entries
+    pub fn lookup(ip: Ipv4Addr) -> Option<MacAddr> {
+        ARP_CACHE
+            .lock()
+            .entries
             .iter()
             .find_map(|entry| entry.filter(|e| e.ip == ip).map(|e| e.mac))
     }
 
     /// Inserts the given IP-MAC mapping into the ARP cache, evicting an existing entry if
     /// necessary.
-    fn insert(&mut self, ip: Ipv4Addr, mac: MacAddr) {
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.is_none()) {
+    fn insert(ip: Ipv4Addr, mac: MacAddr) {
+        let mut cache = ARP_CACHE.lock();
+
+        if let Some(entry) = cache.entries.iter_mut().find(|entry| entry.is_none()) {
             *entry = Some(ArpCacheEntry { ip, mac });
         } else {
             // drop a "random" entry if the cache is full
-            self.entries[self.eviction_index] = Some(ArpCacheEntry { ip, mac });
+            let index = cache.eviction_index;
+            cache.entries[index] = Some(ArpCacheEntry { ip, mac });
         }
 
-        self.eviction_index = (self.eviction_index + 1) % ARP_CACHE_SIZE;
+        cache.eviction_index = (cache.eviction_index + 1) % ARP_CACHE_SIZE;
     }
 }
 
@@ -180,8 +186,8 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) {
             reply(req_eth, req_arp);
         }
         ArpOp::Response => {
-            let mut cache = ARP_CACHE.lock();
-            cache.insert(req_arp.spa, req_arp.sha);
+            ArpCache::insert(req_arp.spa, req_arp.sha);
+            OutgoingQueue::dispatch(req_arp.spa, req_arp.sha);
         }
         ArpOp::Unknown => {}
     }
