@@ -29,6 +29,7 @@ pub enum NetError {
     BadSocket,
     MalformedPacket,
     TransmitFailed,
+    Interrupted,
 }
 
 impl core::fmt::Display for NetError {
@@ -42,6 +43,7 @@ impl core::fmt::Display for NetError {
             NetError::BadSocket => write!(f, "bad socket"),
             NetError::MalformedPacket => write!(f, "malformed packet"),
             NetError::TransmitFailed => write!(f, "packet transmission failed"),
+            NetError::Interrupted => write!(f, "operation interrupted"),
         }
     }
 }
@@ -145,7 +147,7 @@ impl core::fmt::Display for MacAddr {
 /// IPv4 Address
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct Ipv4Addr([u8; 4]);
+pub struct Ipv4Addr(pub [u8; 4]);
 
 impl core::fmt::Display for Ipv4Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -299,8 +301,12 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     !(sum as u16)
 }
 
+/// Transmits a raw packet by passing it to the e1000 driver.
 fn transmit_raw(packet: &[u8]) -> Result<(), NetError> {
-    log!(e1000::transmit(packet)).map_err(|_| NetError::TransmitFailed)
+    if log!(e1000::transmit(packet)).is_err() {
+        err!(NetError::TransmitFailed)
+    }
+    Ok(())
 }
 
 /// Transmits a packet by passing it to the e1000 driver, and logs an error if transmission fails.

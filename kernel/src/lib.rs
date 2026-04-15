@@ -32,6 +32,7 @@ pub(crate) mod swtch;
 pub(crate) mod sync;
 pub(crate) mod syscall;
 pub(crate) mod sysfile;
+pub(crate) mod sysnet;
 pub(crate) mod sysproc;
 pub(crate) mod trampoline;
 pub(crate) mod trap;

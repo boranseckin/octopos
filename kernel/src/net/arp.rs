@@ -191,8 +191,8 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) -> Result<(), NetEr
     Ok(())
 }
 
-/// Sends an ARP Reply in response to the given ARP Request, swapping source/destination addresses
-/// and filling in our MAC/IP as needed.
+/// Sends an ARP Reply in response to the given ARP Request.
+/// It constructs both the Ethernet and ARP headers for the reply.
 fn reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) -> Result<(), NetError> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
@@ -205,6 +205,11 @@ fn reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) -> Result<(), NetError> 
     log!(net::transmit_raw(&packet))
 }
 
+/// Sends an ARP Request for the given destination IP address.
+/// It constructs both the Ethernet and ARP headers for the request.
+///
+/// The reply will be handled asynchronously by `handle_arp` and the result will be stored in the
+/// ARP cache for future lookups.
 pub fn request(dest_ip: Ipv4Addr) -> Result<(), NetError> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;

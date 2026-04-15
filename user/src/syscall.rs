@@ -58,6 +58,23 @@ pub mod raw {
         ret
     }
 
+    #[inline(always)]
+    fn syscall5(syscall: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
+        let ret: isize;
+        unsafe {
+            asm!(
+                "ecall",
+                in("a7") syscall as usize,
+                inlateout("a0") a0 as isize => ret,
+                in("a1") a1,
+                in("a2") a2,
+                in("a3") a3,
+                in("a4") a4,
+            );
+        }
+        ret
+    }
+
     pub fn fork() -> isize {
         syscall0(Syscall::Fork)
     }
@@ -150,6 +167,44 @@ pub mod raw {
 
     pub fn ioctl(fd: usize, cmd: usize, arg: usize) -> isize {
         syscall3(Syscall::Ioctl, fd, cmd, arg)
+    }
+
+    pub fn socket(port: u16) -> isize {
+        syscall1(Syscall::Socket, port as usize)
+    }
+
+    pub fn send(
+        fd: usize,
+        buf: *const u8,
+        len: usize,
+        dest_ip: *const u8,
+        dest_port: u16,
+    ) -> isize {
+        syscall5(
+            Syscall::Send,
+            fd,
+            buf as usize,
+            len,
+            dest_ip as usize,
+            dest_port as usize,
+        )
+    }
+
+    pub fn receive(
+        fd: usize,
+        buf: *mut u8,
+        len: usize,
+        src_ip: *mut u8,
+        src_port: *mut u16,
+    ) -> isize {
+        syscall5(
+            Syscall::Receive,
+            fd,
+            buf as usize,
+            len,
+            src_ip as usize,
+            src_port as usize,
+        )
     }
 }
 
@@ -352,4 +407,33 @@ pub fn poweroff(code: u32) -> ! {
 
 pub fn ioctl(fd: Fd, cmd: usize, arg: usize) -> Result<usize, SysError> {
     check(raw::ioctl(fd.as_raw(), cmd, arg))
+}
+
+pub fn socket(port: u16) -> Result<Fd, SysError> {
+    check(raw::socket(port)).map(Fd)
+}
+
+pub fn send(fd: Fd, buf: &[u8], dest_ip: &[u8; 4], dest_port: u16) -> Result<usize, SysError> {
+    check(raw::send(
+        fd.as_raw(),
+        buf.as_ptr(),
+        buf.len(),
+        dest_ip.as_ptr(),
+        dest_port,
+    ))
+}
+
+pub fn receive(
+    fd: Fd,
+    buf: &mut [u8],
+    src_ip: &mut [u8; 4],
+    src_port: &mut u16,
+) -> Result<usize, SysError> {
+    check(raw::receive(
+        fd.as_raw(),
+        buf.as_mut_ptr(),
+        buf.len(),
+        src_ip.as_mut_ptr(),
+        src_port as *mut u16,
+    ))
 }

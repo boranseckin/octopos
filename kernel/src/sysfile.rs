@@ -18,7 +18,7 @@ use crate::vm::VA;
 
 /// Allocates a file descriptor for the give file.
 /// Takes over file reference from caller on success.
-fn fd_alloc(file: File) -> Result<usize, SysError> {
+pub fn fd_alloc(file: File) -> Result<usize, SysError> {
     let (_proc, data) = current_proc_and_data_mut();
 
     for (fd, open_file) in data.open_files.iter_mut().enumerate() {

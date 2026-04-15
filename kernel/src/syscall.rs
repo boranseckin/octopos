@@ -8,6 +8,7 @@ use crate::net::NetError;
 use crate::param::NOFILE;
 use crate::proc::{Proc, TrapFrame, current_proc, current_proc_and_data_mut};
 use crate::sysfile::*;
+use crate::sysnet::*;
 use crate::sysproc::*;
 use crate::vm::VA;
 
@@ -140,6 +141,7 @@ impl From<NetError> for SysError {
             NetError::BadSocket => SysError::BadDescriptor,
             NetError::MalformedPacket => SysError::InvalidArgument,
             NetError::TransmitFailed => SysError::IoError,
+            NetError::Interrupted => SysError::Interrupted,
         }
     }
 }
@@ -257,6 +259,9 @@ pub enum Syscall {
     Close = 21,
     Poweroff = 22,
     Ioctl = 23,
+    Socket = 24,
+    Send = 25,
+    Receive = 26,
 }
 
 impl TryFrom<usize> for Syscall {
@@ -287,6 +292,9 @@ impl TryFrom<usize> for Syscall {
             21 => Ok(Syscall::Close),
             22 => Ok(Syscall::Poweroff),
             23 => Ok(Syscall::Ioctl),
+            24 => Ok(Syscall::Socket),
+            25 => Ok(Syscall::Send),
+            26 => Ok(Syscall::Receive),
             _ => Err(SysError::NotImplemented),
         }
     }
@@ -326,6 +334,9 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Close => sys_close(&args),
             Syscall::Poweroff => sys_poweroff(&args),
             Syscall::Ioctl => sys_ioctl(&args),
+            Syscall::Socket => sys_socket(&args),
+            Syscall::Send => sys_send(&args),
+            Syscall::Receive => sys_receive(&args),
         },
         Err(e) => Err(e),
     };
