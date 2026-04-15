@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::net::ipv4::Ipv4Proto;
-use crate::net::{self, Be, Ipv4Addr, NetworkHeader};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -71,7 +71,11 @@ unsafe impl NetworkHeader for IcmpHeader {}
 /// Sends an ICMP Echo Reply in response to the given ICMP Echo Request.
 ///
 /// This function uses heap allocation to build the packet, since the data payload size is variable.
-pub fn echo_reply(dest_ip: Ipv4Addr, req_icmp: &IcmpHeader, req_data: &[u8]) {
+pub fn echo_reply(
+    dest_ip: Ipv4Addr,
+    req_icmp: &IcmpHeader,
+    req_data: &[u8],
+) -> Result<(), NetError> {
     let mut packet = Vec::with_capacity(IcmpHeader::SIZE + req_data.len());
 
     let icmp = IcmpHeader::new_echo_reply(req_icmp).add_checksum(req_data);
@@ -79,5 +83,5 @@ pub fn echo_reply(dest_ip: Ipv4Addr, req_icmp: &IcmpHeader, req_data: &[u8]) {
     packet.extend_from_slice(icmp.as_bytes());
     packet.extend_from_slice(req_data);
 
-    net::transmit(dest_ip, Ipv4Proto::ICMP, &packet);
+    log!(net::transmit(dest_ip, Ipv4Proto::ICMP, &packet))
 }

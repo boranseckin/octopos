@@ -1,5 +1,5 @@
 use crate::net::icmp::{self, IcmpHeader, IcmpType};
-use crate::net::{self, Be, Ipv4Addr, NetworkHeader};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -88,15 +88,15 @@ unsafe impl NetworkHeader for Ipv4Header {}
 
 /// Handles an incoming IPv4 packet by parsing the header and dispatching to the appropriate
 /// protocol handler.
-pub fn handle_ipv4(packet: &[u8]) {
+pub fn handle_ipv4(packet: &[u8]) -> Result<(), NetError> {
     let Some((req_ipv4, req_data)) = Ipv4Header::from_bytes_with_rest(packet) else {
-        return;
+        err!(NetError::MalformedPacket)
     };
 
     // Make sure the packet is not malformed so that the len is smaller than the header size.
     let total_len = req_ipv4.len() as usize;
     if total_len < Ipv4Header::SIZE {
-        return;
+        err!(NetError::MalformedPacket)
     }
     // Remove extra padding bytes added by the NIC, if any.
     let ipv4_payload_len = total_len - Ipv4Header::SIZE;
@@ -106,11 +106,14 @@ pub fn handle_ipv4(packet: &[u8]) {
         Ipv4Proto::ICMP => {
             if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
                 if req_icmp.r#type() == IcmpType::EchoRequest {
-                    icmp::echo_reply(req_ipv4.src, req_icmp, req_data);
+                    try_log!(icmp::echo_reply(req_ipv4.src, req_icmp, req_data))
                 }
+                Ok(())
+            } else {
+                err!(NetError::MalformedPacket)
             }
         }
-        Ipv4Proto::UDP => {}
-        Ipv4Proto::Unknown => {}
+        Ipv4Proto::UDP => Ok(()),
+        Ipv4Proto::Unknown => Ok(()),
     }
 }

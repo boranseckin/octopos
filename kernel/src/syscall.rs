@@ -4,6 +4,7 @@ use alloc::string::String;
 
 use crate::file::File;
 use crate::fs::FsError;
+use crate::net::NetError;
 use crate::param::NOFILE;
 use crate::proc::{Proc, TrapFrame, current_proc, current_proc_and_data_mut};
 use crate::sysfile::*;
@@ -124,6 +125,21 @@ impl From<FsError> for SysError {
             FsError::Resolve => SysError::NoEntry,
             FsError::Type => SysError::InvalidArgument,
             FsError::Copy => SysError::BadAddress,
+        }
+    }
+}
+
+impl From<NetError> for SysError {
+    fn from(value: NetError) -> Self {
+        match value {
+            NetError::NotConfigured => SysError::NotPermitted,
+            NetError::QueueFull => SysError::ResourceUnavailable,
+            NetError::TableFull => SysError::FileTableFull,
+            NetError::OutOfSocket => SysError::ResourceUnavailable,
+            NetError::PortInUse => SysError::AlreadyExists,
+            NetError::BadSocket => SysError::BadDescriptor,
+            NetError::MalformedPacket => SysError::InvalidArgument,
+            NetError::TransmitFailed => SysError::IoError,
         }
     }
 }
