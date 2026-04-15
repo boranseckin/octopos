@@ -255,23 +255,39 @@ unsafe trait NetworkHeader: Sized {
     }
 }
 
-/// Computes the one's-complement Internet checksum used by IP and ICMP (RFC 1071).
+/// Computes the one's-complement internet checksum (RFC 1071) over multiple segments.
 ///
 /// The algorithm sums all 16-bit big-endian words, folds any carry bits back into the low 16 bits,
 /// then returns the one's complement.
 ///
 /// Before calling this, zero out the checksum field in the header so it is not included.
-fn internet_checksum(data: &[u8]) -> u16 {
+fn internet_checksum(segments: &[&[u8]]) -> u16 {
+    // Use a 32-bit accumulator to prevent overflows.
     let mut sum: u32 = 0;
+    let mut carry: Option<u8> = None;
 
-    let mut chunks = data.chunks_exact(2);
-    for chunk in &mut chunks {
-        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    for segment in segments {
+        // Account for the carry byte from the previous segment if any.
+        let data = if let Some(byte) = carry.take() {
+            sum += u16::from_be_bytes([byte, segment[0]]) as u32;
+            &segment[1..]
+        } else {
+            segment
+        };
+
+        // Sum up 16-bit big-endian words in this segment.
+        let mut chunks = data.chunks_exact(2);
+        for chunk in &mut chunks {
+            sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        }
+
+        // If there is a trailing odd byte, save it for the next segment.
+        carry = chunks.remainder().first().copied();
     }
 
-    // If there is a trailing odd byte, pad it with a zero on the right.
-    if let Some(&byte) = chunks.remainder().first() {
-        sum += (byte as u32) << 8;
+    // There was a trailing odd byte after the last segment, pad by 0x00 and add to the sum.
+    if let Some(byte) = carry.take() {
+        sum += u16::from_be_bytes([byte, 0]) as u32;
     }
 
     // Fold the 32-bit accumulator into 16 bits.
@@ -279,6 +295,7 @@ fn internet_checksum(data: &[u8]) -> u16 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
 
+    // Negate the result.
     !(sum as u16)
 }
 
@@ -287,19 +304,25 @@ fn transmit_raw(packet: &[u8]) -> Result<(), NetError> {
 }
 
 /// Transmits a packet by passing it to the e1000 driver, and logs an error if transmission fails.
+/// Packets are passed as a list of segments that will be concatenated together.
 ///
 /// Currently only support IPv4 packets.
-fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, payload: &[u8]) -> Result<(), NetError> {
+fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
     let (src_mac, src_ip) = try_log!(NetConfig::mac_and_ip());
 
+    let payload_len = segments.iter().fold(0, |acc, &s| acc + s.len());
+
     let eth = EthernetHeader::new(MacAddr::UNSPECIFIED, src_mac, EtherType::Ipv4);
-    let ipv4 = Ipv4Header::new(src_ip, dest_ip, proto, payload.len()).add_checksum();
+    let ipv4 = Ipv4Header::new(src_ip, dest_ip, proto, payload_len).add_checksum();
 
     let mut packet = Vec::with_capacity(EthernetHeader::SIZE + ipv4.len() as usize);
 
     packet.extend_from_slice(eth.as_bytes());
     packet.extend_from_slice(ipv4.as_bytes());
-    packet.extend_from_slice(payload);
+
+    for segment in segments {
+        packet.extend_from_slice(*segment);
+    }
 
     let mut packet = packet.into_boxed_slice();
 
