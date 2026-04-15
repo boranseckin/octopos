@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use crate::net::ipv4::Ipv4Proto;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 
@@ -53,11 +51,9 @@ impl IcmpHeader {
     }
 
     fn calculate_checksum(&self, data: &[u8]) -> u16 {
-        // TODO: do this without vec
-        let mut packet = Vec::with_capacity(Self::SIZE + data.len());
-        packet.extend_from_slice(self.as_bytes());
-        packet.extend_from_slice(data);
-        net::internet_checksum(&packet)
+        let mut header = *self;
+        header.sum = Be::new(0);
+        net::internet_checksum(&[header.as_bytes(), data])
     }
 
     fn add_checksum(mut self, data: &[u8]) -> Self {
@@ -76,12 +72,11 @@ pub fn echo_reply(
     req_icmp: &IcmpHeader,
     req_data: &[u8],
 ) -> Result<(), NetError> {
-    let mut packet = Vec::with_capacity(IcmpHeader::SIZE + req_data.len());
-
     let icmp = IcmpHeader::new_echo_reply(req_icmp).add_checksum(req_data);
 
-    packet.extend_from_slice(icmp.as_bytes());
-    packet.extend_from_slice(req_data);
-
-    log!(net::transmit(dest_ip, Ipv4Proto::ICMP, &packet))
+    log!(net::transmit(
+        dest_ip,
+        Ipv4Proto::ICMP,
+        &[icmp.as_bytes(), req_data]
+    ))
 }

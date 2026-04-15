@@ -75,7 +75,7 @@ impl Ipv4Header {
     fn calculate_checksum(&self) -> u16 {
         let mut header = *self;
         header.sum = Be::new(0);
-        net::internet_checksum(header.as_bytes())
+        net::internet_checksum(&[header.as_bytes()])
     }
 
     pub fn add_checksum(mut self) -> Self {
