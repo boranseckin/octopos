@@ -18,6 +18,34 @@ pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum NetError {
+    NotConfigured = 1,
+    QueueFull,
+    TableFull,
+    OutOfSocket,
+    PortInUse,
+    BadSocket,
+    MalformedPacket,
+    TransmitFailed,
+}
+
+impl core::fmt::Display for NetError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            NetError::NotConfigured => write!(f, "network is not configured"),
+            NetError::QueueFull => write!(f, "outgoing packet queue is full"),
+            NetError::TableFull => write!(f, "table is full"),
+            NetError::OutOfSocket => write!(f, "out of socket"),
+            NetError::PortInUse => write!(f, "port is already in use"),
+            NetError::BadSocket => write!(f, "bad socket"),
+            NetError::MalformedPacket => write!(f, "malformed packet"),
+            NetError::TransmitFailed => write!(f, "packet transmission failed"),
+        }
+    }
+}
+
 /// Network configuration, including our MAC address and optionally our IP address (if configured).
 #[derive(Debug)]
 struct NetConfig {
@@ -36,13 +64,19 @@ static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
 );
 
 impl NetConfig {
-    pub fn ip() -> Option<Ipv4Addr> {
-        NET_CONFIG.lock().ip
+    pub fn ip() -> Result<Ipv4Addr, NetError> {
+        match NET_CONFIG.lock().ip {
+            Some(ip) => Ok(ip),
+            None => err!(NetError::NotConfigured),
+        }
     }
 
-    pub fn mac_and_ip() -> Option<(MacAddr, Ipv4Addr)> {
+    pub fn mac_and_ip() -> Result<(MacAddr, Ipv4Addr), NetError> {
         let guard = NET_CONFIG.lock();
-        guard.ip.map(|ip| (guard.mac, ip))
+        let Some(ip) = guard.ip else {
+            err!(NetError::NotConfigured);
+        };
+        Ok((guard.mac, ip))
     }
 }
 
@@ -146,15 +180,14 @@ impl OutgoingQueue {
     /// address is resolved via ARP.
     ///
     /// Returns an error if the queue is full.
-    fn enqueue(dest_ip: Ipv4Addr, packet: Box<[u8]>) -> Result<(), ()> {
+    fn enqueue(dest_ip: Ipv4Addr, packet: Box<[u8]>) -> Result<(), NetError> {
         let mut queue = OUTGOING_QUEUE.lock();
 
         if let Some(slot) = queue.slot.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(OutgoingQueueEntry { dest_ip, packet });
             Ok(())
         } else {
-            // TODO: use NetError maybe?
-            Err(())
+            Err(NetError::QueueFull)
         }
     }
 
@@ -168,7 +201,7 @@ impl OutgoingQueue {
                 // patch destination mac address
                 // always the first 6 bytes of an ethernet frame
                 entry.packet[..6].copy_from_slice(&mac.0);
-                let _ = log!(e1000::transmit(&entry.packet));
+                let _ = log!(transmit_raw(&entry.packet));
 
                 *slot = None;
             }
@@ -249,17 +282,15 @@ fn internet_checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
-fn transmit_raw(packet: &[u8]) {
-    let _ = log!(e1000::transmit(packet));
+fn transmit_raw(packet: &[u8]) -> Result<(), NetError> {
+    log!(e1000::transmit(packet)).map_err(|_| NetError::TransmitFailed)
 }
 
 /// Transmits a packet by passing it to the e1000 driver, and logs an error if transmission fails.
 ///
 /// Currently only support IPv4 packets.
-fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, payload: &[u8]) {
-    let Some((src_mac, src_ip)) = NetConfig::mac_and_ip() else {
-        return;
-    };
+fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, payload: &[u8]) -> Result<(), NetError> {
+    let (src_mac, src_ip) = try_log!(NetConfig::mac_and_ip());
 
     let eth = EthernetHeader::new(MacAddr::UNSPECIFIED, src_mac, EtherType::Ipv4);
     let ipv4 = Ipv4Header::new(src_ip, dest_ip, proto, payload.len()).add_checksum();
@@ -277,31 +308,31 @@ fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, payload: &[u8]) {
     // transmission when the reply is received.
     if let Some(dest_mac) = ArpCache::lookup(dest_ip) {
         packet[..6].copy_from_slice(&dest_mac.0);
-        transmit_raw(&packet);
+        log!(transmit_raw(&packet))
     } else {
-        let _ = log!(OutgoingQueue::enqueue(dest_ip, packet));
-        arp::request(dest_ip);
+        try_log!(OutgoingQueue::enqueue(dest_ip, packet));
+        log!(arp::request(dest_ip))
     }
 }
 
 /// Receives a packet, parses the Ethernet header, and dispatches to the appropriate handler based
 /// on the EtherType.
-fn receive(packet: Box<[u8]>) {
+fn receive(packet: Box<[u8]>) -> Result<(), NetError> {
     let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&packet) else {
-        return;
+        err!(NetError::MalformedPacket);
     };
 
     match eth.ether_type() {
-        EtherType::Arp => arp::handle_arp(eth, data),
-        EtherType::Ipv4 => ipv4::handle_ipv4(data),
-        EtherType::Unknown => {}
+        EtherType::Arp => log!(arp::handle_arp(eth, data)),
+        EtherType::Ipv4 => log!(ipv4::handle_ipv4(data)),
+        EtherType::Unknown => Ok(()),
     }
 }
 
 /// Kernel thread that continuously receives packets from the e1000 driver and processes them.
 fn net_thread() {
     loop {
-        receive(e1000::receive());
+        let _ = log!(receive(e1000::receive()));
     }
 }
 

@@ -2,6 +2,7 @@ use core::fmt::Display;
 
 use crate::exec::ExecError;
 use crate::fs::FsError;
+use crate::net::NetError;
 use crate::syscall::SysError;
 use crate::virtio_disk::VirtioError;
 use crate::vm::VmError;
@@ -17,6 +18,7 @@ pub enum KernelError {
     Fs(FsError),
     Exec(ExecError),
     VirtioError(VirtioError),
+    Net(NetError),
 }
 
 impl From<core::alloc::AllocError> for KernelError {
@@ -55,6 +57,12 @@ impl From<VirtioError> for KernelError {
     }
 }
 
+impl From<NetError> for KernelError {
+    fn from(value: NetError) -> Self {
+        Self::Net(value)
+    }
+}
+
 impl Display for KernelError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -66,6 +74,7 @@ impl Display for KernelError {
             KernelError::Fs(e) => write!(f, "filesystem error {}", e),
             KernelError::Exec(e) => write!(f, "exec error {}", e),
             KernelError::VirtioError(e) => write!(f, "virtio error {}", e),
+            KernelError::Net(e) => write!(f, "net error {}", e),
         }
     }
 }

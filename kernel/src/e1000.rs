@@ -147,7 +147,7 @@ impl E1000 {
 /// descriptors).
 pub fn transmit(buf: &[u8]) -> Result<(), SysError> {
     if buf.len() >= TX_BUF_SIZE {
-        return Err(SysError::InvalidArgument);
+        err!(SysError::InvalidArgument);
     }
 
     let mut state = E1000.lock();
@@ -157,7 +157,7 @@ pub fn transmit(buf: &[u8]) -> Result<(), SysError> {
 
     // check if bit 0 of status (DD) is unset; not available to use
     if desc.status & 1 == 0 {
-        return Err(SysError::ResourceUnavailable);
+        err!(SysError::ResourceUnavailable);
     }
 
     // copy buf into tx desc
