@@ -1,6 +1,5 @@
 use crate::net::{
-    self, Be, EtherType, EthernetHeader, Ipv4Addr, MacAddr, NET_CONFIG, NetworkHeader,
-    OutgoingQueue,
+    self, Be, EtherType, EthernetHeader, Ipv4Addr, MacAddr, NetConfig, NetworkHeader, OutgoingQueue,
 };
 use crate::spinlock::SpinLock;
 
@@ -170,10 +169,8 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) {
     }
 
     // we need our IP address to know whether to reply, so ignore ARP packets if we don't have one
-    let ip = {
-        let guard = NET_CONFIG.lock();
-        let Some(ip) = guard.ip else { return };
-        ip
+    let Some(ip) = NetConfig::ip() else {
+        return;
     };
 
     // ignore ARP packets that aren't for our IP address
@@ -199,10 +196,8 @@ fn reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let (mac, ip) = {
-        let guard = NET_CONFIG.lock();
-        let Some(ip) = guard.ip else { return };
-        (guard.mac, ip)
+    let Some((mac, ip)) = NetConfig::mac_and_ip() else {
+        return;
     };
 
     EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
@@ -215,10 +210,8 @@ pub fn request(dest_ip: Ipv4Addr) {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let (mac, ip) = {
-        let guard = NET_CONFIG.lock();
-        let Some(ip) = guard.ip else { return };
-        (guard.mac, ip)
+    let Some((mac, ip)) = NetConfig::mac_and_ip() else {
+        return;
     };
 
     EthernetHeader::new(MacAddr::BROADCAST, mac, EtherType::Arp)
