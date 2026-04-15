@@ -1,10 +1,10 @@
 use crate::net::eth::EthernetHeader;
-use crate::net::icmp::{IcmpHeader, IcmpType, send_icmp_reply};
-use crate::net::{Be, Ipv4Addr, NetworkHeader, internet_checksum};
+use crate::net::icmp::{self, IcmpHeader, IcmpType};
+use crate::net::{self, Be, Ipv4Addr, NetworkHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-enum Ipv4Proto {
+pub enum Ipv4Proto {
     ICMP = 1,
     UDP = 17,
     Unknown = u8::MAX,
@@ -58,6 +58,21 @@ impl Ipv4Header {
         self.len.get()
     }
 
+    pub fn new(src: Ipv4Addr, dst: Ipv4Addr, proto: Ipv4Proto, payload_len: usize) -> Self {
+        Self {
+            ver_ihl: (4 << 4) | (Self::SIZE as u8 / 4),
+            tos: 0,
+            len: Be::new((Self::SIZE + payload_len) as u16),
+            id: Be::new(0),
+            off: Be::new(0),
+            ttl: 64,
+            proto: proto as u8,
+            sum: Be::new(0), // to be filled later
+            src,
+            dst,
+        }
+    }
+
     pub fn new_reply(request: &Self, payload_len: usize) -> Self {
         Self {
             ver_ihl: request.ver_ihl,
@@ -76,7 +91,7 @@ impl Ipv4Header {
     fn calculate_checksum(&self) -> u16 {
         let mut header = *self;
         header.sum = Be::new(0);
-        internet_checksum(header.as_bytes())
+        net::internet_checksum(header.as_bytes())
     }
 
     pub fn add_checksum(mut self) -> Self {
@@ -102,7 +117,7 @@ pub fn handle_ipv4(req_eth: &EthernetHeader, packet: &[u8]) {
         Ipv4Proto::ICMP => {
             if let Some((req_icmp, req_data)) = IcmpHeader::from_bytes_with_rest(req_data) {
                 if req_icmp.r#type() == IcmpType::EchoRequest {
-                    send_icmp_reply(req_eth, req_ipv4, req_icmp, req_data);
+                    icmp::echo_reply(req_eth, req_ipv4, req_icmp, req_data);
                 }
             }
         }
