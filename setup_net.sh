@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 TAP_DEV="octopos0"
 TAP_IP="192.168.10.1/24"
