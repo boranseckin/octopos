@@ -38,10 +38,18 @@ impl EthernetHeader {
         EtherType::from(self.ether_type)
     }
 
-    pub fn new_reply(request: &Self, our_mac: MacAddr) -> Self {
+    pub fn new(dst: MacAddr, src: MacAddr, ether_type: EtherType) -> Self {
+        Self {
+            dst,
+            src,
+            ether_type: Be::new(ether_type as u16),
+        }
+    }
+
+    pub fn new_reply(request: &Self, src: MacAddr) -> Self {
         Self {
             dst: request.src,
-            src: our_mac,
+            src,
             ether_type: request.ether_type,
         }
     }

@@ -1,9 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::e1000;
 use crate::net::eth::EthernetHeader;
 use crate::net::ipv4::Ipv4Header;
-use crate::net::{Be, NET_CONFIG, NetworkHeader, internet_checksum};
+use crate::net::{self, Be, NET_CONFIG, NetworkHeader};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -59,7 +58,7 @@ impl IcmpHeader {
         let mut packet = Vec::with_capacity(Self::SIZE + data.len());
         packet.extend_from_slice(self.as_bytes());
         packet.extend_from_slice(data);
-        internet_checksum(&packet)
+        net::internet_checksum(&packet)
     }
 
     fn add_checksum(mut self, data: &[u8]) -> Self {
@@ -74,7 +73,7 @@ unsafe impl NetworkHeader for IcmpHeader {}
 /// addresses and recalculating checksums as needed.
 ///
 /// This function uses heap allocation to build the packet, since the data payload size is variable.
-pub fn send_icmp_reply(
+pub fn echo_reply(
     req_eth: &EthernetHeader,
     req_ipv4: &Ipv4Header,
     req_icmp: &IcmpHeader,
@@ -97,5 +96,5 @@ pub fn send_icmp_reply(
     packet.extend_from_slice(icmp.as_bytes());
     packet.extend_from_slice(req_data);
 
-    e1000::transmit(&packet).expect("failed to send icmp reply");
+    net::transmit(&packet);
 }

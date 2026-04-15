@@ -3,9 +3,7 @@ use core::slice;
 use alloc::boxed::Box;
 
 use crate::e1000;
-use crate::net::arp::handle_arp;
 use crate::net::eth::{EtherType, EthernetHeader};
-use crate::net::ipv4::handle_ipv4;
 use crate::proc;
 use crate::spinlock::SpinLock;
 
@@ -77,6 +75,10 @@ impl<T: NetworkInt> Be<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct MacAddr([u8; 6]);
+
+impl MacAddr {
+    const BROADCAST: Self = Self([0xff; 6]);
+}
 
 impl core::fmt::Display for MacAddr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -172,16 +174,21 @@ fn internet_checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+/// Transmits a packet by passing it to the e1000 driver, and logs an error if transmission fails.
+fn transmit(buf: &[u8]) {
+    let _ = log!(e1000::transmit(buf));
+}
+
 /// Receives a packet, parses the Ethernet header, and dispatches to the appropriate handler based
 /// on the EtherType.
-fn rx(packet: Box<[u8]>) {
+fn receive(packet: Box<[u8]>) {
     let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&packet) else {
         return;
     };
 
     match eth.ether_type() {
-        EtherType::Arp => handle_arp(eth, data),
-        EtherType::Ipv4 => handle_ipv4(eth, data),
+        EtherType::Arp => arp::handle_arp(eth, data),
+        EtherType::Ipv4 => ipv4::handle_ipv4(eth, data),
         EtherType::Unknown => {}
     }
 }
@@ -189,8 +196,7 @@ fn rx(packet: Box<[u8]>) {
 /// Kernel thread that continuously receives packets from the e1000 driver and processes them.
 fn net_thread() {
     loop {
-        let data = e1000::receive();
-        rx(data);
+        receive(e1000::receive());
     }
 }
 
