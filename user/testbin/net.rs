@@ -31,9 +31,24 @@ fn test_socket_duplicate_port() {
     close(fd).expect("close");
 }
 
+fn test_ephemeral_port() {
+    let fd1 = socket(0).expect("socket open");
+    let port1 = ioctl(fd1, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port");
+    close(fd1).expect("close");
+
+    let fd2 = socket(0).expect("socket open");
+    let port2 = ioctl(fd2, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port");
+    close(fd2).expect("close");
+
+    assert_ne!(
+        port1, port2,
+        "ephemeral ports must be different across socket instances"
+    );
+}
+
 /// send() must return the number of bytes written, not a truncated or wrong count.
 fn test_send_returns_byte_count() {
-    let fd = socket(26202).expect("socket open");
+    let fd = socket(0).expect("socket open");
 
     let data = b"hello";
     let n = send(fd, data, &HOST_IP, ECHO_SERVER_PORT).expect("send");
@@ -44,7 +59,7 @@ fn test_send_returns_byte_count() {
 
 /// Send a payload to the host echo server and verify the reflected packet arrives intact.
 fn test_echo_round_trip() {
-    let fd = socket(26203).expect("socket open");
+    let fd = socket(0).expect("socket open");
 
     let payload = b"octopos UDP echo test";
     send(fd, payload, &HOST_IP, ECHO_SERVER_PORT).expect("send");
@@ -66,7 +81,7 @@ fn test_echo_round_trip() {
 
 /// receive() must return the number of bytes copied (not the full payload length).
 fn test_receive_truncation() {
-    let fd = socket(26204).expect("socket open");
+    let fd = socket(0).expect("socket open");
 
     // Send a payload larger than the receive buffer we will use.
     let payload = b"truncation test payload that is long";
@@ -91,6 +106,7 @@ fn test_receive_truncation() {
 fn main(_args: Args) {
     test_socket_open_close();
     test_socket_duplicate_port();
+    test_ephemeral_port();
     test_send_returns_byte_count();
     test_echo_round_trip();
     test_receive_truncation();

@@ -7,6 +7,10 @@ use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
 const MAX_RECV_QUEUE_DEPTH: usize = 8;
+
+const EPHEMERAL_PORT_START: u16 = 49152;
+const EPHEMERAL_PORT_END: u16 = 65535;
+
 pub const MAX_UDP_PAYLOAD: usize = 1024;
 
 /// An entry in the receive queue for a socket, representing a single received UDP datagram.
@@ -56,37 +60,84 @@ impl SocketEntry {
 #[derive(Debug)]
 pub struct SocketTable {
     entries: [Option<SocketEntry>; NSOCKET],
+    next_ephemeral: u16,
 }
 
 static SOCKET_TABLE: SpinLock<SocketTable> = SpinLock::new(
     SocketTable {
         entries: [const { None }; NSOCKET],
+        next_ephemeral: EPHEMERAL_PORT_START,
     },
     "sockets",
 );
 
 impl SocketTable {
+    /// Returns the next ephemeral port and advances the counter.
+    /// The counter wraps within the range [`EPHEMERAL_PORT_START`, `EPHEMERAL_PORT_END`).
+    fn next_ephemeral(&mut self) -> u16 {
+        let port = self.next_ephemeral;
+        self.next_ephemeral += 1;
+        if self.next_ephemeral >= EPHEMERAL_PORT_END {
+            self.next_ephemeral = EPHEMERAL_PORT_START;
+        }
+        port
+    }
+
+    /// Returns the bound port for the socket with the given `socket_id`.
+    pub fn get_port(socket_id: usize) -> u16 {
+        assert!(socket_id < NSOCKET, "invalid socket id");
+        SOCKET_TABLE.lock().entries[socket_id]
+            .as_ref()
+            .expect("socket id to be valid")
+            .bound_port
+    }
+
     /// Opens a new socket bound to the given port, returning its index (`socket_id`) into the
     /// `SOCKET_TABLE`.
+    ///
+    /// If the `port` argument is `0`, it will assign an ephemeral port automatically.
     pub fn open(port: u16) -> Result<usize, NetError> {
         let mut table = SOCKET_TABLE.lock();
 
-        let mut free_slot = None;
+        // resolve the port to bind
+        let bind_port = if port == 0 {
+            // scan the ephemeral range for a port not already in use
+            let mut current = table.next_ephemeral();
+            let start = current;
 
-        // need to scan the whole table to see if port is already in use.
-        for (id, entry) in table.entries.iter_mut().enumerate() {
-            match entry {
-                None if free_slot.is_none() => free_slot = Some(id),
-                Some(s) if s.bound_port == port => err!(NetError::PortInUse),
-                _ => {}
+            'ephemeral: loop {
+                for entry in table.entries.iter().flatten() {
+                    if entry.bound_port == current {
+                        current = table.next_ephemeral();
+
+                        if current == start {
+                            // we've looped all the way around and found no free ports
+                            err!(NetError::OutOfSocket);
+                        }
+
+                        continue 'ephemeral;
+                    }
+                }
+
+                // found a free port, increment the counter for the future and break
+                break current;
             }
-        }
-
-        let Some(id) = free_slot else {
-            err!(NetError::OutOfSocket)
+        } else {
+            // verify the requested port is not already in use
+            for entry in table.entries.iter().flatten() {
+                if entry.bound_port == port {
+                    err!(NetError::PortInUse);
+                }
+            }
+            port
         };
 
-        table.entries[id] = Some(SocketEntry::new(port));
+        // find a free slot
+        let Some(id) = table.entries.iter().position(|e| e.is_none()) else {
+            err!(NetError::TableFull);
+        };
+
+        table.entries[id] = Some(SocketEntry::new(bind_port));
 
         Ok(id)
     }
