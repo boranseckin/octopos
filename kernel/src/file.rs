@@ -282,6 +282,14 @@ impl File {
             }
             FileType::Device { .. } => err!(SysError::NotImplemented),
 
+            FileType::Socket { socket_id } => {
+                if cmd == Ioctl::SOCKET_GET_PORT {
+                    Ok(SocketTable::get_port(*socket_id) as usize)
+                } else {
+                    err!(SysError::NotImplemented)
+                }
+            }
+
             _ => err!(SysError::BadDescriptor),
         }
     }
@@ -311,6 +319,8 @@ pub struct Ioctl;
 impl Ioctl {
     pub const CONSOLE_SET_RAW: usize = 1;
     pub const CONSOLE_SET_FG_PID: usize = 2;
+
+    pub const SOCKET_GET_PORT: usize = 3;
 }
 
 /// Console device major number
