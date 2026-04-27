@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 
 use crate::net::ipv4::Ipv4Proto;
-use crate::net::{self, Be, Ipv4Addr, NetConfig, NetError, NetworkHeader};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 use crate::param::NSOCKET;
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
@@ -277,7 +277,12 @@ fn transmit_udp(
     src_port: u16,
     payload: &[u8],
 ) -> Result<(), NetError> {
-    let src_ip = try_log!(NetConfig::ip());
+    // we need to lookup the route here to figure out the src_ip for the pseudo-header checksum.
+    // net::transmit() will also do this lookup, so it is a bit inefficient...
+    let interface = try_log!(net::route_by_ip(dest_ip));
+    let Some(src_ip) = interface.ip() else {
+        err!(NetError::NotConfigured);
+    };
 
     let header =
         UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(src_ip, dest_ip, payload);

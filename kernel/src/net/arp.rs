@@ -1,5 +1,7 @@
+use alloc::sync::Arc;
+
 use crate::net::{
-    self, Be, EtherType, EthernetHeader, Ipv4Addr, MacAddr, NetConfig, NetError, NetworkHeader,
+    self, Be, EtherType, EthernetHeader, Ipv4Addr, MacAddr, NetError, NetInterface, NetworkHeader,
     OutgoingQueue,
 };
 use crate::spinlock::SpinLock;
@@ -169,17 +171,16 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) -> Result<(), NetEr
         return Ok(());
     }
 
-    // we need our IP address to know whether to reply, so ignore ARP packets if we don't have one
-    let ip = try_log!(NetConfig::ip());
-
-    // ignore ARP packets that aren't for our IP address
-    if req_arp.tpa != ip {
+    // we need our IP address and the intreface to know whether to reply.
+    // if we find an interface, that means it has an IP assigned to it and it matches the request.
+    // if no interface found, we cannot respond, silently drop.
+    let Some(interface) = net::find_interface_by_ip(req_arp.tpa) else {
         return Ok(());
-    }
+    };
 
     match req_arp.op() {
         ArpOp::Request => {
-            try_log!(reply(req_eth, req_arp));
+            try_log!(reply(interface, req_eth, req_arp));
         }
         ArpOp::Response => {
             ArpCache::insert(req_arp.spa, req_arp.sha);
@@ -193,16 +194,23 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) -> Result<(), NetEr
 
 /// Sends an ARP Reply in response to the given ARP Request.
 /// It constructs both the Ethernet and ARP headers for the reply.
-fn reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) -> Result<(), NetError> {
+fn reply(
+    interface: Arc<dyn NetInterface>,
+    req_eth: &EthernetHeader,
+    req_arp: &ArpPacket,
+) -> Result<(), NetError> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let (mac, ip) = try_log!(NetConfig::mac_and_ip());
+    let mac = interface.mac();
+    let Some(ip) = interface.ip() else {
+        err!(NetError::NotConfigured);
+    };
 
     EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
     ArpPacket::new_reply(req_arp, mac, ip).append_to(&mut packet, &mut offset);
 
-    log!(net::transmit_raw(&packet))
+    log!(net::transmit_raw(req_arp.spa, &packet))
 }
 
 /// Sends an ARP Request for the given destination IP address.
@@ -210,15 +218,18 @@ fn reply(req_eth: &EthernetHeader, req_arp: &ArpPacket) -> Result<(), NetError> 
 ///
 /// The reply will be handled asynchronously by `handle_arp` and the result will be stored in the
 /// ARP cache for future lookups.
-pub fn request(dest_ip: Ipv4Addr) -> Result<(), NetError> {
+pub fn request(interface: Arc<dyn NetInterface>, dest_ip: Ipv4Addr) -> Result<(), NetError> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let (mac, ip) = try_log!(NetConfig::mac_and_ip());
+    let mac = interface.mac();
+    let Some(ip) = interface.ip() else {
+        err!(NetError::NotConfigured);
+    };
 
     EthernetHeader::new(MacAddr::BROADCAST, mac, EtherType::Arp)
         .append_to(&mut packet, &mut offset);
     ArpPacket::new_request(dest_ip, mac, ip).append_to(&mut packet, &mut offset);
 
-    log!(net::transmit_raw(&packet))
+    log!(net::transmit_raw(dest_ip, &packet))
 }
