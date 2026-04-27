@@ -144,6 +144,9 @@ impl From<NetError> for SysError {
             NetError::MalformedPacket => SysError::InvalidArgument,
             NetError::TransmitFailed => SysError::IoError,
             NetError::Interrupted => SysError::Interrupted,
+            NetError::RouteNotFound => SysError::NoEntry,
+            NetError::PacketTooLarge => SysError::InvalidArgument,
+            NetError::ResourceUnavailable => SysError::ResourceUnavailable,
         }
     }
 }

@@ -1,6 +1,7 @@
 use core::slice;
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::e1000;
@@ -31,6 +32,9 @@ pub enum NetError {
     MalformedPacket,
     TransmitFailed,
     Interrupted,
+    RouteNotFound,
+    PacketTooLarge,
+    ResourceUnavailable,
 }
 
 impl core::fmt::Display for NetError {
@@ -46,6 +50,9 @@ impl core::fmt::Display for NetError {
             NetError::MalformedPacket => write!(f, "malformed packet"),
             NetError::TransmitFailed => write!(f, "packet transmission failed"),
             NetError::Interrupted => write!(f, "operation interrupted"),
+            NetError::RouteNotFound => write!(f, "route not found"),
+            NetError::PacketTooLarge => write!(f, "packet is too large"),
+            NetError::ResourceUnavailable => write!(f, "resource unavailable"),
         }
     }
 }
@@ -129,7 +136,7 @@ impl<T: NetworkInt> Be<T> {
 /// MAC Address
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct MacAddr([u8; 6]);
+pub struct MacAddr(pub [u8; 6]);
 
 impl MacAddr {
     const UNSPECIFIED: Self = Self([0x00; 6]);
@@ -150,6 +157,12 @@ impl core::fmt::Display for MacAddr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Ipv4Addr(pub [u8; 4]);
+
+impl Ipv4Addr {
+    fn is_loopback(&self) -> bool {
+        *self == Ipv4Addr([127, 0, 0, 1])
+    }
+}
 
 impl core::str::FromStr for Ipv4Addr {
     type Err = NetError;
@@ -184,7 +197,45 @@ impl core::fmt::Display for Ipv4Addr {
     }
 }
 
-#[derive(Debug, Clone)]
+pub trait NetInterface: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn mac(&self) -> MacAddr;
+    fn ip(&self) -> Option<Ipv4Addr>;
+    fn transmit(&self, packet: &[u8]) -> Result<(), NetError>;
+}
+
+static INTERFACES: SpinLock<Vec<Arc<dyn NetInterface>>> =
+    SpinLock::new(Vec::new(), "net_interfaces");
+
+pub fn register_interface(interface: Arc<dyn NetInterface>) {
+    INTERFACES.lock().push(interface);
+}
+
+/// Finds a network interface by name.
+pub fn find_interface_by_name(name: &str) -> Option<Arc<dyn NetInterface>> {
+    let ifs = INTERFACES.lock();
+    ifs.iter().find(|i| i.name() == name).cloned()
+}
+
+/// Finds a network interface by IP address.
+pub fn find_interface_by_ip(addr: Ipv4Addr) -> Option<Arc<dyn NetInterface>> {
+    let ifs = INTERFACES.lock();
+    ifs.iter().find(|i| i.ip() == Some(addr)).cloned()
+}
+
+/// Finds the appropriate network interface to use for sending a packet to the given destination IP
+/// address, based on our routing table.
+pub fn route_by_ip(dest_ip: Ipv4Addr) -> Result<Arc<dyn NetInterface>, NetError> {
+    if dest_ip.is_loopback() {
+        find_interface_by_name("lo")
+    } else {
+        // TODO: currently only route to e1000
+        find_interface_by_name("e1000")
+    }
+    .ok_or(NetError::NotConfigured)
+}
+
+#[derive(Clone)]
 struct OutgoingQueueEntry {
     dest_ip: Ipv4Addr,
     packet: Box<[u8]>,
@@ -194,7 +245,6 @@ struct OutgoingQueueEntry {
 ///
 /// Destination MAC address is filled in when the ARP reply is received, and then the packet is
 /// transmitted.
-#[derive(Debug)]
 struct OutgoingQueue {
     slot: [Option<OutgoingQueueEntry>; OUTGOING_QUEUE_SIZE],
 }
