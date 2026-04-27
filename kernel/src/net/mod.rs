@@ -4,7 +4,6 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::e1000;
 use crate::net::arp::ArpCache;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
@@ -55,40 +54,6 @@ impl core::fmt::Display for NetError {
             NetError::PacketTooLarge => write!(f, "packet is too large"),
             NetError::ResourceUnavailable => write!(f, "resource unavailable"),
         }
-    }
-}
-
-/// Network configuration, including our MAC address and optionally our IP address (if configured).
-#[derive(Debug)]
-struct NetConfig {
-    mac: MacAddr,
-    ip: Option<Ipv4Addr>,
-}
-
-static NET_CONFIG: SpinLock<NetConfig> = SpinLock::new(
-    NetConfig {
-        // default MAC address for QEMU e1000
-        mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
-        // TODO: use dhcp
-        ip: Some(Ipv4Addr([192, 168, 10, 2])),
-    },
-    "net_config",
-);
-
-impl NetConfig {
-    pub fn ip() -> Result<Ipv4Addr, NetError> {
-        match NET_CONFIG.lock().ip {
-            Some(ip) => Ok(ip),
-            None => err!(NetError::NotConfigured),
-        }
-    }
-
-    pub fn mac_and_ip() -> Result<(MacAddr, Ipv4Addr), NetError> {
-        let guard = NET_CONFIG.lock();
-        let Some(ip) = guard.ip else {
-            err!(NetError::NotConfigured);
-        };
-        Ok((guard.mac, ip))
     }
 }
 
@@ -292,7 +257,7 @@ impl OutgoingQueue {
                 // patch destination mac address
                 // always the first 6 bytes of an ethernet frame
                 entry.packet[..6].copy_from_slice(&mac.0);
-                let _ = log!(transmit_raw(&entry.packet));
+                let _ = log!(entry.interface.transmit(&entry.packet));
 
                 *slot = None;
             }
@@ -427,20 +392,27 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
 }
 
 /// Transmits a raw packet by passing it to the e1000 driver.
-fn transmit_raw(packet: &[u8]) -> Result<(), NetError> {
-    if log!(e1000::transmit(packet)).is_err() {
+fn transmit_raw(dest_ip: Ipv4Addr, packet: &[u8]) -> Result<(), NetError> {
+    let interface = try_log!(route_by_ip(dest_ip));
+
+    if log!(interface.transmit(packet)).is_err() {
         err!(NetError::TransmitFailed)
     }
+
     Ok(())
 }
 
-/// Transmits a packet by passing it to the e1000 driver, and logs an error if transmission fails.
+/// Transmits a packet by passing it to a corresponding interface according to the routing table.
 /// Packets are passed as a list of segments that will be concatenated together.
 ///
 /// Currently only support IPv4 packets.
 fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
-    let (src_mac, src_ip) = try_log!(NetConfig::mac_and_ip());
     let interface = try_log!(route_by_ip(dest_ip));
+
+    let src_mac = interface.mac();
+    let Some(src_ip) = interface.ip() else {
+        err!(NetError::NotConfigured);
+    };
 
     let payload_len = segments.iter().fold(0, |acc, &s| acc + s.len());
 
@@ -463,10 +435,10 @@ fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(
     // transmission when the reply is received.
     if let Some(dest_mac) = ArpCache::lookup(dest_ip) {
         packet[..6].copy_from_slice(&dest_mac.0);
-        log!(transmit_raw(&packet))
+        log!(interface.transmit(&packet))
     } else {
         try_log!(OutgoingQueue::enqueue(dest_ip, interface.clone(), packet));
-        log!(arp::request(dest_ip))
+        log!(arp::request(interface.clone(), dest_ip))
     }
 }
 
