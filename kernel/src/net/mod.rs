@@ -8,7 +8,7 @@ use crate::e1000;
 use crate::net::arp::ArpCache;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
-use crate::proc;
+use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
 pub(crate) mod arp;
@@ -18,6 +18,7 @@ pub(crate) mod ipv4;
 pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
+const INCOMING_QUEUE_SIZE: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -290,6 +291,42 @@ impl OutgoingQueue {
     }
 }
 
+/// Queue of incoming packets that have been received but not yet processed by the network thread.
+#[derive(Debug, Clone)]
+struct IncomingQueue {
+    slots: [Option<Box<[u8]>>; INCOMING_QUEUE_SIZE],
+}
+
+static INCOMING_QUEUE: SpinLock<IncomingQueue> = SpinLock::new(
+    IncomingQueue {
+        slots: [const { None }; INCOMING_QUEUE_SIZE],
+    },
+    "net_in",
+);
+
+impl IncomingQueue {
+    fn enqueue(&mut self, packet: Box<[u8]>) -> Result<(), NetError> {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(packet);
+            Ok(())
+        } else {
+            err!(NetError::QueueFull)
+        }
+    }
+
+    fn dequeue(&mut self) -> Option<Box<[u8]>> {
+        self.slots.iter_mut().find_map(|slot| slot.take())
+    }
+}
+
+/// Enqueues an incoming packet to be processed by the network thread, and wakes up the thread if it
+/// is sleeping waiting for packets.
+pub fn enqueue_incoming(packet: Box<[u8]>) -> Result<(), NetError> {
+    try_log!(INCOMING_QUEUE.lock().enqueue(packet));
+    proc::wakeup(Channel::Network);
+    Ok(())
+}
+
 /// Trait for parsing and serializing network headers.
 ///
 /// # Safety
@@ -440,7 +477,14 @@ fn receive(packet: Box<[u8]>) -> Result<(), NetError> {
 /// Kernel thread that continuously receives packets from the e1000 driver and processes them.
 fn net_thread() {
     loop {
-        let _ = log!(receive(e1000::receive()));
+        let mut queue = INCOMING_QUEUE.lock();
+
+        if let Some(packet) = queue.dequeue() {
+            drop(queue);
+            let _ = log!(receive(packet));
+        } else {
+            queue = proc::sleep(Channel::Network, queue);
+        }
     }
 }
 
