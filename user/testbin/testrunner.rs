@@ -3,7 +3,9 @@
 
 use user::*;
 
-const TESTS: &[&str] = &["/fs", "/pipe", "/proc", "/fd", "/sbrk", "/cow", "/net"];
+const TESTS: &[&str] = &[
+    "/_fs", "/_pipe", "/_proc", "/_fd", "/_sbrk", "/_cow", "/_net",
+];
 
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
@@ -13,10 +15,10 @@ fn main(_args: Args) {
     let mut failed = 0;
 
     for name in TESTS {
-        print!("test {} ... ", &name[1..]);
+        print!("test {} ... ", &name[2..]);
 
         if fork().expect("fork") == 0 {
-            exec(name, &[&name[1..]]);
+            exec(name, &[&name[2..]]);
             unreachable!("exec failed");
         }
 
