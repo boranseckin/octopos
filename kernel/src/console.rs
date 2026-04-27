@@ -114,7 +114,7 @@ impl Console {
             // wait until interrupt handler has put some input into `buf`.
             while console.r == console.w {
                 if proc::current_proc().is_killed() {
-                    return Err(SysError::Interrupted);
+                    err!(SysError::Interrupted);
                 }
 
                 console = proc::sleep(Channel::Buffer(&console.r as *const _ as usize), console);
