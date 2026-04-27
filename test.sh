@@ -4,7 +4,7 @@ set -e
 cargo build --release --package user
 
 # shellcheck disable=SC2046
-test_bins=$(find user/testbin/*.rs | sed 's|user/testbin/\(.*\)\.rs|target/riscv64gc-unknown-none-elf/release/\1|')
+test_bins=$(find user/testbin/*.rs | sed 's|user/testbin/\(.*\)\.rs|target/riscv64gc-unknown-none-elf/release/_\1|')
 
 # init.rs checks for this file to run testrunner instead of sh.
 touch /tmp/testmode

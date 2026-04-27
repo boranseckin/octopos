@@ -128,63 +128,63 @@ doctest = false
 bench = false
 
 [[bin]]
-name = "testrunner"
+name = "_testrunner"
 path = "testbin/testrunner.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "sbrk"
+name = "_sbrk"
 path = "testbin/sbrk.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "cow"
+name = "_cow"
 path = "testbin/cow.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "fs"
+name = "_fs"
 path = "testbin/fs.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "pipe"
+name = "_pipe"
 path = "testbin/pipe.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "proc"
+name = "_proc"
 path = "testbin/proc.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "fd"
+name = "_fd"
 path = "testbin/fd.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "heap"
+name = "_heap"
 path = "testbin/heap.rs"
 test = false
 doctest = false
 bench = false
 
 [[bin]]
-name = "net"
+name = "_net"
 path = "testbin/net.rs"
 test = false
 doctest = false

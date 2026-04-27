@@ -25,7 +25,7 @@ fn main(_args: Args) {
                 exec("/sh", &["sh"]);
                 exit_with_msg("init: exec sh failed");
             } else {
-                exec("/testrunner", &["testrunner"]);
+                exec("/_testrunner", &["testrunner"]);
                 exit_with_msg("init: exec testrunner failed");
             }
         }
