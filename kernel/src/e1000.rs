@@ -3,10 +3,10 @@ use core::slice;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 
-use crate::proc::{self, Channel};
+use crate::net::{self, Ipv4Addr, MacAddr, NetError, NetInterface};
 use crate::spinlock::SpinLock;
-use crate::syscall::SysError;
 
 const TX_RING_SIZE: usize = 16;
 const RX_RING_SIZE: usize = 16;
@@ -139,95 +139,79 @@ impl E1000 {
     }
 }
 
-/// Transmits a packet by copying the provided buffer into the next available transmit descriptor
-/// and updating the transmit tail pointer to notify the hardware.
-///
-/// Returns an error if the buffer size exceeds the transmit buffer size or if there are no
-/// available transmit descriptors (i.e., the hardware has not yet processed the previous
-/// descriptors).
-pub fn transmit(buf: &[u8]) -> Result<(), SysError> {
-    if buf.len() >= TX_BUF_SIZE {
-        err!(SysError::InvalidArgument);
-    }
-
-    let mut state = E1000.lock();
-
-    let index = state.tx_index;
-    let desc = &mut state.tx_rings[index];
-
-    // check if bit 0 of status (DD) is unset; not available to use
-    if desc.status & 1 == 0 {
-        err!(SysError::ResourceUnavailable);
-    }
-
-    // copy buf into tx desc
-    //
-    // Safety: We assume the caller has provided a valid buffer and that the e1000 device is
-    // properly initialized. The destination address is derived from the tx descriptor, which should
-    // have been set up during initialization to point to a valid transmit buffer.
-    // We also ensure that the length of the buffer does not exceed the size of the transmit buffer.
-    unsafe { (desc.address as *mut u8).copy_from_nonoverlapping(buf.as_ptr(), buf.len()) };
-    desc.length = buf.len() as u16;
-
-    // set cmd EOP, IFCS, RS
-    desc.cmd = (1) | (1 << 1) | (1 << 3);
-
-    // clear status
-    desc.status = 0;
-
-    // update tx index in hardware and software
-    let index = (index + 1) % TX_RING_SIZE;
-    state.tx_index = index;
-    state.write_reg(E1000_MMIO_TDT, index as u32);
-
-    Ok(())
+pub struct E1000Interface {
+    mac: MacAddr,
 }
 
-/// Receives a packet by checking the next receive descriptor for a completed packet, copying the
-/// data into an owned buffer, updating the receive tail pointer to give ownership back to the
-/// hardware, and re-enabling receive interrupts.
-///
-/// If no packet is available, the process will sleep until an interrupt signals that a packet has
-/// been received.
-pub fn receive() -> Box<[u8]> {
-    let mut state = E1000.lock();
+impl NetInterface for E1000Interface {
+    fn name(&self) -> &'static str {
+        "e1000"
+    }
 
-    loop {
-        let index = state.rx_index;
-        let status = unsafe { ptr::read_volatile(&state.rx_rings[index].status) };
+    fn mac(&self) -> MacAddr {
+        self.mac
+    }
 
-        // packet found, process it
-        if status & 1 != 0 {
-            let desc = &state.rx_rings[index];
-            let len = desc.length as usize;
-            let buf_ptr = desc.address as *const u8;
-            let data = unsafe { slice::from_raw_parts(buf_ptr, len) };
+    fn ip(&self) -> Option<Ipv4Addr> {
+        // TODO: hardcode an IP for testing since we don't have DHCP implemented
+        Some(Ipv4Addr([192, 168, 10, 2]))
+    }
 
-            // copy the package to an owned Box so that when we give this memory back to the
-            // hardware, our local copy will not be modified.
-            let data = Box::from(data);
-
-            // update RDT, which now gives the hardware ownership of the descriptor back and allows
-            // it to write the next packet into it.
-            state.rx_rings[index].status = 0;
-            state.write_reg(E1000_MMIO_RDT, index as u32);
-            state.rx_index = (index + 1) % RX_RING_SIZE;
-
-            // re-enable rx interrupts (RXT0)
-            state.set_mask(E1000_MMIO_IMS, 1 << 7);
-
-            return data;
+    /// Transmits a packet by copying the provided buffer into the next available transmit
+    /// descriptor and updating the transmit tail pointer to notify the hardware.
+    ///
+    /// Returns an error if the buffer size exceeds the transmit buffer size or if there are no
+    /// available transmit descriptors (i.e., the hardware has not yet processed the previous
+    /// descriptors).
+    fn transmit(&self, packet: &[u8]) -> Result<(), NetError> {
+        if packet.len() >= TX_BUF_SIZE {
+            err!(NetError::PacketTooLarge);
         }
 
-        // no packet found, sleep
-        state = proc::sleep(Channel::Network, state);
+        let mut state = E1000.lock();
+
+        let index = state.tx_index;
+        let desc = &mut state.tx_rings[index];
+
+        // check if bit 0 of status (DD) is unset; not available to use
+        if desc.status & 1 == 0 {
+            err!(NetError::ResourceUnavailable);
+        }
+
+        // copy buf into tx desc
+        //
+        // Safety: We assume the caller has provided a valid buffer and that the e1000 device is
+        // properly initialized. The destination address is derived from the tx descriptor, which
+        // should have been set up during initialization to point to a valid transmit buffer.
+        // We also ensure that the length of the buffer does not exceed the size of the transmit
+        // buffer.
+        unsafe {
+            (desc.address as *mut u8).copy_from_nonoverlapping(packet.as_ptr(), packet.len())
+        };
+        desc.length = packet.len() as u16;
+
+        // set cmd EOP, IFCS, RS
+        desc.cmd = (1) | (1 << 1) | (1 << 3);
+
+        // clear status
+        desc.status = 0;
+
+        // update tx index in hardware and software
+        let index = (index + 1) % TX_RING_SIZE;
+        state.tx_index = index;
+        state.write_reg(E1000_MMIO_TDT, index as u32);
+
+        Ok(())
     }
 }
 
 /// Handles an interrupt from the e1000 device by checking the Interrupt Cause Read (ICR) register
 /// to determine the cause of the interrupt. If the interrupt was caused by a received packet
-/// (RXT0), the function disables further RXT0 interrupts until the packet is processed and wakes
-/// up any processes waiting on the network channel.
+/// (RXT0), the function disables further RXT0 interrupts until the packet is processed.
+///
+/// It checks the next receive descriptor for a completed packet, copyies the data into an owned
+/// buffer, updates the receive tail pointer to give ownership back to the hardware, and re-enables
+/// receive interrupts.
 pub fn handle_interrupt() {
     let mut state = E1000.lock();
 
@@ -242,7 +226,39 @@ pub fn handle_interrupt() {
     // disable RXT0 interrupts until receive is done
     state.set_mask(E1000_MMIO_IMC, 1 << 7);
 
-    proc::wakeup(Channel::Network);
+    let index = state.rx_index;
+    let status = unsafe { ptr::read_volatile(&state.rx_rings[index].status) };
+
+    // packet found, process it
+    if status & 1 != 0 {
+        let desc = &state.rx_rings[index];
+        let len = desc.length as usize;
+        let buf_ptr = desc.address as *const u8;
+        let data = unsafe { slice::from_raw_parts(buf_ptr, len) };
+
+        // copy the package to an owned Box so that when we give this memory back to the
+        // hardware, our local copy will not be modified.
+        let data = Box::from(data);
+
+        // update RDT, which now gives the hardware ownership of the descriptor back and allows
+        // it to write the next packet into it.
+        state.rx_rings[index].status = 0;
+        state.write_reg(E1000_MMIO_RDT, index as u32);
+        state.rx_index = (index + 1) % RX_RING_SIZE;
+
+        // re-enable rx interrupts (RXT0)
+        state.set_mask(E1000_MMIO_IMS, 1 << 7);
+
+        // release e1000 lock before, queueing packet since it acquires queue lock
+        drop(state);
+
+        // enqueue the packet for processing by the network stack
+        // ignore the result since if the channel is full, the packet will just be dropped
+        let _ = log!(net::enqueue_incoming(data));
+    } else {
+        // re-enable rx interrupts (RXT0)
+        state.set_mask(E1000_MMIO_IMS, 1 << 7);
+    }
 }
 
 /// Initializes the e1000 driver by mapping the MMIO region, resetting the device, setting up
@@ -345,6 +361,11 @@ pub unsafe fn init() {
 
     // set TIPG: IPGT=10, IPGR1=8, IPGR2=6
     state.set_mask(E1000_MMIO_TIPG, (10) | (8 << 10) | (6 << 20));
+
+    // register the network interface with the network stack
+    net::register_interface(Arc::new(E1000Interface {
+        mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
+    }));
 
     println!("e1000 init");
 }
