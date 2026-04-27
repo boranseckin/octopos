@@ -239,6 +239,7 @@ pub fn route_by_ip(dest_ip: Ipv4Addr) -> Result<Arc<dyn NetInterface>, NetError>
 #[derive(Clone)]
 struct OutgoingQueueEntry {
     dest_ip: Ipv4Addr,
+    interface: Arc<dyn NetInterface>,
     packet: Box<[u8]>,
 }
 
@@ -247,12 +248,12 @@ struct OutgoingQueueEntry {
 /// Destination MAC address is filled in when the ARP reply is received, and then the packet is
 /// transmitted.
 struct OutgoingQueue {
-    slot: [Option<OutgoingQueueEntry>; OUTGOING_QUEUE_SIZE],
+    slots: [Option<OutgoingQueueEntry>; OUTGOING_QUEUE_SIZE],
 }
 
 static OUTGOING_QUEUE: SpinLock<OutgoingQueue> = SpinLock::new(
     OutgoingQueue {
-        slot: [const { None }; OUTGOING_QUEUE_SIZE],
+        slots: [const { None }; OUTGOING_QUEUE_SIZE],
     },
     "net_out",
 );
@@ -262,14 +263,22 @@ impl OutgoingQueue {
     /// address is resolved via ARP.
     ///
     /// Returns an error if the queue is full.
-    fn enqueue(dest_ip: Ipv4Addr, packet: Box<[u8]>) -> Result<(), NetError> {
+    fn enqueue(
+        dest_ip: Ipv4Addr,
+        interface: Arc<dyn NetInterface>,
+        packet: Box<[u8]>,
+    ) -> Result<(), NetError> {
         let mut queue = OUTGOING_QUEUE.lock();
 
-        if let Some(slot) = queue.slot.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(OutgoingQueueEntry { dest_ip, packet });
+        if let Some(slot) = queue.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(OutgoingQueueEntry {
+                dest_ip,
+                interface,
+                packet,
+            });
             Ok(())
         } else {
-            Err(NetError::QueueFull)
+            err!(NetError::QueueFull)
         }
     }
 
@@ -278,7 +287,7 @@ impl OutgoingQueue {
     pub fn dispatch(ip: Ipv4Addr, mac: MacAddr) {
         let mut queue = OUTGOING_QUEUE.lock();
 
-        for slot in queue.slot.iter_mut() {
+        for slot in queue.slots.iter_mut() {
             if let Some(entry) = slot.as_mut().filter(|s| s.dest_ip == ip) {
                 // patch destination mac address
                 // always the first 6 bytes of an ethernet frame
@@ -431,6 +440,7 @@ fn transmit_raw(packet: &[u8]) -> Result<(), NetError> {
 /// Currently only support IPv4 packets.
 fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
     let (src_mac, src_ip) = try_log!(NetConfig::mac_and_ip());
+    let interface = try_log!(route_by_ip(dest_ip));
 
     let payload_len = segments.iter().fold(0, |acc, &s| acc + s.len());
 
@@ -455,7 +465,7 @@ fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(
         packet[..6].copy_from_slice(&dest_mac.0);
         log!(transmit_raw(&packet))
     } else {
-        try_log!(OutgoingQueue::enqueue(dest_ip, packet));
+        try_log!(OutgoingQueue::enqueue(dest_ip, interface.clone(), packet));
         log!(arp::request(dest_ip))
     }
 }
