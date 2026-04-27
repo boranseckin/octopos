@@ -16,6 +16,7 @@ pub struct SpinLock<T> {
 }
 
 /// A guard that releases the lock when dropped.
+#[derive(Debug)]
 pub struct SpinLockGuard<'a, T: 'a> {
     lock: &'a SpinLock<T>,
     _intr_lock: InterruptLock,
