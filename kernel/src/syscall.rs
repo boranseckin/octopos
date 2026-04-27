@@ -140,6 +140,7 @@ impl From<NetError> for SysError {
             NetError::OutOfSocket => SysError::ResourceUnavailable,
             NetError::PortInUse => SysError::AlreadyExists,
             NetError::BadSocket => SysError::BadDescriptor,
+            NetError::InvalidAddress => SysError::InvalidArgument,
             NetError::MalformedPacket => SysError::InvalidArgument,
             NetError::TransmitFailed => SysError::IoError,
             NetError::Interrupted => SysError::Interrupted,

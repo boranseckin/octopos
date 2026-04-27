@@ -203,7 +203,7 @@ impl File {
 
             FileType::Socket { socket_id: _ } => {
                 // reads from socket should go through recv()
-                err!(SysError::InvalidArgument);
+                err!(SysError::BadDescriptor);
             }
         }
     }
