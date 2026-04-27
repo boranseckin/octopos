@@ -27,6 +27,7 @@ pub enum NetError {
     OutOfSocket,
     PortInUse,
     BadSocket,
+    InvalidAddress,
     MalformedPacket,
     TransmitFailed,
     Interrupted,
@@ -41,6 +42,7 @@ impl core::fmt::Display for NetError {
             NetError::OutOfSocket => write!(f, "out of socket"),
             NetError::PortInUse => write!(f, "port is already in use"),
             NetError::BadSocket => write!(f, "bad socket"),
+            NetError::InvalidAddress => write!(f, "invalid address"),
             NetError::MalformedPacket => write!(f, "malformed packet"),
             NetError::TransmitFailed => write!(f, "packet transmission failed"),
             NetError::Interrupted => write!(f, "operation interrupted"),
@@ -148,6 +150,33 @@ impl core::fmt::Display for MacAddr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Ipv4Addr(pub [u8; 4]);
+
+impl core::str::FromStr for Ipv4Addr {
+    type Err = NetError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut octets = [0u8; 4];
+        let mut i = 0;
+
+        for octet in s.split('.') {
+            if i >= 4 {
+                err!(NetError::InvalidAddress);
+            }
+
+            octets[i] = match octet.parse() {
+                Ok(n) => n,
+                Err(_) => err!(NetError::InvalidAddress),
+            };
+            i += 1;
+        }
+
+        if i != 4 {
+            err!(NetError::InvalidAddress);
+        }
+
+        Ok(Ipv4Addr(octets))
+    }
+}
 
 impl core::fmt::Display for Ipv4Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
