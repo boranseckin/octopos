@@ -278,7 +278,7 @@ fn transmit_udp(
     payload: &[u8],
 ) -> Result<(), NetError> {
     // we need to lookup the route here to figure out the src_ip for the pseudo-header checksum.
-    // net::transmit() will also do this lookup, so it is a bit inefficient...
+    // net::transmit() will also do this lookup, so it is a bit inefficient... why is udp like this
     let interface = try_log!(net::route_by_ip(dest_ip));
     let Some(src_ip) = interface.ip() else {
         err!(NetError::NotConfigured);

@@ -3,12 +3,6 @@
 
 use user::*;
 
-/// Host IP address (TAP interface on the host machine).
-const HOST_IP: [u8; 4] = [192, 168, 10, 1];
-
-/// Port the Python echo server in test.sh listens on.
-const ECHO_SERVER_PORT: u16 = 26100;
-
 /// Opening a socket succeeds, and the same port can be reused after closing.
 fn test_socket_open_close() {
     let fd = socket(26200).expect("socket open");
@@ -49,20 +43,22 @@ fn test_ephemeral_port() {
 /// send() must return the number of bytes written, not a truncated or wrong count.
 fn test_send_returns_byte_count() {
     let fd = socket(0).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
 
     let data = b"hello";
-    let n = send(fd, data, &HOST_IP, ECHO_SERVER_PORT).expect("send");
+    let n = send(fd, data, &Ipv4Addr::LOOPBACK.0, port).expect("send");
     assert_eq!(n, data.len(), "send must return payload byte count");
 
     close(fd).expect("close");
 }
 
-/// Send a payload to the host echo server and verify the reflected packet arrives intact.
+/// Send a payload to the loopback address and verify the reflected packet arrives intact.
 fn test_echo_round_trip() {
     let fd = socket(0).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
 
     let payload = b"octopos UDP echo test";
-    send(fd, payload, &HOST_IP, ECHO_SERVER_PORT).expect("send");
+    send(fd, payload, &Ipv4Addr::LOOPBACK.0, port).expect("send");
 
     let mut buf = [0u8; 64];
     let mut src_ip = [0u8; 4];
@@ -70,11 +66,8 @@ fn test_echo_round_trip() {
     let n = receive(fd, &mut buf, &mut src_ip, &mut src_port).expect("receive");
 
     assert_eq!(&buf[..n], payload, "echo payload mismatch");
-    assert_eq!(src_ip, HOST_IP, "echo source IP must be host");
-    assert_eq!(
-        src_port, ECHO_SERVER_PORT,
-        "echo source port must be echo server port"
-    );
+    assert_eq!(src_ip, Ipv4Addr::LOOPBACK.0, "echo source IP must be host");
+    assert_eq!(src_port, port, "echo source port must be echo server port");
 
     close(fd).expect("close");
 }
@@ -82,10 +75,11 @@ fn test_echo_round_trip() {
 /// receive() must return the number of bytes copied (not the full payload length).
 fn test_receive_truncation() {
     let fd = socket(0).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
 
     // Send a payload larger than the receive buffer we will use.
     let payload = b"truncation test payload that is long";
-    send(fd, payload, &HOST_IP, ECHO_SERVER_PORT).expect("send");
+    send(fd, payload, &Ipv4Addr::LOOPBACK.0, port).expect("send");
 
     let mut buf = [0u8; 8];
     let mut src_ip = [0u8; 4];

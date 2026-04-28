@@ -17,27 +17,12 @@ qemu-img create target/fs.img 256M
 # shellcheck disable=SC2086
 ./mkfs.sh $test_bins /tmp/testmode
 
-# start a UDP echo server in the background
-python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.bind(('', 26100))
-while True:
-    data, addr = s.recvfrom(2048)
-    s.sendto(data, addr)
-" &
-ECHO_PID=$!
-
-
 if ! cargo run --release; then
   echo "test failed"
   # restore original fs.img
   mv /tmp/fs.img.backup target/fs.img
-  kill $ECHO_PID 2>/dev/null || true
   exit 1
 fi
-
-kill $ECHO_PID 2>/dev/null || true
 
 echo "test passed"
 # restore original fs.img

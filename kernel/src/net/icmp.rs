@@ -35,7 +35,7 @@ pub struct IcmpHeader {
 }
 
 impl IcmpHeader {
-    pub fn r#type(&self) -> IcmpType {
+    fn r#type(&self) -> IcmpType {
         IcmpType::from(self.r#type)
     }
 
