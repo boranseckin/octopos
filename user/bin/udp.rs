@@ -64,7 +64,6 @@ fn main(args: Args) {
             // otherwise read from stdin and send until EOF
             if let Some(message) = args.get_str(4) {
                 send(fd, message.as_bytes(), &dest_ip.0, dest_port).expect("send failed");
-                println!("sent to [{}:{}]: {}", dest_ip, dest_port, message);
             } else {
                 let mut buf = [0u8; 1024];
                 loop {

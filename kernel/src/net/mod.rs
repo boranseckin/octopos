@@ -14,6 +14,7 @@ pub(crate) mod arp;
 pub(crate) mod eth;
 pub(crate) mod icmp;
 pub(crate) mod ipv4;
+pub(crate) mod loopback;
 pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
@@ -125,6 +126,8 @@ impl core::fmt::Display for MacAddr {
 pub struct Ipv4Addr(pub [u8; 4]);
 
 impl Ipv4Addr {
+    pub const LOOPBACK: Self = Self([127, 0, 0, 1]);
+
     fn is_loopback(&self) -> bool {
         *self == Ipv4Addr([127, 0, 0, 1])
     }
@@ -163,11 +166,15 @@ impl core::fmt::Display for Ipv4Addr {
     }
 }
 
+/// Trait for network interfaces, which can transmit packets and provide their MAC and IP addresses.
 pub trait NetInterface: Send + Sync {
     fn name(&self) -> &'static str;
     fn mac(&self) -> MacAddr;
     fn ip(&self) -> Option<Ipv4Addr>;
     fn transmit(&self, packet: &[u8]) -> Result<(), NetError>;
+    fn needs_arp(&self) -> bool {
+        true
+    }
 }
 
 static INTERFACES: SpinLock<Vec<Arc<dyn NetInterface>>> =
@@ -190,9 +197,9 @@ pub fn find_interface_by_ip(addr: Ipv4Addr) -> Option<Arc<dyn NetInterface>> {
 }
 
 /// Finds the appropriate network interface to use for sending a packet to the given destination IP
-/// address, based on our routing table.
+/// address, based on a routing table.
 pub fn route_by_ip(dest_ip: Ipv4Addr) -> Result<Arc<dyn NetInterface>, NetError> {
-    if dest_ip.is_loopback() {
+    if dest_ip.is_loopback() || find_interface_by_ip(dest_ip).is_some() {
         find_interface_by_name("lo")
     } else {
         // TODO: currently only route to e1000
@@ -201,6 +208,8 @@ pub fn route_by_ip(dest_ip: Ipv4Addr) -> Result<Arc<dyn NetInterface>, NetError>
     .ok_or(NetError::NotConfigured)
 }
 
+/// Entry in the outgoing packet queue, containing the destination IP address, the interface to send
+/// on, and the packet data.
 #[derive(Clone)]
 struct OutgoingQueueEntry {
     dest_ip: Ipv4Addr,
@@ -266,6 +275,7 @@ impl OutgoingQueue {
 }
 
 /// Queue of incoming packets that have been received but not yet processed by the network thread.
+/// This queue is shared between all network interfaces.
 #[derive(Debug, Clone)]
 struct IncomingQueue {
     slots: [Option<Box<[u8]>>; INCOMING_QUEUE_SIZE],
@@ -279,6 +289,7 @@ static INCOMING_QUEUE: SpinLock<IncomingQueue> = SpinLock::new(
 );
 
 impl IncomingQueue {
+    /// Enqueues a received packet to be processed by the network thread.
     fn enqueue(&mut self, packet: Box<[u8]>) -> Result<(), NetError> {
         if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(packet);
@@ -288,17 +299,20 @@ impl IncomingQueue {
         }
     }
 
+    /// Dequeues a packet for processing by the network thread, returning `None` if the queue is
+    /// empty.
     fn dequeue(&mut self) -> Option<Box<[u8]>> {
         self.slots.iter_mut().find_map(|slot| slot.take())
     }
 }
 
-/// Enqueues an incoming packet to be processed by the network thread, and wakes up the thread if it
-/// is sleeping waiting for packets.
+/// Enqueues an incoming packet to be processed by the network thread.
+/// It wakes up the thread regardless of the enqueue result, since if the queue is full, the thread
+/// should be awoken to drain it.
 pub fn enqueue_incoming(packet: Box<[u8]>) -> Result<(), NetError> {
-    try_log!(INCOMING_QUEUE.lock().enqueue(packet));
+    let result = log!(INCOMING_QUEUE.lock().enqueue(packet));
     proc::wakeup(Channel::Network);
-    Ok(())
+    result
 }
 
 /// Trait for parsing and serializing network headers.
@@ -391,7 +405,12 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     !(sum as u16)
 }
 
-/// Transmits a raw packet by passing it to the e1000 driver.
+/// Transmits a ethernet-layer packet by passing it to a corresponding interface according to the
+/// routing table, without performing any additional processing.
+///
+/// This is used for transmitting ARP packets, which do not require IP-layer processing and may not
+/// have a valid destination MAC address at the time of transmission, since they are used for
+/// address resolution.
 fn transmit_raw(dest_ip: Ipv4Addr, packet: &[u8]) -> Result<(), NetError> {
     let interface = try_log!(route_by_ip(dest_ip));
 
@@ -430,13 +449,16 @@ fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(
 
     let mut packet = packet.into_boxed_slice();
 
-    // if we have the destination MAC address cached, fill it in and transmit immediately, otherwise
-    // queue the packet and send an ARP request to resolve the MAC address, which will trigger
-    // transmission when the reply is received.
-    if let Some(dest_mac) = ArpCache::lookup(dest_ip) {
+    if !interface.needs_arp() {
+        // packet does not require address resolution, send it.
+        log!(interface.transmit(&packet))
+    } else if let Some(dest_mac) = ArpCache::lookup(dest_ip) {
+        // packet requires MAC address but we have it cached, fill it and send it.
         packet[..6].copy_from_slice(&dest_mac.0);
         log!(interface.transmit(&packet))
     } else {
+        // packet requires MAC address and we don't have it, queue the packet and send an ARP
+        // request. once the reply is received, the packet will be sent.
         try_log!(OutgoingQueue::enqueue(dest_ip, interface.clone(), packet));
         log!(arp::request(interface.clone(), dest_ip))
     }
@@ -456,7 +478,11 @@ fn receive(packet: Box<[u8]>) -> Result<(), NetError> {
     }
 }
 
-/// Kernel thread that continuously receives packets from the e1000 driver and processes them.
+/// Kernel thread that continuously receives packets from the incoming queue and processes them by
+/// calling `receive()`.
+///
+/// This thread is woken up whenever a new packet is enqueued to the incoming queue, and it will
+/// process all packets in the queue before going back to sleep.
 fn net_thread() {
     loop {
         let mut queue = INCOMING_QUEUE.lock();
@@ -472,5 +498,6 @@ fn net_thread() {
 
 /// Initializes the network stack by spawning a kernel thread to handle incoming packets.
 pub fn init() {
+    loopback::init();
     proc::spawn_kernel_thread(net_thread, "net");
 }
