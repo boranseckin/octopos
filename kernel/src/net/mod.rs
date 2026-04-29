@@ -290,8 +290,10 @@ static INCOMING_QUEUE: SpinLock<IncomingQueue> = SpinLock::new(
 
 impl IncomingQueue {
     /// Enqueues a received packet to be processed by the network thread.
-    fn enqueue(&mut self, packet: Box<[u8]>) -> Result<(), NetError> {
-        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+    fn enqueue(packet: Box<[u8]>) -> Result<(), NetError> {
+        let mut queue = INCOMING_QUEUE.lock();
+
+        if let Some(slot) = queue.slots.iter_mut().find(|slot| slot.is_none()) {
             *slot = Some(packet);
             Ok(())
         } else {
@@ -301,6 +303,9 @@ impl IncomingQueue {
 
     /// Dequeues a packet for processing by the network thread, returning `None` if the queue is
     /// empty.
+    ///
+    /// Unlike other queue methods, caller holds the lock since it will sleep on the channel with
+    /// the lock if the queue is empty.
     fn dequeue(&mut self) -> Option<Box<[u8]>> {
         self.slots.iter_mut().find_map(|slot| slot.take())
     }
@@ -310,7 +315,7 @@ impl IncomingQueue {
 /// It wakes up the thread regardless of the enqueue result, since if the queue is full, the thread
 /// should be awoken to drain it.
 pub fn enqueue_incoming(packet: Box<[u8]>) -> Result<(), NetError> {
-    let result = log!(INCOMING_QUEUE.lock().enqueue(packet));
+    let result = log!(IncomingQueue::enqueue(packet));
     proc::wakeup(Channel::Network);
     result
 }

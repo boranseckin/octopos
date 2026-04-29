@@ -105,7 +105,7 @@ impl RxDesc {
 ///
 /// Includes the base MMIO address, transmit and receive descriptor rings, and indices for tracking
 /// the next available descriptors for transmission and reception.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct E1000 {
     base: usize,
     tx_rings: [TxDesc; TX_RING_SIZE],
