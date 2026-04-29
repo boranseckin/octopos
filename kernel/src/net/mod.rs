@@ -373,6 +373,10 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     let mut carry: Option<u8> = None;
 
     for segment in segments {
+        if segment.len() == 0 {
+            continue;
+        }
+
         // Account for the carry byte from the previous segment if any.
         let data = if let Some(byte) = carry.take() {
             sum += u16::from_be_bytes([byte, segment[0]]) as u32;
