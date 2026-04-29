@@ -39,7 +39,12 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
 
 pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
     let buf_addr = args.get_addr(1);
+
     let buf_len = args.get_int(2) as usize;
+    if buf_len > MAX_UDP_PAYLOAD {
+        err!(SysError::MessageTooLarge)
+    }
+
     let dest_ip_ptr = args.get_addr(3);
     let Ok(dest_port) = u16::try_from(args.get_int(4)) else {
         err!(SysError::InvalidArgument)
@@ -62,16 +67,14 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
     }
     let dest_ip = Ipv4Addr(dest_ip);
 
-    // clamp payload to prevent malicious heap allocation
-    let payload_len = buf_len.min(MAX_UDP_PAYLOAD);
-    let mut payload = vec![0u8; payload_len];
+    let mut payload = vec![0u8; buf_len];
     if log!(copy_from_user(buf_addr, &mut payload)).is_err() {
         err!(SysError::BadAddress)
     }
 
     try_log!(SocketTable::send(socket_id, dest_ip, dest_port, &payload));
 
-    Ok(payload_len)
+    Ok(buf_len)
 }
 
 pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {

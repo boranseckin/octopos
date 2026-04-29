@@ -43,6 +43,7 @@ pub enum SysError {
     NameTooLong = 36,
     NotImplemented = 38,
     NotEmpty = 39,
+    MessageTooLarge = 90,
 }
 
 impl SysError {
@@ -78,6 +79,7 @@ impl SysError {
             36 => Self::NameTooLong,
             38 => Self::NotImplemented,
             39 => Self::NotEmpty,
+            90 => Self::MessageTooLarge,
             _ => Self::InvalidArgument,
         }
     }
@@ -110,6 +112,7 @@ impl Display for SysError {
             SysError::NameTooLong => write!(f, "file name too long"),
             SysError::NotImplemented => write!(f, "function not implemented"),
             SysError::NotEmpty => write!(f, "directory not empty"),
+            SysError::MessageTooLarge => write!(f, "message too large"),
         }
     }
 }
