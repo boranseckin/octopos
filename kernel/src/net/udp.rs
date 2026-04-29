@@ -170,9 +170,9 @@ impl SocketTable {
             }
 
             // re-borrow socket on each iteration
-            let socket = table.entries[socket_id]
-                .as_mut()
-                .expect("socket closed while holding table lock");
+            let Some(socket) = table.entries[socket_id].as_mut() else {
+                err!(NetError::BadSocket);
+            };
 
             if let Some(entry) = socket.dequeue() {
                 break entry;
