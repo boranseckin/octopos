@@ -77,7 +77,7 @@ impl SocketTable {
     fn next_ephemeral(&mut self) -> u16 {
         let port = self.next_ephemeral;
         self.next_ephemeral += 1;
-        if self.next_ephemeral >= EPHEMERAL_PORT_END {
+        if self.next_ephemeral == EPHEMERAL_PORT_END {
             self.next_ephemeral = EPHEMERAL_PORT_START;
         }
         port
@@ -255,7 +255,7 @@ impl UdpHeader {
             src_ip,
             dest_ip,
             zero: 0,
-            proto: Ipv4Proto::UDP as u8,
+            proto: Ipv4Proto::Udp as u8,
             udp_len: header.len,
         };
 
@@ -289,7 +289,7 @@ fn transmit_udp(
 
     log!(net::transmit(
         dest_ip,
-        Ipv4Proto::UDP,
+        Ipv4Proto::Udp,
         &[header.as_bytes(), payload]
     ))
 }

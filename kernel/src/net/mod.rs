@@ -61,7 +61,7 @@ impl core::fmt::Display for NetError {
 /// Trait for integer types that can be converted to/from network byte order (big-endian).
 pub trait NetworkInt: Sized + Copy {
     fn to_be(self) -> Self;
-    fn from_be(self) -> Self;
+    fn into_be(self) -> Self;
 }
 
 impl NetworkInt for u16 {
@@ -69,7 +69,7 @@ impl NetworkInt for u16 {
         u16::to_be(self)
     }
 
-    fn from_be(self) -> Self {
+    fn into_be(self) -> Self {
         u16::from_be(self)
     }
 }
@@ -79,7 +79,7 @@ impl NetworkInt for u32 {
         u32::to_be(self)
     }
 
-    fn from_be(self) -> Self {
+    fn into_be(self) -> Self {
         u32::from_be(self)
     }
 }
@@ -96,7 +96,7 @@ impl<T: NetworkInt> Be<T> {
     }
 
     fn get(self) -> T {
-        self.0.from_be()
+        self.0.into_be()
     }
 }
 
@@ -378,7 +378,7 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     let mut carry: Option<u8> = None;
 
     for segment in segments {
-        if segment.len() == 0 {
+        if segment.is_empty() {
             continue;
         }
 
@@ -453,7 +453,7 @@ fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(
     packet.extend_from_slice(ipv4.as_bytes());
 
     for segment in segments {
-        packet.extend_from_slice(*segment);
+        packet.extend_from_slice(segment);
     }
 
     let mut packet = packet.into_boxed_slice();
