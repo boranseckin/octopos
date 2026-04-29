@@ -226,11 +226,15 @@ pub fn handle_interrupt() {
     // disable RXT0 interrupts until receive is done
     state.set_mask(E1000_MMIO_IMC, 1 << 7);
 
-    let index = state.rx_index;
-    let status = unsafe { ptr::read_volatile(&state.rx_rings[index].status) };
+    loop {
+        let index = state.rx_index;
+        let status = unsafe { ptr::read_volatile(&state.rx_rings[index].status) };
 
-    // packet found, process it
-    if status & 1 != 0 {
+        if status & 1 == 0 {
+            // no more packets found
+            break;
+        }
+
         let desc = &state.rx_rings[index];
         let len = desc.length as usize;
         let buf_ptr = desc.address as *const u8;
@@ -246,19 +250,20 @@ pub fn handle_interrupt() {
         state.write_reg(E1000_MMIO_RDT, index as u32);
         state.rx_index = (index + 1) % RX_RING_SIZE;
 
-        // re-enable rx interrupts (RXT0)
-        state.set_mask(E1000_MMIO_IMS, 1 << 7);
-
-        // release e1000 lock before, queueing packet since it acquires queue lock
+        // drop the lock to keep the interrupt-disabled window short.
+        // enqueuing and waking the network thread do not need access to the descriptor ring.
         drop(state);
 
         // enqueue the packet for processing by the network stack
         // ignore the result since if the channel is full, the packet will just be dropped
         let _ = log!(net::enqueue_incoming(data));
-    } else {
-        // re-enable rx interrupts (RXT0)
-        state.set_mask(E1000_MMIO_IMS, 1 << 7);
+
+        // re-acquire lock for next iteration of loop
+        state = E1000.lock();
     }
+
+    // re-enable rx interrupts (RXT0)
+    state.set_mask(E1000_MMIO_IMS, 1 << 7);
 }
 
 /// Initializes the e1000 driver by mapping the MMIO region, resetting the device, setting up
