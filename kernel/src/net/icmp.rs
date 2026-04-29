@@ -72,7 +72,7 @@ pub fn echo_reply(
 
     log!(net::transmit(
         dest_ip,
-        Ipv4Proto::ICMP,
+        Ipv4Proto::Icmp,
         &[icmp.as_bytes(), req_data]
     ))
 }

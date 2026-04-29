@@ -5,16 +5,16 @@ use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Ipv4Proto {
-    ICMP = 1,
-    UDP = 17,
+    Icmp = 1,
+    Udp = 17,
     Unknown = u8::MAX,
 }
 
 impl From<u8> for Ipv4Proto {
     fn from(value: u8) -> Self {
         match value {
-            1 => Self::ICMP,
-            17 => Self::UDP,
+            1 => Self::Icmp,
+            17 => Self::Udp,
             _ => Self::Unknown,
         }
     }
@@ -104,8 +104,8 @@ pub fn handle_ipv4(packet: &[u8]) -> Result<(), NetError> {
     let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
 
     match req_ipv4.proto() {
-        Ipv4Proto::ICMP => log!(icmp::handle_icmp(req_ipv4.src, req_data)),
-        Ipv4Proto::UDP => log!(udp::handle_udp(req_ipv4.src, req_data)),
+        Ipv4Proto::Icmp => log!(icmp::handle_icmp(req_ipv4.src, req_data)),
+        Ipv4Proto::Udp => log!(udp::handle_udp(req_ipv4.src, req_data)),
         Ipv4Proto::Unknown => Ok(()),
     }
 }
