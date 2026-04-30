@@ -206,6 +206,10 @@ pub mod raw {
             src_port as usize,
         )
     }
+
+    pub fn random(buf: *mut u8, len: usize) -> isize {
+        syscall2(Syscall::Random, buf as usize, len)
+    }
 }
 
 use kernel::abi::{MAXPATH, Stat, SysError};
@@ -436,4 +440,8 @@ pub fn receive(
         src_ip.as_mut_ptr(),
         src_port as *mut u16,
     ))
+}
+
+pub fn random(buf: &mut [u8]) -> Result<(), SysError> {
+    check_unit(raw::random(buf.as_mut_ptr(), buf.len()))
 }

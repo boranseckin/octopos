@@ -25,6 +25,7 @@ pub(crate) mod pipe;
 pub(crate) mod plic;
 pub(crate) mod proc;
 pub(crate) mod riscv;
+pub(crate) mod rng;
 pub(crate) mod sleeplock;
 pub(crate) mod spinlock;
 pub(crate) mod start;
@@ -57,6 +58,7 @@ pub fn main() -> ! {
             println!("");
 
             kalloc::init();
+            rng::init();
             vm::init();
             vm::init_hart();
             proc::init();

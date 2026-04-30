@@ -289,6 +289,30 @@ pub mod registers {
         }
     }
 
+    /// Machine Security Configuration Register, mseccfg
+    pub mod mseccfg {
+        use core::arch::asm;
+
+        /// Supervisor-mode access to entropy source (seed) register
+        pub const SSEED: usize = 1 << 9;
+
+        #[inline]
+        pub unsafe fn read() -> usize {
+            unsafe {
+                let bits: usize;
+                asm!("csrr {}, mseccfg", out(reg) bits);
+                bits
+            }
+        }
+
+        #[inline]
+        pub unsafe fn write(bits: usize) {
+            unsafe {
+                asm!("csrw mseccfg, {}", in(reg) bits);
+            }
+        }
+    }
+
     /// Supervisor Exception Program Counter, sepc
     /// Holds the instruction address to which a return from exception will go to.
     pub mod sepc {
