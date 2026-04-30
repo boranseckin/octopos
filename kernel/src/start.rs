@@ -59,6 +59,9 @@ pub unsafe fn start() -> ! {
         pmpaddr0::write(0x3fffffffffffff);
         pmpcfg0::write(0xf);
 
+        // enable supervisor-mode access to entropy source (seed) register
+        mseccfg::write(mseccfg::read() | mseccfg::SSEED);
+
         timer_init();
 
         let id = mhartid::read();

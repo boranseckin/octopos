@@ -1,5 +1,8 @@
+use alloc::vec;
+
 use crate::memlayout::QEMU_POWER;
 use crate::proc::{self, Channel, Pid, current_proc};
+use crate::rng::rand_bytes;
 use crate::syscall::{SysError, SyscallArgs};
 use crate::trap::TICKS;
 
@@ -69,6 +72,18 @@ pub fn sys_kill(args: &SyscallArgs) -> Result<usize, SysError> {
 pub fn sys_uptime(_args: &SyscallArgs) -> Result<usize, SysError> {
     let ticks = *TICKS.lock();
     Ok(ticks)
+}
+
+pub fn sys_random(args: &SyscallArgs) -> Result<usize, SysError> {
+    let dest_buf = args.get_addr(0);
+    let len = args.get_int(1) as usize;
+
+    let mut src_buf = vec![0u8; len];
+    rand_bytes(&mut src_buf);
+
+    try_log!(proc::copy_to_user(&src_buf, dest_buf).map_err(|_| SysError::BadAddress));
+
+    Ok(0)
 }
 
 pub fn sys_poweroff(args: &SyscallArgs) -> ! {
