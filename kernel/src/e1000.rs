@@ -1,5 +1,6 @@
 use core::ptr;
 use core::slice;
+use core::sync::atomic::AtomicU32;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
@@ -141,6 +142,7 @@ impl E1000 {
 
 pub struct E1000Interface {
     mac: MacAddr,
+    ip: AtomicU32,
 }
 
 impl NetInterface for E1000Interface {
@@ -153,8 +155,14 @@ impl NetInterface for E1000Interface {
     }
 
     fn ip(&self) -> Option<Ipv4Addr> {
-        // TODO: hardcode an IP for testing since we don't have DHCP implemented
-        Some(Ipv4Addr([192, 168, 10, 2]))
+        match self.ip.load(Ordering::Acquire) {
+            0 => None,
+            ip => Some(Ipv4Addr(ip.to_be_bytes())),
+        }
+    }
+
+    fn set_ip(&self, ip: Ipv4Addr) {
+        self.ip.store(u32::from_be_bytes(ip.0), Ordering::Release);
     }
 
     /// Transmits a packet by copying the provided buffer into the next available transmit
@@ -367,9 +375,14 @@ pub unsafe fn init() {
     // set TIPG: IPGT=10, IPGR1=8, IPGR2=6
     state.set_mask(E1000_MMIO_TIPG, (10) | (8 << 10) | (6 << 20));
 
+    // TODO: register_interface will need to transmit packets for dhcp, decouple this logic to
+    // prevent hidden lock contention like this one
+    drop(state);
+
     // register the network interface with the network stack
     net::register_interface(Arc::new(E1000Interface {
         mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
+        ip: AtomicU32::new(0),
     }));
 
     println!("e1000 init");

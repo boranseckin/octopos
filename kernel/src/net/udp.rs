@@ -209,7 +209,7 @@ impl SocketTable {
 /// UDP Header
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
-struct UdpHeader {
+pub struct UdpHeader {
     src_port: Be<u16>,
     dest_port: Be<u16>,
     len: Be<u16>,
@@ -236,7 +236,7 @@ unsafe impl NetworkHeader for UdpHeader {}
 unsafe impl NetworkHeader for UdpPseudoHeader {}
 
 impl UdpHeader {
-    const SIZE: usize = size_of::<Self>();
+    pub const SIZE: usize = size_of::<Self>();
 
     pub fn new(src_port: u16, dest_port: u16, payload_len: usize) -> Self {
         Self {

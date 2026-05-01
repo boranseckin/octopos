@@ -48,7 +48,7 @@ pub struct Ipv4Header {
 }
 
 impl Ipv4Header {
-    const SIZE: usize = size_of::<Self>();
+    pub const SIZE: usize = size_of::<Self>();
 
     fn proto(&self) -> Ipv4Proto {
         Ipv4Proto::from(self.proto)
