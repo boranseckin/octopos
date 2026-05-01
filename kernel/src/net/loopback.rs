@@ -20,6 +20,10 @@ impl NetInterface for LoopbackInterface {
         Some(Ipv4Addr([127, 0, 0, 1]))
     }
 
+    fn set_ip(&self, _ip: Ipv4Addr) {
+        // ignore attempts to set the IP address since it's fixed to
+    }
+
     fn transmit(&self, packet: &[u8]) -> Result<(), NetError> {
         // directly enqueue the packet for reception
         log!(net::enqueue_incoming(Box::from(packet)))

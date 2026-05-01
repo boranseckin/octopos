@@ -11,6 +11,7 @@ use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
 pub(crate) mod arp;
+pub(crate) mod dhcp;
 pub(crate) mod eth;
 pub(crate) mod icmp;
 pub(crate) mod ipv4;
@@ -126,6 +127,8 @@ impl core::fmt::Display for MacAddr {
 pub struct Ipv4Addr(pub [u8; 4]);
 
 impl Ipv4Addr {
+    pub const UNSPECIFIED: Self = Self([0; 4]);
+    pub const BROADCAST: Self = Self([255; 4]);
     pub const LOOPBACK: Self = Self([127, 0, 0, 1]);
 
     fn is_loopback(&self) -> bool {
@@ -171,8 +174,12 @@ pub trait NetInterface: Send + Sync {
     fn name(&self) -> &'static str;
     fn mac(&self) -> MacAddr;
     fn ip(&self) -> Option<Ipv4Addr>;
+    fn set_ip(&self, ip: Ipv4Addr);
     fn transmit(&self, packet: &[u8]) -> Result<(), NetError>;
     fn needs_arp(&self) -> bool {
+        true
+    }
+    fn needs_dhcp(&self) -> bool {
         true
     }
 }
@@ -180,14 +187,25 @@ pub trait NetInterface: Send + Sync {
 static INTERFACES: SpinLock<Vec<Arc<dyn NetInterface>>> =
     SpinLock::new(Vec::new(), "net_interfaces");
 
+/// Registers a network interface with the network stack, making it available for sending and
+/// receiving packets.
 pub fn register_interface(interface: Arc<dyn NetInterface>) {
-    INTERFACES.lock().push(interface);
+    INTERFACES.lock().push(interface.clone());
+    if interface.needs_dhcp() {
+        dhcp::discover(interface);
+    }
 }
 
 /// Finds a network interface by name.
 pub fn find_interface_by_name(name: &str) -> Option<Arc<dyn NetInterface>> {
     let ifs = INTERFACES.lock();
     ifs.iter().find(|i| i.name() == name).cloned()
+}
+
+/// Finds a network interface by MAC address.
+pub fn find_interface_by_mac(addr: MacAddr) -> Option<Arc<dyn NetInterface>> {
+    let ifs = INTERFACES.lock();
+    ifs.iter().find(|i| i.mac() == addr).cloned()
 }
 
 /// Finds a network interface by IP address.
@@ -509,4 +527,5 @@ fn net_thread() {
 pub fn init() {
     loopback::init();
     proc::spawn_kernel_thread(net_thread, "net");
+    proc::spawn_kernel_thread(dhcp::dhcp_thread, "dhcp");
 }
