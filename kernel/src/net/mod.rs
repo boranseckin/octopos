@@ -189,10 +189,15 @@ static INTERFACES: SpinLock<Vec<Arc<dyn NetInterface>>> =
 
 /// Registers a network interface with the network stack, making it available for sending and
 /// receiving packets.
+///
+/// If the interface requires DHCP, this will also trigger a DHCP request to obtain an IP address
+/// for the interface. The interface will be added to the list of available interfaces regardless of
+/// whether the DHCP request succeeds or fails, since it may still be able to send packets with
+/// a manually configured IP address or just use the MAC address for ARP requests.
 pub fn register_interface(interface: Arc<dyn NetInterface>) {
     INTERFACES.lock().push(interface.clone());
     if interface.needs_dhcp() {
-        dhcp::discover(interface);
+        let _ = log!(dhcp::request_dhcp(interface));
     }
 }
 

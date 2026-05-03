@@ -3,8 +3,11 @@ use alloc::sync::Arc;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::udp::{SocketTable, UdpHeader};
-use crate::net::{self, Be, Ipv4Addr, MacAddr, NetError, NetInterface, NetworkHeader};
+use crate::net::{Be, Ipv4Addr, MacAddr, NetError, NetInterface, NetworkHeader};
 use crate::rng;
+use crate::spinlock::SpinLock;
+
+const DHCP_QUEUE_SIZE: usize = 16;
 
 /// Vendor Information "Magic Cookie"
 /// https://www.rfc-editor.org/rfc/rfc1497
@@ -46,7 +49,7 @@ struct BootpHeader {
 }
 
 impl BootpHeader {
-    pub const SIZE: usize = size_of::<Self>();
+    const SIZE: usize = size_of::<Self>();
 
     /// Creates a new BOOTREQUEST header with default values, to be filled in by the caller.
     fn new_request() -> Self {
@@ -168,6 +171,124 @@ impl<'a> Iterator for DhcpOptionIter<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DhcpState {
+    PendingDiscover,
+    WaitingForOffer {
+        xid: u32,
+    },
+    WaitingForAck {
+        xid: u32,
+        offered_ip: Ipv4Addr,
+        server_ip: Ipv4Addr,
+    },
+}
+
+#[derive(Clone)]
+struct DhcpQueueEntry {
+    interface: Arc<dyn NetInterface>,
+    state: DhcpState,
+}
+
+struct DhcpQueue {
+    entries: [Option<DhcpQueueEntry>; DHCP_QUEUE_SIZE],
+}
+
+static DHCP_QUEUE: SpinLock<DhcpQueue> = SpinLock::new(
+    DhcpQueue {
+        entries: [const { None }; DHCP_QUEUE_SIZE],
+    },
+    "dhcp_queue",
+);
+
+impl DhcpQueue {
+    /// Enqueues a new DHCP request for the given network interface, returning an error if the queue
+    /// is full.
+    fn enqueue(interface: Arc<dyn NetInterface>) -> Result<(), NetError> {
+        let mut queue = DHCP_QUEUE.lock();
+
+        if let Some(entry) = queue.entries.iter_mut().find(|entry| entry.is_none()) {
+            *entry = Some(DhcpQueueEntry {
+                interface,
+                state: DhcpState::PendingDiscover,
+            });
+            Ok(())
+        } else {
+            err!(NetError::QueueFull)
+        }
+    }
+
+    /// Returns the first `PendingDiscover` entry's index and interface.
+    fn next_pending_discover() -> Option<(usize, Arc<dyn NetInterface>)> {
+        let queue = DHCP_QUEUE.lock();
+
+        queue.entries.iter().enumerate().find_map(|(i, entry)| {
+            let e = entry.as_ref()?;
+            matches!(e.state, DhcpState::PendingDiscover).then(|| (i, e.interface.clone()))
+        })
+    }
+
+    /// Marks the entry at the given index as having sent a Discover message with the specified
+    /// transaction ID `xid`, transitioning it to the `WaitingForOffer` state.
+    fn mark_discover_sent(index: usize, xid: u32) {
+        assert!(index < DHCP_QUEUE_SIZE);
+
+        let mut queue = DHCP_QUEUE.lock();
+
+        if let Some(entry) = &mut queue.entries[index] {
+            entry.state = DhcpState::WaitingForOffer { xid };
+        }
+    }
+
+    /// Handles a received DHCP Offer by finding the corresponding entry in the queue that is
+    /// waiting for an offer with the matching transaction ID `xid`, and transitioning it to the
+    /// `WaitingForAck` state with the offered IP address and server IP from the offer.
+    ///
+    /// It then sends a DHCP Request to the server to accept the offer.
+    fn on_offer(xid: u32, server_ip: Ipv4Addr, offered_ip: Ipv4Addr) {
+        let mut queue = DHCP_QUEUE.lock();
+
+        if let Some(entry) = queue.entries.iter_mut().find_map(|entry| {
+            let e = entry.as_mut()?;
+            matches!(e.state, DhcpState::WaitingForOffer { xid: x } if x == xid).then_some(e)
+        }) {
+            entry.state = DhcpState::WaitingForAck {
+                xid,
+                offered_ip,
+                server_ip,
+            };
+
+            request(entry.interface.clone(), xid, server_ip, offered_ip);
+        }
+    }
+
+    /// Handles a received DHCP Ack by finding the corresponding entry in the queue that is waiting
+    /// for an ack with the matching transaction ID `xid`, removing it from the queue, and returning
+    /// it to the caller.
+    fn on_ack(xid: u32) {
+        let mut queue = DHCP_QUEUE.lock();
+
+        let entry = queue.entries.iter_mut().find(|entry| {
+            matches!(
+                entry.as_ref(),
+                Some(e) if matches!(e.state, DhcpState::WaitingForAck { xid: x, .. } if x == xid)
+            )
+        });
+
+        if let Some(entry) = entry {
+            let ack = entry.take().unwrap();
+
+            let offered_ip = match ack.state {
+                // TODO: all other options like subnet mask, gateway, DNS, lease time, etc.
+                DhcpState::WaitingForAck { offered_ip, .. } => offered_ip,
+                _ => unreachable!(),
+            };
+
+            ack.interface.set_ip(offered_ip);
+        }
+    }
+}
+
 /// Transmits a DHCP packet with the given transaction ID and options on the specified interface.
 ///
 /// This function constructs the entire Ethernet + IPv4 + UDP + BOOTP + DHCP packet from scratch
@@ -245,7 +366,7 @@ fn transmit_dhcp(
 ///
 /// The client generates a random transaction ID to match the Discover with subsequent Offer and
 /// Request messages from the server.
-pub fn discover(interface: Arc<dyn NetInterface>) {
+fn discover(index: usize, interface: Arc<dyn NetInterface>) {
     let options = [
         // DHCP Discover
         DhcpOption::new(DhcpOptionType::MessageType, &[1]),
@@ -253,7 +374,9 @@ pub fn discover(interface: Arc<dyn NetInterface>) {
 
     let xid = rng::rand_u32();
 
-    let _ = log!(transmit_dhcp(interface, xid, &options));
+    if log!(transmit_dhcp(interface, xid, &options)).is_ok() {
+        DhcpQueue::mark_discover_sent(index, xid);
+    }
 }
 
 /// Sends a DHCP Request in response to a received DHCP Offer.
@@ -270,27 +393,32 @@ fn request(interface: Arc<dyn NetInterface>, xid: u32, server_ip: Ipv4Addr, offe
     let _ = log!(transmit_dhcp(interface, xid, &options));
 }
 
+/// Public API for requesting an IP address lease via DHCP on the given network interface.
+/// This enqueues a DHCP Discover request to be processed by the DHCP client thread, which will
+/// handle the entire DHCP state machine and update the interface's IP address using
+/// `NetInterface::set_ip()` when a lease is obtained.
+pub fn request_dhcp(interface: Arc<dyn NetInterface>) -> Result<(), NetError> {
+    DhcpQueue::enqueue(interface)
+}
+
 /// Main loop for the DHCP client thread, which listens for incoming DHCP packets and handles them
 /// according to the DHCP state machine.
 pub fn dhcp_thread() {
     let socket = SocketTable::open(68).expect("failed to open DHCP client port");
 
     loop {
-        if let Ok((_ip, _port, packet)) = SocketTable::receive(socket) {
+        // process pending discover request
+        while let Some((index, interface)) = DhcpQueue::next_pending_discover() {
+            discover(index, interface);
+        }
+
+        // receive incoming DHCP packets
+        if let Ok(Some((_ip, _port, packet))) = SocketTable::try_receive(socket) {
             let Some((header, options)) = BootpHeader::from_bytes_with_rest(&packet) else {
                 continue;
             };
 
-            if header.op != 2 {
-                continue;
-            }
-
-            let chaddr = MacAddr(header.chaddr[..6].try_into().unwrap());
-            let Some(interface) = net::find_interface_by_mac(chaddr) else {
-                continue;
-            };
-
-            if options.len() < 4 || options[..4] != MAGIC_COOKIE {
+            if header.op != 2 || options.len() < 4 || options[..4] != MAGIC_COOKIE {
                 continue;
             }
 
@@ -312,19 +440,13 @@ pub fn dhcp_thread() {
                 // DHCP Offer
                 Some(2) => {
                     if let Some(server) = server_id {
-                        request(
-                            interface.clone(),
-                            header.xid.get(),
-                            server,
-                            Ipv4Addr(header.yiaddr.0),
-                        );
+                        DhcpQueue::on_offer(header.xid.get(), server, Ipv4Addr(header.yiaddr.0));
                     }
                 }
 
                 // DHCP Ack
                 Some(5) => {
-                    // TODO: all other options like subnet mask, gateway, DNS, lease time, etc.
-                    interface.set_ip(Ipv4Addr(header.yiaddr.0));
+                    DhcpQueue::on_ack(header.xid.get());
                 }
 
                 _ => {}
