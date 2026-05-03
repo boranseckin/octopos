@@ -33,6 +33,11 @@ impl NetInterface for LoopbackInterface {
         // does not require ARP since it only communicates with itself
         false
     }
+
+    fn needs_dhcp(&self) -> bool {
+        // does not require DHCP since it has a fixed IP address
+        false
+    }
 }
 
 pub fn init() {

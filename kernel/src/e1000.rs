@@ -375,10 +375,6 @@ pub unsafe fn init() {
     // set TIPG: IPGT=10, IPGR1=8, IPGR2=6
     state.set_mask(E1000_MMIO_TIPG, (10) | (8 << 10) | (6 << 20));
 
-    // TODO: register_interface will need to transmit packets for dhcp, decouple this logic to
-    // prevent hidden lock contention like this one
-    drop(state);
-
     // register the network interface with the network stack
     net::register_interface(Arc::new(E1000Interface {
         mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
