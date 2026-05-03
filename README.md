@@ -19,6 +19,17 @@ cargo build --release
 qemu-img create target/fs.img 2G
 ./mkfs.sh
 
+# Create a network interface (octopos0)
+./setup_net.sh
+
+# Optional: Start a dhcp server (in a second terminal)
+sudo dnsmasq -d \
+    --interface=octopos0 \
+    --bind-interfaces \
+    --no-resolv \
+    --no-hosts \
+    --dhcp-range=192.168.10.10,192.168.10.100,12h
+
 # Run in QEMU
 cargo run --release
 ```
