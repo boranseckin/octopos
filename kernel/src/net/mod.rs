@@ -1,6 +1,7 @@
 use core::slice;
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -190,14 +191,12 @@ static INTERFACES: SpinLock<Vec<Arc<dyn NetInterface>>> =
 /// Registers a network interface with the network stack, making it available for sending and
 /// receiving packets.
 ///
-/// If the interface requires DHCP, this will also trigger a DHCP request to obtain an IP address
-/// for the interface. The interface will be added to the list of available interfaces regardless of
-/// whether the DHCP request succeeds or fails, since it may still be able to send packets with
-/// a manually configured IP address or just use the MAC address for ARP requests.
+/// If the interface requires DHCP, this will also spawn a thread to handle DHCP request.
 pub fn register_interface(interface: Arc<dyn NetInterface>) {
     INTERFACES.lock().push(interface.clone());
     if interface.needs_dhcp() {
-        let _ = log!(dhcp::request_dhcp(interface));
+        let thread_name = format!("dhcp-{}", interface.name());
+        proc::spawn_kernel_thread(|| dhcp::dhcp_thread(interface), &thread_name);
     }
 }
 
@@ -205,12 +204,6 @@ pub fn register_interface(interface: Arc<dyn NetInterface>) {
 pub fn find_interface_by_name(name: &str) -> Option<Arc<dyn NetInterface>> {
     let ifs = INTERFACES.lock();
     ifs.iter().find(|i| i.name() == name).cloned()
-}
-
-/// Finds a network interface by MAC address.
-pub fn find_interface_by_mac(addr: MacAddr) -> Option<Arc<dyn NetInterface>> {
-    let ifs = INTERFACES.lock();
-    ifs.iter().find(|i| i.mac() == addr).cloned()
 }
 
 /// Finds a network interface by IP address.
@@ -532,5 +525,4 @@ fn net_thread() {
 pub fn init() {
     loopback::init();
     proc::spawn_kernel_thread(net_thread, "net");
-    proc::spawn_kernel_thread(dhcp::dhcp_thread, "dhcp");
 }
