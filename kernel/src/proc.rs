@@ -1090,6 +1090,7 @@ pub unsafe fn kernel_thread_entry() {
     f();
 
     // if the function returns, exit gracefully.
+    // TODO: kernel threads have no parent, they will stay as zombie if they return.
     exit(0);
 }
 

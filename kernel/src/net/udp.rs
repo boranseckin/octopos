@@ -184,24 +184,6 @@ impl SocketTable {
         Ok((entry.src_ip, entry.src_port, entry.payload))
     }
 
-    pub fn try_receive(socket_id: usize) -> Result<Option<(Ipv4Addr, u16, Box<[u8]>)>, NetError> {
-        if socket_id >= NSOCKET {
-            err!(NetError::BadSocket)
-        }
-
-        let mut table = SOCKET_TABLE.lock();
-
-        let Some(socket) = table.entries[socket_id].as_mut() else {
-            err!(NetError::BadSocket);
-        };
-
-        if let Some(entry) = socket.dequeue() {
-            Ok(Some((entry.src_ip, entry.src_port, entry.payload)))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Sends a datagram from the socket with the given `socket_id` to the specified destination IP
     /// and port, with the given payload.
     pub fn send(
