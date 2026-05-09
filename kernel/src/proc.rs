@@ -1,6 +1,5 @@
 use core::arch::asm;
 use core::cell::UnsafeCell;
-use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -557,13 +556,18 @@ impl Proc {
     pub fn setup_kernel<'a>(
         &self,
         inner: SpinLockGuard<'a, ProcInner>,
-        f: fn(),
+        f: Box<dyn FnOnce()>,
     ) -> SpinLockGuard<'a, ProcInner> {
         // # Safety: the process is not yet runnable, so we are the only one accessing it
         let data = unsafe { self.data_mut() };
 
+        // Box<dyn FnOnce()> is a trait object so it requires a fat pointer: one usize for data and
+        // another usize for the vtable. Since we are only passing a single usize, we need to re-box
+        // the fat pointer which then becomes a thin pointer (Box<Box<dyn FnOnce()>>).
+        let thin = Box::new(f);
+
         data.context.ra = kernel_thread_entry as *const () as usize;
-        data.context.s1 = f as *const () as usize;
+        data.context.s1 = Box::into_raw(thin) as *const () as usize;
 
         inner
     }
@@ -702,12 +706,38 @@ pub fn user_init() {
 }
 
 /// Spawns a kernel thread to run the given function `f`.
-pub fn spawn_kernel_thread(f: fn(), name: &str) {
+///
+/// `f` can be any closure or function pointer that:
+/// - is callable once (`FnOnce`)
+/// - owns its captured data or only references `'static` data (no borrowed locals)
+/// - only captures data that is safe to send across threads (`Send`)
+///
+/// To pass arguments, wrap the call in a `move` closure.
+///
+/// # Example
+/// ```rust
+/// // A plain function with no captures works directly.
+/// fn say_hello() {
+///     println!("hello");
+/// }
+/// spawn_kernel_thread(say_hello, "hello");
+///
+/// // Use a move closure to capture arguments.
+/// fn print_x(x: i32) {
+///     println!("{}", x);
+/// }
+/// let x = 5;
+/// spawn_kernel_thread(move || print_x(x), "print x");
+/// ```
+pub fn spawn_kernel_thread<F>(f: F, name: &str)
+where
+    F: FnOnce() + Send + 'static,
+{
     let (proc, inner) = PROC_TABLE
         .alloc()
         .expect("spawn_kernel_thread: failed to allocate process");
 
-    let mut inner = proc.setup_kernel(inner, f);
+    let mut inner = proc.setup_kernel(inner, Box::new(f));
 
     let data = unsafe { proc.data_mut() };
     data.name.push_str(name);
@@ -1048,14 +1078,15 @@ pub unsafe fn kernel_thread_entry() {
     // still holding process lock from scheduler.
     unsafe { current_proc().inner.force_unlock() };
 
-    // retrieve function pointer from s1.
-    let f_ptr: usize;
-    let f: fn() = unsafe {
-        asm!("mv {}, s1", out(reg) f_ptr);
-        mem::transmute(f_ptr)
-    };
+    // retrieve function "pointer pointer" from s1.
+    let f_ptr_ptr: usize;
+    unsafe { asm!("mv {}, s1", out(reg) f_ptr_ptr) };
 
-    // run the thread function.
+    // f_ptr_ptr is a thin pointer to a fat pointer to a trait object.
+    // this Box::from_raw is re-creating a double pointer i.e. Box<Box<dyn FnOnce()>>.
+    let f = unsafe { Box::from_raw(f_ptr_ptr as *mut Box<dyn FnOnce()>) };
+
+    // run the thread function. both boxes are deref coerced into function automatically.
     f();
 
     // if the function returns, exit gracefully.
