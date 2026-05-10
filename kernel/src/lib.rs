@@ -69,9 +69,9 @@ pub fn main() -> ! {
             proc::user_init();
             buf::init();
             virtio_disk::init();
+            net::init();
             pci::init();
             e1000::init();
-            net::init();
         }
 
         println!("");
