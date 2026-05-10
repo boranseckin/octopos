@@ -525,4 +525,6 @@ fn net_thread() {
 pub fn init() {
     loopback::init();
     proc::spawn_kernel_thread(net_thread, "net");
+
+    println!("net  init");
 }
