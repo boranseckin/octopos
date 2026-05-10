@@ -743,6 +743,13 @@ where
     data.name.push_str(name);
     data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
 
+    // this is not the best way to handle this, but we need some proc to clean after exitted kernel
+    // threads. So init proc does the job for now.
+    let init_id = INIT_PROC.get().unwrap().id;
+
+    let mut parents = PROC_TABLE.parents.lock();
+    parents[proc.id] = Some(init_id);
+
     inner.state = ProcState::Runnable;
 }
 
