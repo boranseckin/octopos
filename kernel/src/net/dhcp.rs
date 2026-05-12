@@ -1,9 +1,7 @@
-use alloc::sync::Arc;
-
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::udp::{SocketTable, UdpHeader};
-use crate::net::{Be, Ipv4Addr, MacAddr, NetError, NetInterface, NetworkHeader};
+use crate::net::{self, Be, InterfaceId, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
 use crate::rng;
 
 /// Vendor Information "Magic Cookie"
@@ -74,6 +72,7 @@ unsafe impl NetworkHeader for BootpHeader {}
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DhcpOptionType {
+    SubnetMask = 1,
     RequestedIpAddress = 50,
     MessageType = 53,
     ServerIdentifier = 54,
@@ -83,6 +82,7 @@ enum DhcpOptionType {
 impl From<u8> for DhcpOptionType {
     fn from(value: u8) -> Self {
         match value {
+            1 => Self::SubnetMask,
             50 => Self::RequestedIpAddress,
             53 => Self::MessageType,
             54 => Self::ServerIdentifier,
@@ -173,11 +173,7 @@ impl<'a> Iterator for DhcpOptionIter<'a> {
 /// This function constructs the entire Ethernet + IPv4 + UDP + BOOTP + DHCP packet from scratch
 /// since we cannot use UDP's `SocketTable::send()` without an IP address, and DHCP requires
 /// specific handling of broadcast packets and options.
-fn transmit_dhcp(
-    interface: Arc<dyn NetInterface>,
-    xid: u32,
-    options: &[DhcpOption],
-) -> Result<(), NetError> {
+fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<(), NetError> {
     // calculate the total size of the DHCP options (+1 for the END option)
     let options_size = options.iter().map(DhcpOption::byte_len).sum::<usize>() + 1;
     let dhcp_size = BootpHeader::SIZE + MAGIC_COOKIE.len() + options_size;
@@ -197,7 +193,11 @@ fn transmit_dhcp(
         + 256 /* extra space for options */];
     let mut offset = 0;
 
-    let mac = interface.mac();
+    let Some(interface) = net::find_interface_by_id(id) else {
+        err!(NetError::InterfaceNotFound)
+    };
+
+    let mac = interface.config.mac;
 
     EthernetHeader::new(MacAddr::BROADCAST, mac, EtherType::Ipv4)
         .append_to(&mut packet, &mut offset);
@@ -235,7 +235,7 @@ fn transmit_dhcp(
     packet[offset] = 0xFF; // End Option
     offset += 1;
 
-    log!(interface.transmit(&packet[..offset]))
+    log!(interface.device.transmit(&packet[..offset]))
 }
 
 /// Sends a DHCP Discover to find available DHCP servers and obtain an IP address lease.
@@ -245,7 +245,7 @@ fn transmit_dhcp(
 ///
 /// The client generates a random transaction ID to match the Discover with subsequent Offer and
 /// Request messages from the server.
-fn discover(interface: Arc<dyn NetInterface>) -> Result<u32, NetError> {
+fn discover(id: InterfaceId) -> Result<u32, NetError> {
     let options = [
         // DHCP Discover
         DhcpOption::new(DhcpOptionType::MessageType, &[1]),
@@ -253,12 +253,12 @@ fn discover(interface: Arc<dyn NetInterface>) -> Result<u32, NetError> {
 
     let xid = rng::rand_u32();
 
-    log!(transmit_dhcp(interface, xid, &options)).map(|_| xid)
+    log!(transmit_dhcp(id, xid, &options)).map(|_| xid)
 }
 
 /// Sends a DHCP Request in response to a received DHCP Offer.
 fn request(
-    interface: Arc<dyn NetInterface>,
+    id: InterfaceId,
     xid: u32,
     server_ip: Ipv4Addr,
     offered_ip: Ipv4Addr,
@@ -272,7 +272,7 @@ fn request(
         DhcpOption::new(DhcpOptionType::ServerIdentifier, &server_ip.0),
     ];
 
-    log!(transmit_dhcp(interface, xid, &options))
+    log!(transmit_dhcp(id, xid, &options))
 }
 
 /// DHCP state machine
@@ -284,6 +284,7 @@ enum DhcpState {
     WaitingForAck {
         xid: u32,
         offered_ip: Ipv4Addr,
+        prefix_len: u8,
         server_ip: Ipv4Addr,
     },
 }
@@ -291,11 +292,11 @@ enum DhcpState {
 /// Thread for handling DHCP negotiation for the given interface.
 ///
 // TODO: implement retries and backoff for failed attempts
-pub fn dhcp_thread(interface: Arc<dyn NetInterface>) {
+pub fn dhcp_thread(id: InterfaceId) {
     // TODO: multiple opens on 68 will fail
     let socket = SocketTable::open(68).expect("failed to open DHCP client port");
 
-    let Ok(xid) = log!(discover(interface.clone())) else {
+    let Ok(xid) = log!(discover(id)) else {
         return;
     };
 
@@ -317,13 +318,17 @@ pub fn dhcp_thread(interface: Arc<dyn NetInterface>) {
 
         let mut message_type: Option<u8> = None;
         let mut server_id: Option<Ipv4Addr> = None;
+        let mut subnet_mask: Option<Ipv4Addr> = None;
 
         // DhcpOptionIter is responsible from verifying the data length
         for option in DhcpOptionIter(&options[4..]) {
             match option.id {
                 DhcpOptionType::MessageType => message_type = Some(option.data[0]),
                 DhcpOptionType::ServerIdentifier => {
-                    server_id = Some(Ipv4Addr(option.data.try_into().unwrap()));
+                    server_id = Some(Ipv4Addr(option.data.try_into().unwrap()))
+                }
+                DhcpOptionType::SubnetMask => {
+                    subnet_mask = Some(Ipv4Addr(option.data.try_into().unwrap()))
                 }
                 _ => {}
             }
@@ -333,13 +338,19 @@ pub fn dhcp_thread(interface: Arc<dyn NetInterface>) {
             // DHCP Offer
             Some(2) if matches!(state, DhcpState::WaitingForOffer { .. }) => {
                 if let Some(server) = server_id {
-                    if log!(request(interface.clone(), xid, server, header.yiaddr)).is_err() {
+                    let Some(prefix_len) = subnet_mask.and_then(Ipv4Addr::mask_to_prefix_len)
+                    else {
+                        return;
+                    };
+
+                    if log!(request(id, xid, server, header.yiaddr)).is_err() {
                         return;
                     }
 
                     state = DhcpState::WaitingForAck {
                         xid,
                         offered_ip: header.yiaddr,
+                        prefix_len,
                         server_ip: server,
                     }
                 }
@@ -347,9 +358,21 @@ pub fn dhcp_thread(interface: Arc<dyn NetInterface>) {
 
             // DHCP Ack
             Some(5) => {
-                // TODO: ignoring all other fields for now like subnet mask, DNS, lease time, etc.
-                if let DhcpState::WaitingForAck { offered_ip, .. } = state {
-                    interface.set_ip(offered_ip);
+                // TODO: ignoring all other fields for now like gateway, DNS, lease time, etc.
+                if let DhcpState::WaitingForAck {
+                    offered_ip,
+                    prefix_len,
+                    ..
+                } = state
+                {
+                    let _ = log!(net::set_interface_ipv4(
+                        id,
+                        Some(Ipv4Config {
+                            addr: offered_ip,
+                            prefix_len,
+                        }),
+                    ));
+
                     // we now have an IP, exit this thread.
                     // TODO: keep listening for possible updates in the future.
                     return;

@@ -1,7 +1,5 @@
-use alloc::sync::Arc;
-
 use crate::net::{
-    self, Be, EtherType, EthernetHeader, Ipv4Addr, MacAddr, NetError, NetInterface, NetworkHeader,
+    self, Be, EtherType, EthernetHeader, InterfaceId, Ipv4Addr, MacAddr, NetError, NetworkHeader,
     OutgoingQueue,
 };
 use crate::spinlock::SpinLock;
@@ -161,7 +159,11 @@ unsafe impl NetworkHeader for ArpPacket {}
 
 /// Handles an incoming ARP packet by parsing the header and, if it is a request for our IP, sending
 /// a reply with our MAC address.
-pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) -> Result<(), NetError> {
+pub fn handle_arp(
+    interface_id: InterfaceId,
+    req_eth: &EthernetHeader,
+    req_data: &[u8],
+) -> Result<(), NetError> {
     let Some(req_arp) = ArpPacket::from_bytes(req_data) else {
         err!(NetError::MalformedPacket);
     };
@@ -171,16 +173,18 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) -> Result<(), NetEr
         return Ok(());
     }
 
-    // we need our IP address and the intreface to know whether to reply.
-    // if we find an interface, that means it has an IP assigned to it and it matches the request.
-    // if no interface found, we cannot respond, silently drop.
-    let Some(interface) = net::find_interface_by_ip(req_arp.tpa) else {
-        return Ok(());
+    // verify tpa matches our IP address to avoid replying to ARP requests for other hosts
+    if let Some(interface) = net::find_interface_by_id(interface_id) {
+        if interface.config.ipv4.map(|ipv4| ipv4.addr) != Some(req_arp.tpa) {
+            return Ok(());
+        }
+    } else {
+        err!(NetError::NotConfigured);
     };
 
     match req_arp.op() {
         ArpOp::Request => {
-            try_log!(reply(interface, req_eth, req_arp));
+            try_log!(reply(interface_id, req_eth, req_arp));
         }
         ArpOp::Response => {
             ArpCache::insert(req_arp.spa, req_arp.sha);
@@ -195,20 +199,24 @@ pub fn handle_arp(req_eth: &EthernetHeader, req_data: &[u8]) -> Result<(), NetEr
 /// Sends an ARP Reply in response to the given ARP Request.
 /// It constructs both the Ethernet and ARP headers for the reply.
 fn reply(
-    interface: Arc<dyn NetInterface>,
+    interface_id: InterfaceId,
     req_eth: &EthernetHeader,
     req_arp: &ArpPacket,
 ) -> Result<(), NetError> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let mac = interface.mac();
-    let Some(ip) = interface.ip() else {
+    let Some(interface) = net::find_interface_by_id(interface_id) else {
+        err!(NetError::NotConfigured);
+    };
+
+    let mac = interface.config.mac;
+    let Some(ipv4) = interface.config.ipv4 else {
         err!(NetError::NotConfigured);
     };
 
     EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
-    ArpPacket::new_reply(req_arp, mac, ip).append_to(&mut packet, &mut offset);
+    ArpPacket::new_reply(req_arp, mac, ipv4.addr).append_to(&mut packet, &mut offset);
 
     log!(net::transmit_raw(req_arp.spa, &packet))
 }
@@ -218,18 +226,22 @@ fn reply(
 ///
 /// The reply will be handled asynchronously by `handle_arp` and the result will be stored in the
 /// ARP cache for future lookups.
-pub fn request(interface: Arc<dyn NetInterface>, dest_ip: Ipv4Addr) -> Result<(), NetError> {
+pub fn request(interface_id: InterfaceId, dest_ip: Ipv4Addr) -> Result<(), NetError> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let mac = interface.mac();
-    let Some(ip) = interface.ip() else {
+    let Some(interface) = net::find_interface_by_id(interface_id) else {
+        err!(NetError::NotConfigured);
+    };
+
+    let mac = interface.config.mac;
+    let Some(ipv4) = interface.config.ipv4 else {
         err!(NetError::NotConfigured);
     };
 
     EthernetHeader::new(MacAddr::BROADCAST, mac, EtherType::Arp)
         .append_to(&mut packet, &mut offset);
-    ArpPacket::new_request(dest_ip, mac, ip).append_to(&mut packet, &mut offset);
+    ArpPacket::new_request(dest_ip, mac, ipv4.addr).append_to(&mut packet, &mut offset);
 
     log!(net::transmit_raw(dest_ip, &packet))
 }

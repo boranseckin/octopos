@@ -1,12 +1,12 @@
 use core::ptr;
 use core::slice;
-use core::sync::atomic::AtomicU32;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::net::{self, Ipv4Addr, MacAddr, NetError, NetInterface};
+use crate::net::InterfaceId;
+use crate::net::{self, InterfaceConfig, Ipv4Addr, Ipv4Config, MacAddr, NetDevice, NetError};
 use crate::spinlock::SpinLock;
 
 const TX_RING_SIZE: usize = 16;
@@ -113,6 +113,7 @@ struct E1000 {
     rx_rings: [RxDesc; RX_RING_SIZE],
     tx_index: usize,
     rx_index: usize,
+    interface_id: Option<InterfaceId>,
 }
 
 impl E1000 {
@@ -123,6 +124,7 @@ impl E1000 {
             rx_rings: [const { RxDesc::new() }; RX_RING_SIZE],
             tx_index: 0,
             rx_index: 0,
+            interface_id: None,
         }
     }
 
@@ -140,31 +142,9 @@ impl E1000 {
     }
 }
 
-pub struct E1000Interface {
-    mac: MacAddr,
-    ip: AtomicU32,
-}
+pub struct E1000Interface;
 
-impl NetInterface for E1000Interface {
-    fn name(&self) -> &'static str {
-        "e1000"
-    }
-
-    fn mac(&self) -> MacAddr {
-        self.mac
-    }
-
-    fn ip(&self) -> Option<Ipv4Addr> {
-        match self.ip.load(Ordering::Acquire) {
-            0 => None,
-            ip => Some(Ipv4Addr(ip.to_be_bytes())),
-        }
-    }
-
-    fn set_ip(&self, ip: Ipv4Addr) {
-        self.ip.store(u32::from_be_bytes(ip.0), Ordering::Release);
-    }
-
+impl NetDevice for E1000Interface {
     /// Transmits a packet by copying the provided buffer into the next available transmit
     /// descriptor and updating the transmit tail pointer to notify the hardware.
     ///
@@ -223,6 +203,12 @@ impl NetInterface for E1000Interface {
 pub fn handle_interrupt() {
     let mut state = E1000.lock();
 
+    let Some(interface_id) = state.interface_id else {
+        // should never happen since we set the interface ID during initialization before enabling
+        // interrupts, but just in case, we return early if the interface ID is not set.
+        return;
+    };
+
     // reading ICR clears the interrupt
     let icr = state.read_reg(E1000_MMIO_ICR);
 
@@ -264,7 +250,7 @@ pub fn handle_interrupt() {
 
         // enqueue the packet for processing by the network stack
         // ignore the result since if the channel is full, the packet will just be dropped
-        let _ = log!(net::enqueue_incoming(data));
+        let _ = log!(net::enqueue_incoming(interface_id, data));
 
         // re-acquire lock for next iteration of loop
         state = E1000.lock();
@@ -376,10 +362,20 @@ pub unsafe fn init() {
     state.set_mask(E1000_MMIO_TIPG, (10) | (8 << 10) | (6 << 20));
 
     // register the network interface with the network stack
-    net::register_interface(Arc::new(E1000Interface {
-        mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
-        ip: AtomicU32::new(0),
-    }));
+    let interface_id = net::register_interface(
+        InterfaceConfig {
+            name: "e1000",
+            mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
+            ipv4: Some(Ipv4Config {
+                addr: Ipv4Addr([192, 168, 10, 2]),
+                prefix_len: 24,
+            }),
+            is_up: true,
+        },
+        Arc::new(E1000Interface),
+    );
+
+    state.interface_id = Some(interface_id);
 
     println!("e1000 init");
 }

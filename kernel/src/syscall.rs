@@ -149,6 +149,7 @@ impl From<NetError> for SysError {
             NetError::RouteNotFound => SysError::NoEntry,
             NetError::PacketTooLarge => SysError::InvalidArgument,
             NetError::ResourceUnavailable => SysError::ResourceUnavailable,
+            NetError::InterfaceNotFound => SysError::BadDescriptor,
         }
     }
 }
