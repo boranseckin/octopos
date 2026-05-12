@@ -1,32 +1,27 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::net::{self, Ipv4Addr, MacAddr, NetError, NetInterface};
+use crate::net::{
+    self, InterfaceConfig, InterfaceId, Ipv4Addr, Ipv4Config, MacAddr, NetDevice, NetError,
+};
+use crate::sync::OnceLock;
 
 /// A loopback network interface that allows the kernel to send packets to itself, bypassing the
 /// physical layer.
-struct LoopbackInterface;
+struct LoopbackInterface {
+    interface_id: OnceLock<InterfaceId>,
+}
 
-impl NetInterface for LoopbackInterface {
-    fn name(&self) -> &'static str {
-        "lo"
-    }
-
-    fn mac(&self) -> MacAddr {
-        MacAddr::UNSPECIFIED
-    }
-
-    fn ip(&self) -> Option<Ipv4Addr> {
-        Some(Ipv4Addr([127, 0, 0, 1]))
-    }
-
-    fn set_ip(&self, _ip: Ipv4Addr) {
-        // ignore attempts to set the IP address since it's fixed to
-    }
-
+impl NetDevice for LoopbackInterface {
     fn transmit(&self, packet: &[u8]) -> Result<(), NetError> {
         // directly enqueue the packet for reception
-        log!(net::enqueue_incoming(Box::from(packet)))
+        log!(net::enqueue_incoming(
+            *self
+                .interface_id
+                .get()
+                .expect("loopback interface ID not set"),
+            Box::from(packet)
+        ))
     }
 
     fn needs_arp(&self) -> bool {
@@ -41,5 +36,22 @@ impl NetInterface for LoopbackInterface {
 }
 
 pub fn init() {
-    net::register_interface(Arc::new(LoopbackInterface));
+    let device = Arc::new(LoopbackInterface {
+        interface_id: OnceLock::new(),
+    });
+
+    let interface_id = net::register_interface(
+        InterfaceConfig {
+            name: "lo",
+            mac: MacAddr::UNSPECIFIED,
+            ipv4: Some(Ipv4Config {
+                addr: Ipv4Addr([127, 0, 0, 1]),
+                prefix_len: 8,
+            }),
+            is_up: true,
+        },
+        device.clone(),
+    );
+
+    device.interface_id.initialize(|| Ok::<_, ()>(interface_id));
 }

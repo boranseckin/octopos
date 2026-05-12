@@ -280,12 +280,15 @@ fn transmit_udp(
     // we need to lookup the route here to figure out the src_ip for the pseudo-header checksum.
     // net::transmit() will also do this lookup, so it is a bit inefficient... why is udp like this
     let interface = try_log!(net::route_by_ip(dest_ip));
-    let Some(src_ip) = interface.ip() else {
+    let Some(src_ipv4) = interface.config.ipv4 else {
         err!(NetError::NotConfigured);
     };
 
-    let header =
-        UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(src_ip, dest_ip, payload);
+    let header = UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(
+        src_ipv4.addr,
+        dest_ip,
+        payload,
+    );
 
     log!(net::transmit(
         dest_ip,
