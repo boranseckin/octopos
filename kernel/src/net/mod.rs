@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use crate::net::arp::ArpCache;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
+use crate::net::route::{RouteEntry, RouteOwner};
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
@@ -18,6 +19,7 @@ pub(crate) mod eth;
 pub(crate) mod icmp;
 pub(crate) mod ipv4;
 pub(crate) mod loopback;
+pub(crate) mod route;
 pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
@@ -135,16 +137,21 @@ impl Ipv4Addr {
     pub const BROADCAST: Self = Self([255; 4]);
     pub const LOOPBACK: Self = Self([127, 0, 0, 1]);
 
-    /// Returns the subnet mask corresponding to the given prefix length.
-    pub fn prefix_len_to_mask(prefix_len: u8) -> Self {
+    /// Returns the subnet mask corresponding to the given prefix length, or `None` if the prefix
+    /// length is greater than 32.
+    pub fn prefix_len_to_mask(prefix_len: u8) -> Option<Self> {
         if prefix_len == 0 {
-            Self([0; 4])
+            Some(Self([0; 4]))
+        } else if prefix_len <= 32 {
+            let mask = u32::MAX << (32 - prefix_len as u32);
+            Some(Self(mask.to_be_bytes()))
         } else {
-            let mask = u32::MAX.checked_shl(32 - prefix_len as u32).unwrap_or(0);
-            Self(mask.to_be_bytes())
+            None
         }
     }
 
+    /// Returns the prefix length corresponding to the given subnet mask, or `None` if the mask is
+    /// not a valid subnet mask (i.e. not contiguous 1s followed by 0s).
     pub fn mask_to_prefix_len(mask: Self) -> Option<u8> {
         let mask = u32::from_be_bytes(mask.0);
 
@@ -260,37 +267,6 @@ pub struct InterfaceEntry {
     pub device: Arc<dyn NetDevice>,
 }
 
-/// Owner of a route entry, used for tracking which component added the route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RouteOwner {
-    /// Route added by an interface's address and prefix.
-    Interface,
-    /// Route added by the DHCP client when it receives an IP address lease.
-    Dhcp,
-    /// Route added by a static configuration.
-    Static,
-}
-
-/// Routing information for a destination subnet.
-#[derive(Debug, Clone)]
-pub struct RouteEntry {
-    /// Destination IPv4 address for this route.
-    pub dest: Ipv4Addr,
-    /// Number of leading bits in the subnet mask for this route.
-    pub prefix_len: u8,
-    /// Next hop IP address for this route. If `None`, the destination is directly reachable on the
-    /// link layer.
-    pub gateway: Option<Ipv4Addr>,
-    /// Interface to send packets matching this route on.
-    pub interface_id: InterfaceId,
-    /// Routing metric for this route, used to determine the best route when multiple routes match a
-    /// destination. Lower values indicate more preferred routes.
-    pub metric: u32,
-    /// Owner of this route, used for tracking which component added this route and allowing it to
-    /// remove the route later if needed.
-    pub owner: RouteOwner,
-}
-
 /// Registry of network interfaces and routing information.
 pub struct NetRegistry {
     pub interfaces: SpinLock<Vec<InterfaceEntry>>,
@@ -311,17 +287,14 @@ pub fn add_route(
     metric: u32,
     owner: RouteOwner,
 ) {
-    NET_REGISTRY.routes.lock().push(RouteEntry {
-        dest: dest_ip,
+    route::upsert_route(RouteEntry {
+        dest_ip,
         prefix_len,
         gateway,
         interface_id,
         metric,
         owner,
     });
-
-    let l = NET_REGISTRY.routes.lock();
-    println!("{:#?}", *l);
 }
 
 /// Registers a network interface with the network stack and returns its assigned `InterfaceId.
@@ -330,7 +303,7 @@ pub fn register_interface(config: InterfaceConfig, device: Arc<dyn NetDevice>) -
 
     if let Some(ipv4) = config.ipv4 {
         add_route(
-            ipv4.addr & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len),
+            ipv4.addr & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
             ipv4.prefix_len,
             None,
             id,
@@ -372,14 +345,7 @@ pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Config>) -> Result<(
     drop(ifs);
 
     if let Some(ipv4) = ipv4 {
-        add_route(
-            ipv4.addr & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len),
-            ipv4.prefix_len,
-            None,
-            id,
-            10, // default metric for interface routes
-            RouteOwner::Interface,
-        );
+        route::replace_interface_route(id, ipv4);
     }
 
     Ok(())
@@ -397,34 +363,9 @@ pub fn find_interface_by_id(id: InterfaceId) -> Option<InterfaceEntry> {
 /// Finds the appropriate network interface to use for sending a packet to the given destination IP
 /// address, based on the routing table.
 pub fn route_by_ip(dest_ip: Ipv4Addr) -> Result<InterfaceEntry, NetError> {
-    let interface_id = {
-        let routes = NET_REGISTRY.routes.lock();
+    let route = try_log!(route::best_route_for(dest_ip));
 
-        let dest = u32::from_be_bytes(dest_ip.0);
-
-        let Some(best_route) = routes
-            .iter()
-            .filter(|route| {
-                let mask = if route.prefix_len == 0 {
-                    0
-                } else {
-                    u32::MAX << (32 - route.prefix_len as u32)
-                };
-
-                let route_dest = u32::from_be_bytes(route.dest.0);
-
-                (dest & mask) == (route_dest & mask)
-            })
-            // prefer longer prefix length, then lower metric
-            .max_by_key(|route| (route.prefix_len, core::cmp::Reverse(route.metric)))
-        else {
-            err!(NetError::RouteNotFound)
-        };
-
-        best_route.interface_id
-    }; // drop routes lock before find
-
-    Ok(find_interface_by_id(interface_id).expect("interface in route entry should exist"))
+    Ok(find_interface_by_id(route.interface_id).expect("interface in route entry should exist"))
 }
 
 /// Entry in the outgoing packet queue, containing the destination IP address, the interface to send
