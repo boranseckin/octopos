@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicU16, Ordering};
 
 use alloc::format;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -29,6 +30,12 @@ impl InterfaceId {
     pub fn next_interface_id() -> Self {
         static ID_COUNTER: AtomicU16 = AtomicU16::new(0);
         Self(ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl core::fmt::Display for InterfaceId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "if{}", self.0)
     }
 }
 
@@ -127,4 +134,25 @@ pub fn resolve_inteface_by_ip(dest_ip: Ipv4Addr) -> Result<InterfaceEntry, NetEr
     let route = try_log!(route::best_route_for(dest_ip));
 
     Ok(find_interface_by_id(route.interface_id).expect("interface in route entry should exist"))
+}
+
+/// Prints the interface registry for debugging purposes.
+pub fn dump() {
+    let ifs = INTERFACES.lock();
+
+    println!("");
+    for interface in ifs.iter() {
+        println!(
+            "{}: {} \t {} {} {}",
+            interface.id,
+            interface.config.name,
+            interface.config.mac,
+            interface
+                .config
+                .ipv4
+                .map(|ip| format!("{}/{}", ip.addr, ip.prefix_len))
+                .unwrap_or_else(|| "unconfigured".to_string()),
+            if interface.config.is_up { "up" } else { "down" }
+        );
+    }
 }

@@ -1,6 +1,7 @@
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use crate::net::interface::InterfaceId;
+use crate::net::interface::{self, InterfaceId};
 use crate::net::{Ipv4Addr, Ipv4Config, NetError};
 use crate::spinlock::SpinLock;
 
@@ -110,5 +111,29 @@ pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry, NetError> {
         Ok(*route)
     } else {
         err!(NetError::RouteNotFound)
+    }
+}
+
+/// Prints the current routing table for debugging purposes.
+pub fn dump() {
+    let routes = ROUTES.lock();
+
+    println!("");
+    for route in routes.iter() {
+        println!(
+            "{}/{} via {} dev {} metric {} owner {:?}",
+            route.dest_ip,
+            route.prefix_len,
+            route
+                .gateway
+                .map(|gw| gw.to_string())
+                .unwrap_or_else(|| "direct".to_string()),
+            interface::find_interface_by_id(route.interface_id)
+                .unwrap()
+                .config
+                .name,
+            route.metric,
+            route.owner
+        );
     }
 }
