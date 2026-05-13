@@ -13,7 +13,7 @@ pub enum RouteOwner {
     /// Route added by the DHCP client when it receives an IP address lease.
     Dhcp,
     /// Route added by a static configuration.
-    Static,
+    _Static,
 }
 
 /// Routing information for a destination subnet.

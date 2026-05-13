@@ -89,7 +89,7 @@ impl Display for SysError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             SysError::NotPermitted => write!(f, "operation not permitted"),
-            SysError::NoEntry => write!(f, "no such file or directory"),
+            SysError::NoEntry => write!(f, "no such entry"),
             SysError::NoProcess => write!(f, "no such process"),
             SysError::Interrupted => write!(f, "interrupted"),
             SysError::IoError => write!(f, "input/output error"),
@@ -149,7 +149,7 @@ impl From<NetError> for SysError {
             NetError::RouteNotFound => SysError::NoEntry,
             NetError::PacketTooLarge => SysError::InvalidArgument,
             NetError::ResourceUnavailable => SysError::ResourceUnavailable,
-            NetError::InterfaceNotFound => SysError::BadDescriptor,
+            NetError::InterfaceNotFound => SysError::NoEntry,
         }
     }
 }

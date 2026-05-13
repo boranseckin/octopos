@@ -5,8 +5,9 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::net::route::RouteOwner;
-use crate::net::{self, Ipv4Addr, Ipv4Config, MacAddr, NetError, dhcp, route};
+use crate::net::dhcp;
+use crate::net::route::{self, RouteEntry, RouteOwner};
+use crate::net::{Ipv4Addr, Ipv4Config, MacAddr, NetError};
 use crate::proc;
 use crate::spinlock::SpinLock;
 
@@ -71,14 +72,15 @@ pub fn register_interface(config: InterfaceConfig, device: Arc<dyn NetDevice>) -
     let id = InterfaceId::next_interface_id();
 
     if let Some(ipv4) = config.ipv4 {
-        net::add_route(
-            ipv4.addr & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
-            ipv4.prefix_len,
-            None,
-            id,
-            10, // default metric for interface routes
-            RouteOwner::Interface,
-        );
+        route::upsert_route(RouteEntry {
+            dest_ip: ipv4.addr
+                & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
+            prefix_len: ipv4.prefix_len,
+            gateway: None,
+            interface_id: id,
+            metric: 10,
+            owner: RouteOwner::Interface,
+        });
     };
 
     let needs_dhcp = device.needs_dhcp();
@@ -128,14 +130,6 @@ pub fn find_interface_by_id(id: InterfaceId) -> Option<InterfaceEntry> {
     ifs.iter().find(|i| i.id == id).cloned()
 }
 
-/// Finds the appropriate network interface to use for sending a packet to the given destination IP
-/// address, based on the routing table and the interface registry.
-pub fn resolve_inteface_by_ip(dest_ip: Ipv4Addr) -> Result<InterfaceEntry, NetError> {
-    let route = try_log!(route::best_route_for(dest_ip));
-
-    Ok(find_interface_by_id(route.interface_id).expect("interface in route entry should exist"))
-}
-
 /// Prints the interface registry for debugging purposes.
 pub fn dump() {
     let ifs = INTERFACES.lock();
@@ -143,7 +137,7 @@ pub fn dump() {
     println!("");
     for interface in ifs.iter() {
         println!(
-            "{}: {} \t {} {} {}",
+            "{}: {} {} {} {}",
             interface.id,
             interface.config.name,
             interface.config.mac,

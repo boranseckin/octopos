@@ -284,7 +284,7 @@ impl File {
 
             FileType::Socket { socket_id } => {
                 if cmd == Ioctl::SOCKET_GET_PORT {
-                    Ok(SocketTable::get_port(*socket_id) as usize)
+                    Ok(SocketTable::get_port_number(*socket_id) as usize)
                 } else {
                     err!(SysError::NotImplemented)
                 }
