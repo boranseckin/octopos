@@ -218,7 +218,7 @@ fn reply(
     EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
     ArpPacket::new_reply(req_arp, mac, ipv4.addr).append_to(&mut packet, &mut offset);
 
-    log!(net::transmit_raw(req_arp.spa, &packet))
+    log!(interface.device.transmit(&packet))
 }
 
 /// Sends an ARP Request for the given destination IP address.
@@ -243,5 +243,5 @@ pub fn request(interface_id: InterfaceId, dest_ip: Ipv4Addr) -> Result<(), NetEr
         .append_to(&mut packet, &mut offset);
     ArpPacket::new_request(dest_ip, mac, ipv4.addr).append_to(&mut packet, &mut offset);
 
-    log!(net::transmit_raw(dest_ip, &packet))
+    log!(interface.device.transmit(&packet))
 }

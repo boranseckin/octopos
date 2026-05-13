@@ -65,8 +65,6 @@ pub fn upsert_route(route: RouteEntry) {
     } else {
         routes.push(route);
     }
-
-    println!("{:#?}", *routes)
 }
 
 /// Removes all routes owned by the specified interface and adds a new route for the interface's IP
@@ -79,15 +77,14 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
 
     // Add a new route for the interface's IP address and prefix.
     routes.push(RouteEntry {
-        dest_ip: ipv4.addr,
+        dest_ip: ipv4.addr
+            & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
         prefix_len: ipv4.prefix_len,
         gateway: None,
         interface_id,
         metric: 10,
         owner: RouteOwner::Interface,
     });
-
-    println!("{:#?}", *routes)
 }
 
 /// Finds the best matching route for a given destination IP address, based on the longest prefix
