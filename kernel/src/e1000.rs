@@ -5,8 +5,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::net::InterfaceId;
-use crate::net::{self, InterfaceConfig, Ipv4Addr, Ipv4Config, MacAddr, NetDevice, NetError};
+use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
+use crate::net::{self, Ipv4Addr, Ipv4Config, MacAddr, NetError};
 use crate::spinlock::SpinLock;
 
 const TX_RING_SIZE: usize = 16;
@@ -362,7 +362,7 @@ pub unsafe fn init() {
     state.set_mask(E1000_MMIO_TIPG, (10) | (8 << 10) | (6 << 20));
 
     // register the network interface with the network stack
-    let interface_id = net::register_interface(
+    let interface_id = interface::register_interface(
         InterfaceConfig {
             name: "e1000",
             mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),

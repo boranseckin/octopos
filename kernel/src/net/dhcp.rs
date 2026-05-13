@@ -1,8 +1,9 @@
 use crate::net::eth::{EtherType, EthernetHeader};
+use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::route::RouteOwner;
 use crate::net::udp::{SocketTable, UdpHeader};
-use crate::net::{self, Be, InterfaceId, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
+use crate::net::{self, Be, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
 use crate::rng;
 
 /// Vendor Information "Magic Cookie"
@@ -196,7 +197,7 @@ fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<()
         + 256 /* extra space for options */];
     let mut offset = 0;
 
-    let Some(interface) = net::find_interface_by_id(id) else {
+    let Some(interface) = interface::find_interface_by_id(id) else {
         err!(NetError::InterfaceNotFound)
     };
 
@@ -377,7 +378,7 @@ pub fn dhcp_thread(id: InterfaceId) {
                     ..
                 } = state
                 {
-                    let _ = log!(net::set_interface_ipv4(
+                    let _ = log!(interface::set_interface_ipv4(
                         id,
                         Some(Ipv4Config {
                             addr: offered_ip,

@@ -1,4 +1,8 @@
-use crate::net::{InterfaceId, Ipv4Addr, Ipv4Config, NET_REGISTRY, NetError};
+use alloc::vec::Vec;
+
+use crate::net::interface::InterfaceId;
+use crate::net::{Ipv4Addr, Ipv4Config, NetError};
+use crate::spinlock::SpinLock;
 
 /// Owner of a route entry, used for tracking which component added the route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +35,8 @@ pub struct RouteEntry {
     pub owner: RouteOwner,
 }
 
+static ROUTES: SpinLock<Vec<RouteEntry>> = SpinLock::new(Vec::new(), "net_routes");
+
 impl PartialEq for RouteEntry {
     fn eq(&self, other: &Self) -> bool {
         self.dest_ip == other.dest_ip
@@ -58,7 +64,7 @@ pub fn route_sort_key(route: &RouteEntry) -> (u8, core::cmp::Reverse<u32>) {
 /// If a route with the same destination and prefix already exists, it will be updated with the new
 /// information. Otherwise, a new route entry will be added to the routing table.
 pub fn upsert_route(route: RouteEntry) {
-    let mut routes = NET_REGISTRY.routes.lock();
+    let mut routes = ROUTES.lock();
 
     if let Some(existing_route) = routes.iter_mut().find(|r| route.eq(*r)) {
         *existing_route = route;
@@ -70,7 +76,7 @@ pub fn upsert_route(route: RouteEntry) {
 /// Removes all routes owned by the specified interface and adds a new route for the interface's IP
 /// address and prefix.
 pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
-    let mut routes = NET_REGISTRY.routes.lock();
+    let mut routes = ROUTES.lock();
 
     // Remove any existing Interface owned route.
     routes.retain(|r| !(r.interface_id == interface_id && r.owner == RouteOwner::Interface));
@@ -92,7 +98,7 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
 ///
 /// Returns `None` if no matching route is found.
 pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry, NetError> {
-    let routes = NET_REGISTRY.routes.lock();
+    let routes = ROUTES.lock();
 
     // Find all routes that match the destination,
     // then sort them by longest prefix and lowest metric.

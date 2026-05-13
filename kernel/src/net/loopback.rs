@@ -1,9 +1,8 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::net::{
-    self, InterfaceConfig, InterfaceId, Ipv4Addr, Ipv4Config, MacAddr, NetDevice, NetError,
-};
+use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
+use crate::net::{self, Ipv4Addr, Ipv4Config, MacAddr, NetError};
 use crate::sync::OnceLock;
 
 /// A loopback network interface that allows the kernel to send packets to itself, bypassing the
@@ -40,7 +39,7 @@ pub fn init() {
         interface_id: OnceLock::new(),
     });
 
-    let interface_id = net::register_interface(
+    let interface_id = interface::register_interface(
         InterfaceConfig {
             name: "lo",
             mac: MacAddr::UNSPECIFIED,
