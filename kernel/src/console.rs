@@ -189,6 +189,7 @@ impl Console {
             c if c == ctrl(b'R') => {
                 crate::net::interface::dump();
                 crate::net::route::dump();
+                crate::net::udp::dump();
             }
 
             // kill the line

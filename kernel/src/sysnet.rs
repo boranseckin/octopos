@@ -30,7 +30,8 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
         err!(SysError::InvalidArgument)
     };
 
-    let socket_id = try_log!(SocketTable::open(port).map_err(SysError::from));
+    let socket_id =
+        try_log!(SocketTable::open(Ipv4Addr::UNSPECIFIED, port, None).map_err(SysError::from));
 
     // allocate a file structure and a file descriptor
     let (fd, file) = match log!(File::alloc()) {

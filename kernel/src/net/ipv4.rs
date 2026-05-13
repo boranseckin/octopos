@@ -1,4 +1,5 @@
 use crate::net::icmp;
+use crate::net::interface::InterfaceId;
 use crate::net::udp;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 
@@ -89,7 +90,7 @@ unsafe impl NetworkHeader for Ipv4Header {}
 
 /// Handles an incoming IPv4 packet by parsing the header and dispatching to the appropriate
 /// protocol handler.
-pub fn handle_ipv4(packet: &[u8]) -> Result<(), NetError> {
+pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<(), NetError> {
     let Some((req_ipv4, req_data)) = Ipv4Header::from_bytes_with_rest(packet) else {
         err!(NetError::MalformedPacket)
     };
@@ -105,7 +106,12 @@ pub fn handle_ipv4(packet: &[u8]) -> Result<(), NetError> {
 
     match req_ipv4.proto() {
         Ipv4Proto::Icmp => log!(icmp::handle_icmp(req_ipv4.src, req_data)),
-        Ipv4Proto::Udp => log!(udp::handle_udp(req_ipv4.src, req_data)),
+        Ipv4Proto::Udp => log!(udp::handle_udp(
+            interface_id,
+            req_ipv4.dest,
+            req_ipv4.src,
+            req_data
+        )),
         Ipv4Proto::Unknown => Ok(()),
     }
 }

@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 
 use crate::net::arp::ArpCache;
 use crate::net::eth::{EtherType, EthernetHeader};
-use crate::net::interface::{InterfaceId, NetDevice};
+use crate::net::interface::{InterfaceEntry, InterfaceId, NetDevice};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
-use crate::net::route::{RouteEntry, RouteOwner};
+use crate::net::route::RouteEntry;
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
@@ -217,6 +217,12 @@ pub struct Ipv4Config {
     pub addr: Ipv4Addr,
     /// Number of leading bits in the subnet mask.
     pub prefix_len: u8,
+}
+
+impl core::fmt::Display for Ipv4Config {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.prefix_len)
+    }
 }
 
 /// Entry in the outgoing packet queue, containing the destination IP address, the interface to send
@@ -435,36 +441,34 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     !(sum as u16)
 }
 
-/// Adds a route to the routing table.
-pub fn add_route(
-    dest_ip: Ipv4Addr,
-    prefix_len: u8,
-    gateway: Option<Ipv4Addr>,
-    interface_id: InterfaceId,
-    metric: u32,
-    owner: RouteOwner,
-) {
-    route::upsert_route(RouteEntry {
-        dest_ip: dest_ip & Ipv4Addr::prefix_len_to_mask(prefix_len).expect("valid prefix length"),
-        prefix_len,
-        gateway,
-        interface_id,
-        metric,
-        owner,
-    });
-}
-
-/// Transmits a packet by passing it to a corresponding interface according to the routing table.
+/// Transmits a packet after looking up the best route for the destination IP address, and passing
+/// it to the corresponding interface.
 /// Packets are passed as a list of segments that will be concatenated together.
 ///
 /// Currently only support IPv4 packets.
-fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
+pub fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
     let route = try_log!(route::best_route_for(dest_ip));
 
     let Some(interface) = interface::find_interface_by_id(route.interface_id) else {
         err!(NetError::InterfaceNotFound);
     };
 
+    log!(transmit_with_route(
+        route, interface, dest_ip, proto, segments
+    ))
+}
+
+/// Transmits a packet on the given interface with the specified route.
+/// Packets are passed as a list of segments that will be concatenated together.
+///
+/// Currently only support IPv4 packets.
+pub fn transmit_with_route(
+    route: RouteEntry,
+    interface: InterfaceEntry,
+    dest_ip: Ipv4Addr,
+    proto: Ipv4Proto,
+    segments: &[&[u8]],
+) -> Result<(), NetError> {
     let src_mac = interface.config.mac;
     let Some(src_ipv4) = interface.config.ipv4 else {
         err!(NetError::NotConfigured);
@@ -514,7 +518,7 @@ fn receive(id: InterfaceId, packet: Box<[u8]>) -> Result<(), NetError> {
 
     match eth.ether_type() {
         EtherType::Arp => log!(arp::handle_arp(id, eth, data)),
-        EtherType::Ipv4 => log!(ipv4::handle_ipv4(data)),
+        EtherType::Ipv4 => log!(ipv4::handle_ipv4(id, data)),
         EtherType::Unknown => Ok(()),
     }
 }

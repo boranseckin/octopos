@@ -1,9 +1,9 @@
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
-use crate::net::route::RouteOwner;
+use crate::net::route::{self, RouteEntry, RouteOwner};
 use crate::net::udp::{SocketTable, UdpHeader};
-use crate::net::{self, Be, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
+use crate::net::{Be, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
 use crate::rng;
 
 /// Vendor Information "Magic Cookie"
@@ -297,11 +297,12 @@ enum DhcpState {
 /// Thread for handling DHCP negotiation for the given interface.
 ///
 // TODO: implement retries and backoff for failed attempts
-pub fn dhcp_thread(id: InterfaceId) {
-    // TODO: multiple opens on 68 will fail
-    let socket = SocketTable::open(68).expect("failed to open DHCP client port");
+pub fn dhcp_thread(interface_id: InterfaceId) {
+    let socket = SocketTable::open(Ipv4Addr::UNSPECIFIED, 68, Some(interface_id))
+        .expect("failed to open DHCP client port");
 
-    let Ok(xid) = log!(discover(id)) else {
+    let Ok(xid) = log!(discover(interface_id)) else {
+        SocketTable::close(socket);
         return;
     };
 
@@ -347,15 +348,15 @@ pub fn dhcp_thread(id: InterfaceId) {
                 if let Some(server) = server_id {
                     let Some(prefix_len) = subnet_mask.and_then(Ipv4Addr::mask_to_prefix_len)
                     else {
-                        return;
+                        continue;
                     };
 
                     let Some(router) = router else {
-                        return;
+                        continue;
                     };
 
-                    if log!(request(id, xid, server, header.yiaddr)).is_err() {
-                        return;
+                    if log!(request(interface_id, xid, server, header.yiaddr)).is_err() {
+                        continue;
                     }
 
                     state = DhcpState::WaitingForAck {
@@ -379,7 +380,7 @@ pub fn dhcp_thread(id: InterfaceId) {
                 } = state
                 {
                     let _ = log!(interface::set_interface_ipv4(
-                        id,
+                        interface_id,
                         Some(Ipv4Config {
                             addr: offered_ip,
                             prefix_len,
@@ -387,22 +388,24 @@ pub fn dhcp_thread(id: InterfaceId) {
                     ));
 
                     // add gateway
-                    net::add_route(
-                        Ipv4Addr::UNSPECIFIED,
-                        0,
-                        Some(router),
-                        id,
-                        100, // default metric for DHCP routes, higher than other routes
-                        RouteOwner::Dhcp,
-                    );
+                    route::upsert_route(RouteEntry {
+                        dest_ip: Ipv4Addr::UNSPECIFIED,
+                        prefix_len: 0,
+                        gateway: Some(router),
+                        interface_id,
+                        metric: 100, // default metric for DHCP routes, higher than other routes
+                        owner: RouteOwner::Dhcp,
+                    });
 
-                    // we now have an IP, exit this thread.
+                    // we now have an IP, break the loop to exit
                     // TODO: keep listening for possible updates in the future.
-                    return;
+                    break;
                 }
             }
 
             _ => {}
         }
     }
+
+    SocketTable::close(socket);
 }
