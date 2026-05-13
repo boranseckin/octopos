@@ -1,7 +1,6 @@
-use crate::net::{
-    self, Be, EtherType, EthernetHeader, InterfaceId, Ipv4Addr, MacAddr, NetError, NetworkHeader,
-    OutgoingQueue,
-};
+use crate::net::eth::{EtherType, EthernetHeader};
+use crate::net::interface::{self, InterfaceId};
+use crate::net::{Be, Ipv4Addr, MacAddr, NetError, NetworkHeader, OutgoingQueue};
 use crate::spinlock::SpinLock;
 
 const ARP_CACHE_SIZE: usize = 64;
@@ -174,7 +173,7 @@ pub fn handle_arp(
     }
 
     // verify tpa matches our IP address to avoid replying to ARP requests for other hosts
-    if let Some(interface) = net::find_interface_by_id(interface_id) {
+    if let Some(interface) = interface::find_interface_by_id(interface_id) {
         if interface.config.ipv4.map(|ipv4| ipv4.addr) != Some(req_arp.tpa) {
             return Ok(());
         }
@@ -206,7 +205,7 @@ fn reply(
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let Some(interface) = net::find_interface_by_id(interface_id) else {
+    let Some(interface) = interface::find_interface_by_id(interface_id) else {
         err!(NetError::NotConfigured);
     };
 
@@ -230,7 +229,7 @@ pub fn request(interface_id: InterfaceId, dest_ip: Ipv4Addr) -> Result<(), NetEr
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
-    let Some(interface) = net::find_interface_by_id(interface_id) else {
+    let Some(interface) = interface::find_interface_by_id(interface_id) else {
         err!(NetError::NotConfigured);
     };
 
