@@ -186,6 +186,11 @@ impl Console {
                 unsafe { PROC_TABLE.dump() };
             }
 
+            c if c == ctrl(b'R') => {
+                crate::net::interface::dump();
+                crate::net::route::dump();
+            }
+
             // kill the line
             c if c == ctrl(b'U') => {
                 while console.e != console.w
