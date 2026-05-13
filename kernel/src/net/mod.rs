@@ -288,7 +288,7 @@ pub fn add_route(
     owner: RouteOwner,
 ) {
     route::upsert_route(RouteEntry {
-        dest_ip,
+        dest_ip: dest_ip & Ipv4Addr::prefix_len_to_mask(prefix_len).expect("valid prefix length"),
         prefix_len,
         gateway,
         interface_id,
@@ -362,7 +362,7 @@ pub fn find_interface_by_id(id: InterfaceId) -> Option<InterfaceEntry> {
 
 /// Finds the appropriate network interface to use for sending a packet to the given destination IP
 /// address, based on the routing table.
-pub fn route_by_ip(dest_ip: Ipv4Addr) -> Result<InterfaceEntry, NetError> {
+pub fn route_inteface_by_ip(dest_ip: Ipv4Addr) -> Result<InterfaceEntry, NetError> {
     let route = try_log!(route::best_route_for(dest_ip));
 
     Ok(find_interface_by_id(route.interface_id).expect("interface in route entry should exist"))
@@ -584,28 +584,16 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     !(sum as u16)
 }
 
-/// Transmits a ethernet-layer packet by passing it to a corresponding interface according to the
-/// routing table, without performing any additional processing.
-///
-/// This is used for transmitting ARP packets, which do not require IP-layer processing and may not
-/// have a valid destination MAC address at the time of transmission, since they are used for
-/// address resolution.
-fn transmit_raw(dest_ip: Ipv4Addr, packet: &[u8]) -> Result<(), NetError> {
-    let interface = try_log!(route_by_ip(dest_ip));
-
-    if log!(interface.device.transmit(packet)).is_err() {
-        err!(NetError::TransmitFailed)
-    }
-
-    Ok(())
-}
-
 /// Transmits a packet by passing it to a corresponding interface according to the routing table.
 /// Packets are passed as a list of segments that will be concatenated together.
 ///
 /// Currently only support IPv4 packets.
 fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
-    let interface = try_log!(route_by_ip(dest_ip));
+    let route = try_log!(route::best_route_for(dest_ip));
+
+    let Some(interface) = find_interface_by_id(route.interface_id) else {
+        err!(NetError::InterfaceNotFound);
+    };
 
     let src_mac = interface.config.mac;
     let Some(src_ipv4) = interface.config.ipv4 else {
@@ -636,14 +624,14 @@ fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(
         packet[..6].copy_from_slice(&dest_mac.0);
         log!(interface.device.transmit(&packet))
     } else {
+        // if gateway is specified, ARP for the gateway IP instead of the destination IP, since
+        // that's the next hop we need to send the packet to.
+        let arp_target = route.gateway.unwrap_or(dest_ip);
+
         // packet requires MAC address and we don't have it, queue the packet and send an ARP
         // request. once the reply is received, the packet will be sent.
-        try_log!(OutgoingQueue::enqueue(
-            dest_ip,
-            interface.device.clone(),
-            packet
-        ));
-        log!(arp::request(interface.id, dest_ip))
+        try_log!(OutgoingQueue::enqueue(arp_target, interface.device, packet));
+        log!(arp::request(interface.id, arp_target))
     }
 }
 

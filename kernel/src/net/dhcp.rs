@@ -1,5 +1,6 @@
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
+use crate::net::route::RouteOwner;
 use crate::net::udp::{SocketTable, UdpHeader};
 use crate::net::{self, Be, InterfaceId, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
 use crate::rng;
@@ -73,6 +74,7 @@ unsafe impl NetworkHeader for BootpHeader {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DhcpOptionType {
     SubnetMask = 1,
+    Router = 3,
     RequestedIpAddress = 50,
     MessageType = 53,
     ServerIdentifier = 54,
@@ -83,6 +85,7 @@ impl From<u8> for DhcpOptionType {
     fn from(value: u8) -> Self {
         match value {
             1 => Self::SubnetMask,
+            3 => Self::Router,
             50 => Self::RequestedIpAddress,
             53 => Self::MessageType,
             54 => Self::ServerIdentifier,
@@ -285,6 +288,7 @@ enum DhcpState {
         xid: u32,
         offered_ip: Ipv4Addr,
         prefix_len: u8,
+        router: Ipv4Addr,
         server_ip: Ipv4Addr,
     },
 }
@@ -319,6 +323,7 @@ pub fn dhcp_thread(id: InterfaceId) {
         let mut message_type: Option<u8> = None;
         let mut server_id: Option<Ipv4Addr> = None;
         let mut subnet_mask: Option<Ipv4Addr> = None;
+        let mut router: Option<Ipv4Addr> = None;
 
         // DhcpOptionIter is responsible from verifying the data length
         for option in DhcpOptionIter(&options[4..]) {
@@ -330,6 +335,7 @@ pub fn dhcp_thread(id: InterfaceId) {
                 DhcpOptionType::SubnetMask => {
                     subnet_mask = Some(Ipv4Addr(option.data.try_into().unwrap()))
                 }
+                DhcpOptionType::Router => router = Some(Ipv4Addr(option.data.try_into().unwrap())),
                 _ => {}
             }
         }
@@ -343,6 +349,10 @@ pub fn dhcp_thread(id: InterfaceId) {
                         return;
                     };
 
+                    let Some(router) = router else {
+                        return;
+                    };
+
                     if log!(request(id, xid, server, header.yiaddr)).is_err() {
                         return;
                     }
@@ -351,6 +361,7 @@ pub fn dhcp_thread(id: InterfaceId) {
                         xid,
                         offered_ip: header.yiaddr,
                         prefix_len,
+                        router,
                         server_ip: server,
                     }
                 }
@@ -358,10 +369,11 @@ pub fn dhcp_thread(id: InterfaceId) {
 
             // DHCP Ack
             Some(5) => {
-                // TODO: ignoring all other fields for now like gateway, DNS, lease time, etc.
+                // TODO: ignoring all other fields for now like DNS, lease time, etc.
                 if let DhcpState::WaitingForAck {
                     offered_ip,
                     prefix_len,
+                    router,
                     ..
                 } = state
                 {
@@ -372,6 +384,16 @@ pub fn dhcp_thread(id: InterfaceId) {
                             prefix_len,
                         }),
                     ));
+
+                    // add gateway
+                    net::add_route(
+                        Ipv4Addr::UNSPECIFIED,
+                        0,
+                        Some(router),
+                        id,
+                        100, // default metric for DHCP routes, higher than other routes
+                        RouteOwner::Dhcp,
+                    );
 
                     // we now have an IP, exit this thread.
                     // TODO: keep listening for possible updates in the future.
