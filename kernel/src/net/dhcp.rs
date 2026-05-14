@@ -141,21 +141,20 @@ impl TryFrom<u8> for DhcpMessageType {
 }
 
 /// DHCP options as defined in RFC 2132, with some common options implemented.
-// TODO: make it borrowed
 #[derive(Debug, Clone)]
-enum DhcpOption {
+enum DhcpOption<'a> {
     MessageType(DhcpMessageType),
     ServerIdentifier(Ipv4Addr),
     AddressRequest(Ipv4Addr),
     SubnetMask(Ipv4Addr),
-    Router(Vec<Ipv4Addr>),
+    Router(&'a [u8]),
     LeaseTime(u32),
-    DnsServers(Vec<Ipv4Addr>),
+    DnsServers(&'a [u8]),
 
-    Unknown { code: u8, data: Vec<u8> },
+    Unknown { code: u8, data: &'a [u8] },
 }
 
-impl DhcpOption {
+impl<'a> DhcpOption<'a> {
     /// Returns the DHCP option code for this option.
     fn to_code(&self) -> u8 {
         match self {
@@ -207,11 +206,9 @@ impl DhcpOption {
                 *offset += 4;
             }
 
-            DhcpOption::Router(routers) | DhcpOption::DnsServers(routers) => {
-                for ip in routers {
-                    buf[*offset..*offset + 4].copy_from_slice(&ip.0);
-                    *offset += 4;
-                }
+            DhcpOption::Router(slice) | DhcpOption::DnsServers(slice) => {
+                buf[*offset..*offset + slice.len()].copy_from_slice(slice);
+                *offset += slice.len();
             }
 
             DhcpOption::LeaseTime(lease) => {
@@ -230,7 +227,7 @@ impl DhcpOption {
     ///
     /// Returns `Ok(DhcpOption::Unknown)` for unsupported option codes, and returns an `Err` if the
     /// data is malformed for the expected option type.
-    fn decode(code: u8, data: &[u8]) -> Result<Self, DhcpError> {
+    fn decode(code: u8, data: &'a [u8]) -> Result<Self, DhcpError> {
         match code {
             1 => Ok(Self::SubnetMask(try_log!(
                 Ipv4Addr::try_from(data).map_err(|_| DhcpError::MalformedPacket)
@@ -241,29 +238,15 @@ impl DhcpOption {
                     err!(DhcpError::MalformedPacket);
                 }
 
-                let routers = try_log!(
-                    data.chunks_exact(4)
-                        .map(|chunk| Ipv4Addr::try_from(chunk)
-                            .map_err(|_| DhcpError::MalformedPacket))
-                        .collect::<Result<_, _>>()
-                );
-
-                Ok(Self::Router(routers))
+                Ok(Self::Router(data))
             }
 
-            5 => {
+            6 => {
                 if !data.len().is_multiple_of(4) {
                     err!(DhcpError::MalformedPacket);
                 }
 
-                let dns_servers = try_log!(
-                    data.chunks_exact(4)
-                        .map(|chunk| Ipv4Addr::try_from(chunk)
-                            .map_err(|_| DhcpError::MalformedPacket))
-                        .collect::<Result<_, _>>()
-                );
-
-                Ok(Self::DnsServers(dns_servers))
+                Ok(Self::DnsServers(data))
             }
 
             51 => {
@@ -290,10 +273,7 @@ impl DhcpOption {
                 Ipv4Addr::try_from(data).map_err(|_| DhcpError::MalformedPacket)
             ))),
 
-            _ => Ok(Self::Unknown {
-                code,
-                data: data.to_vec(),
-            }),
+            _ => Ok(Self::Unknown { code, data }),
         }
     }
 }
@@ -304,7 +284,7 @@ impl DhcpOption {
 struct DhcpOptionIter<'a>(&'a [u8]);
 
 impl<'a> Iterator for DhcpOptionIter<'a> {
-    type Item = Result<DhcpOption, DhcpError>;
+    type Item = Result<DhcpOption<'a>, DhcpError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.0.is_empty() {
@@ -351,12 +331,12 @@ impl<'a> Iterator for DhcpOptionIter<'a> {
 
 /// Parsed DHCP packet with the BOOTP header and a list of options.
 #[derive(Debug, Clone)]
-struct DhcpPacket {
+struct DhcpPacket<'a> {
     header: BootpHeader,
-    options: Vec<DhcpOption>,
+    options: Vec<DhcpOption<'a>>,
 }
 
-impl DhcpPacket {
+impl<'a> DhcpPacket<'a> {
     /// Returns the DHCP message type from the options, if present.
     fn message_type(&self) -> Option<DhcpMessageType> {
         self.options.iter().find_map(|op| match op {
@@ -385,7 +365,8 @@ impl DhcpPacket {
     /// If multiple routers are present, returns the first one.
     fn router(&self) -> Option<Ipv4Addr> {
         self.options.iter().find_map(|op| match op {
-            DhcpOption::Router(routers) => routers.first().copied(),
+            // length of data is already verified at parsing
+            DhcpOption::Router(routers) => Ipv4Addr::try_from(&routers[..4]).ok(),
             _ => None,
         })
     }
@@ -399,7 +380,7 @@ impl DhcpPacket {
     }
 
     /// Parses a raw DHCP packet from the given byte slice, extracting the BOOTP header and options.
-    fn parse(packet: &[u8]) -> Result<DhcpPacket, DhcpError> {
+    fn parse(packet: &'a [u8]) -> Result<DhcpPacket<'a>, DhcpError> {
         let Some((header, options_data)) = BootpHeader::from_bytes_with_rest(packet) else {
             err!(DhcpError::MalformedPacket);
         };
@@ -446,7 +427,7 @@ struct DhcpOffer {
     _lease_time: Option<u32>,
 }
 
-impl TryFrom<DhcpPacket> for DhcpOffer {
+impl TryFrom<DhcpPacket<'_>> for DhcpOffer {
     type Error = DhcpError;
 
     fn try_from(value: DhcpPacket) -> Result<Self, Self::Error> {
@@ -487,7 +468,7 @@ struct DhcpAck {
     router: Option<Ipv4Addr>,
 }
 
-impl TryFrom<DhcpPacket> for DhcpAck {
+impl TryFrom<DhcpPacket<'_>> for DhcpAck {
     type Error = DhcpError;
 
     fn try_from(value: DhcpPacket) -> Result<Self, Self::Error> {
@@ -631,9 +612,7 @@ fn transmit_dhcp(
         err!(NetError::InterfaceNotFound)
     };
 
-    let mac = interface.config.mac;
-
-    EthernetHeader::new(MacAddr::BROADCAST, mac, EtherType::Ipv4)
+    EthernetHeader::new(MacAddr::BROADCAST, interface.config.mac, EtherType::Ipv4)
         .append_to(&mut packet, &mut offset);
 
     Ipv4Header::new(
@@ -651,7 +630,7 @@ fn transmit_dhcp(
 
     let mut header = BootpHeader::new_request();
     // copy our MAC address into the header
-    header.chaddr[..6].copy_from_slice(&mac.0);
+    header.chaddr[..6].copy_from_slice(&interface.config.mac.0);
     // set the broadcast flag since we don't have an IP address yet
     header.flags = Be::new(0x8000u16);
     // set the transaction ID
@@ -662,13 +641,14 @@ fn transmit_dhcp(
     packet[offset..offset + MAGIC_COOKIE.len()].copy_from_slice(&MAGIC_COOKIE);
     offset += MAGIC_COOKIE.len();
 
-    for option in options {
-        option.append_to(&mut packet, &mut offset);
-    }
+    options
+        .iter()
+        .for_each(|op| op.append_to(&mut packet, &mut offset));
 
     packet[offset] = 0xFF; // End Option
     offset += 1;
 
+    // use device directly since we created the whole packet from scratch
     log!(interface.device.transmit(&packet[..offset]))
 }
 
