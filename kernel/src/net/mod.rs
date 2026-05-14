@@ -204,6 +204,26 @@ impl core::str::FromStr for Ipv4Addr {
     }
 }
 
+impl From<[u8; 4]> for Ipv4Addr {
+    fn from(octets: [u8; 4]) -> Self {
+        Self(octets)
+    }
+}
+
+impl TryFrom<&[u8]> for Ipv4Addr {
+    type Error = NetError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() != 4 {
+            err!(NetError::InvalidAddress);
+        }
+
+        let mut octets = [0u8; 4];
+        octets.copy_from_slice(value);
+        Ok(Ipv4Addr(octets))
+    }
+}
+
 impl core::fmt::Display for Ipv4Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])
