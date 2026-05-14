@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
@@ -9,6 +11,41 @@ use crate::rng;
 /// Vendor Information "Magic Cookie"
 /// https://www.rfc-editor.org/rfc/rfc1497
 const MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
+
+#[derive(Debug, Clone, Copy)]
+enum DhcpError {
+    MalformedPacket,
+    TruncatedOption,
+    UnknownMessageType(u8),
+    InvalidMessageType,
+    MissingServerIdentifier,
+    MissingSubnetMask,
+    MissingMagicCookie,
+    InvalidMagicCookie,
+    TransactionMismatch,
+    ServerMismatch,
+    AddressMismatch,
+    TransportError,
+}
+
+impl core::fmt::Display for DhcpError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MalformedPacket => write!(f, "malformed packet"),
+            Self::TruncatedOption => write!(f, "truncated option"),
+            Self::UnknownMessageType(v) => write!(f, "unknown message type ({})", v),
+            Self::InvalidMessageType => write!(f, "invalid message type"),
+            Self::MissingServerIdentifier => write!(f, "missing Server Identifier option"),
+            Self::MissingSubnetMask => write!(f, "missing Subnet Mask option"),
+            Self::MissingMagicCookie => write!(f, "missing magic cookie in options"),
+            Self::InvalidMagicCookie => write!(f, "invalid magic cookie in options"),
+            Self::TransactionMismatch => write!(f, "transaction ID does not match"),
+            Self::ServerMismatch => write!(f, "server identifier does not match"),
+            Self::AddressMismatch => write!(f, "offered IP address does not match"),
+            Self::TransportError => write!(f, "error with transport layer"),
+        }
+    }
+}
 
 /// DHCP's BOOTP header structure as defined in RFC 2131
 /// https://www.rfc-editor.org/rfc/rfc2131
@@ -71,65 +108,193 @@ impl BootpHeader {
 
 unsafe impl NetworkHeader for BootpHeader {}
 
+/// DHCP message types as defined in RFC 2132
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DhcpOptionType {
-    SubnetMask = 1,
-    Router = 3,
-    RequestedIpAddress = 50,
-    MessageType = 53,
-    ServerIdentifier = 54,
-    Unknown = u8::MAX,
+enum DhcpMessageType {
+    Discover = 1,
+    Offer = 2,
+    Request = 3,
+    Decline = 4,
+    Ack = 5,
+    Nak = 6,
+    Release = 7,
+    Inform = 8,
 }
 
-impl From<u8> for DhcpOptionType {
-    fn from(value: u8) -> Self {
+impl TryFrom<u8> for DhcpMessageType {
+    type Error = DhcpError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            1 => Self::SubnetMask,
-            3 => Self::Router,
-            50 => Self::RequestedIpAddress,
-            53 => Self::MessageType,
-            54 => Self::ServerIdentifier,
-            _ => Self::Unknown,
+            1 => Ok(Self::Discover),
+            2 => Ok(Self::Offer),
+            3 => Ok(Self::Request),
+            4 => Ok(Self::Decline),
+            5 => Ok(Self::Ack),
+            6 => Ok(Self::Nak),
+            7 => Ok(Self::Release),
+            8 => Ok(Self::Inform),
+            _ => Err(DhcpError::UnknownMessageType(value)),
         }
     }
 }
 
-impl From<DhcpOptionType> for u8 {
-    fn from(value: DhcpOptionType) -> Self {
-        value as u8
-    }
+/// DHCP options as defined in RFC 2132, with some common options implemented.
+// TODO: make it borrowed
+#[derive(Debug, Clone)]
+enum DhcpOption {
+    MessageType(DhcpMessageType),
+    ServerIdentifier(Ipv4Addr),
+    AddressRequest(Ipv4Addr),
+    SubnetMask(Ipv4Addr),
+    Router(Vec<Ipv4Addr>),
+    LeaseTime(u32),
+    DnsServers(Vec<Ipv4Addr>),
+
+    Unknown { code: u8, data: Vec<u8> },
 }
 
-/// Represents a single DHCP option, which consists of an ID and its associated data.
-#[derive(Debug)]
-struct DhcpOption<'a> {
-    id: DhcpOptionType,
-    data: &'a [u8],
-}
-
-impl<'a> DhcpOption<'a> {
-    fn new(id: DhcpOptionType, data: &'a [u8]) -> Self {
-        Self { id, data }
+impl DhcpOption {
+    /// Returns the DHCP option code for this option.
+    fn to_code(&self) -> u8 {
+        match self {
+            DhcpOption::MessageType(_) => 53,
+            DhcpOption::ServerIdentifier(_) => 54,
+            DhcpOption::AddressRequest(_) => 50,
+            DhcpOption::SubnetMask(_) => 1,
+            DhcpOption::Router(_) => 3,
+            DhcpOption::LeaseTime(_) => 51,
+            DhcpOption::DnsServers(_) => 6,
+            DhcpOption::Unknown { code, .. } => *code,
+        }
     }
 
-    fn byte_len(&self) -> usize {
-        // 1 byte for ID + 1 byte for length + data length
-        2 + self.data.len()
+    /// Returns the length of the data for this option, not including the code and length fields.
+    fn data_len(&self) -> usize {
+        match self {
+            DhcpOption::MessageType(_) => 1,
+            DhcpOption::ServerIdentifier(_) => 4,
+            DhcpOption::AddressRequest(_) => 4,
+            DhcpOption::SubnetMask(_) => 4,
+            DhcpOption::Router(ipv4_addrs) => ipv4_addrs.len(),
+            DhcpOption::LeaseTime(_) => 4,
+            DhcpOption::DnsServers(ipv4_addrs) => ipv4_addrs.len(),
+            DhcpOption::Unknown { code: _, data } => data.len(),
+        }
     }
 
     /// Appends the option to the given buffer at the specified offset, updating the offset
     /// accordingly.
     ///
-    /// This mirrors `NetworkHeader`'s `append_to()` method since `#[repr(C, packed)]` is not possible with
-    /// referenced data.
+    /// This mirrors `NetworkHeader`'s `append_to()` method.
     fn append_to(&self, buf: &mut [u8], offset: &mut usize) {
-        buf[*offset] = self.id.into();
+        buf[*offset] = self.to_code();
         *offset += 1;
-        buf[*offset] = self.data.len() as u8;
+        buf[*offset] = self.data_len() as u8;
         *offset += 1;
-        buf[*offset..*offset + self.data.len()].copy_from_slice(self.data);
-        *offset += self.data.len();
+
+        match self {
+            DhcpOption::MessageType(ty) => {
+                buf[*offset] = *ty as u8;
+                *offset += 1;
+            }
+
+            DhcpOption::ServerIdentifier(ip)
+            | DhcpOption::AddressRequest(ip)
+            | DhcpOption::SubnetMask(ip) => {
+                buf[*offset..*offset + 4].copy_from_slice(&ip.0);
+                *offset += 4;
+            }
+
+            DhcpOption::Router(routers) | DhcpOption::DnsServers(routers) => {
+                for ip in routers {
+                    buf[*offset..*offset + 4].copy_from_slice(&ip.0);
+                    *offset += 4;
+                }
+            }
+
+            DhcpOption::LeaseTime(lease) => {
+                buf[*offset..*offset + 4].copy_from_slice(&lease.to_be_bytes());
+                *offset += 4;
+            }
+
+            DhcpOption::Unknown { code: _, data } => {
+                buf[*offset..*offset + data.len()].copy_from_slice(data);
+                *offset += data.len();
+            }
+        }
+    }
+
+    /// Decodes a DHCP option from the given code and data bytes.
+    ///
+    /// Returns `Ok(DhcpOption::Unknown)` for unsupported option codes, and returns an `Err` if the
+    /// data is malformed for the expected option type.
+    fn decode(code: u8, data: &[u8]) -> Result<Self, DhcpError> {
+        match code {
+            1 => Ok(Self::SubnetMask(try_log!(
+                Ipv4Addr::try_from(data).map_err(|_| DhcpError::MalformedPacket)
+            ))),
+
+            3 => {
+                if !data.len().is_multiple_of(4) {
+                    err!(DhcpError::MalformedPacket);
+                }
+
+                let routers = try_log!(
+                    data.chunks_exact(4)
+                        .map(|chunk| Ipv4Addr::try_from(chunk)
+                            .map_err(|_| DhcpError::MalformedPacket))
+                        .collect::<Result<_, _>>()
+                );
+
+                Ok(Self::Router(routers))
+            }
+
+            5 => {
+                if !data.len().is_multiple_of(4) {
+                    err!(DhcpError::MalformedPacket);
+                }
+
+                let dns_servers = try_log!(
+                    data.chunks_exact(4)
+                        .map(|chunk| Ipv4Addr::try_from(chunk)
+                            .map_err(|_| DhcpError::MalformedPacket))
+                        .collect::<Result<_, _>>()
+                );
+
+                Ok(Self::DnsServers(dns_servers))
+            }
+
+            51 => {
+                if data.len() != 4 {
+                    err!(DhcpError::MalformedPacket);
+                }
+
+                Ok(Self::LeaseTime(u32::from_be_bytes(
+                    data.try_into().expect("data length already checked"),
+                )))
+            }
+
+            53 => {
+                if data.len() != 1 {
+                    err!(DhcpError::MalformedPacket);
+                }
+
+                Ok(Self::MessageType(try_log!(DhcpMessageType::try_from(
+                    data[0]
+                ))))
+            }
+
+            54 => Ok(Self::ServerIdentifier(try_log!(
+                Ipv4Addr::try_from(data).map_err(|_| DhcpError::MalformedPacket)
+            ))),
+
+            _ => Ok(Self::Unknown {
+                code,
+                data: data.to_vec(),
+            }),
+        }
     }
 }
 
@@ -139,36 +304,296 @@ impl<'a> DhcpOption<'a> {
 struct DhcpOptionIter<'a>(&'a [u8]);
 
 impl<'a> Iterator for DhcpOptionIter<'a> {
-    type Item = DhcpOption<'a>;
+    type Item = Result<DhcpOption, DhcpError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.0.is_empty() {
             return None;
         }
 
-        if self.0[0] == 0xFF {
-            // End Option
-            self.0 = &self.0[1..];
-            return None;
+        match self.0[0] {
+            0x00 => {
+                // Pad Option
+                self.0 = &self.0[1..];
+                self.next()
+            }
+
+            0xFF => {
+                // End Option
+                self.0 = &self.0[1..];
+                None
+            }
+
+            _ => {
+                // must have at least a code byte and a length byte.
+                if self.0.len() < 2 {
+                    return Some(Err(DhcpError::MalformedPacket));
+                }
+
+                let code = self.0[0];
+                let length = self.0[1] as usize;
+
+                // must have enough bytes for the data according to the length field.
+                if self.0.len() < 2 + length {
+                    return Some(Err(DhcpError::TruncatedOption));
+                }
+
+                let data = &self.0[2..2 + length];
+
+                // move the slice forward for the next iteration
+                self.0 = &self.0[2 + length..];
+
+                Some(DhcpOption::decode(code, data))
+            }
+        }
+    }
+}
+
+/// Parsed DHCP packet with the BOOTP header and a list of options.
+#[derive(Debug, Clone)]
+struct DhcpPacket {
+    header: BootpHeader,
+    options: Vec<DhcpOption>,
+}
+
+impl DhcpPacket {
+    /// Returns the DHCP message type from the options, if present.
+    fn message_type(&self) -> Option<DhcpMessageType> {
+        self.options.iter().find_map(|op| match op {
+            DhcpOption::MessageType(ty) => Some(*ty),
+            _ => None,
+        })
+    }
+
+    /// Returns the Server Identifier option from the options, if present.
+    fn server_identifier(&self) -> Option<Ipv4Addr> {
+        self.options.iter().find_map(|op| match op {
+            DhcpOption::ServerIdentifier(ip) => Some(*ip),
+            _ => None,
+        })
+    }
+
+    /// Returns the Subnet Mask option from the options, if present.
+    fn subnet_mask(&self) -> Option<Ipv4Addr> {
+        self.options.iter().find_map(|op| match op {
+            DhcpOption::SubnetMask(mask) => Some(*mask),
+            _ => None,
+        })
+    }
+
+    /// Returns the Router option from the options, if present.
+    /// If multiple routers are present, returns the first one.
+    fn router(&self) -> Option<Ipv4Addr> {
+        self.options.iter().find_map(|op| match op {
+            DhcpOption::Router(routers) => routers.first().copied(),
+            _ => None,
+        })
+    }
+
+    /// Returns the Lease Time option from the options, if present.
+    fn lease_time(&self) -> Option<u32> {
+        self.options.iter().find_map(|op| match op {
+            DhcpOption::LeaseTime(lease) => Some(*lease),
+            _ => None,
+        })
+    }
+
+    /// Parses a raw DHCP packet from the given byte slice, extracting the BOOTP header and options.
+    fn parse(packet: &[u8]) -> Result<DhcpPacket, DhcpError> {
+        let Some((header, options_data)) = BootpHeader::from_bytes_with_rest(packet) else {
+            err!(DhcpError::MalformedPacket);
+        };
+
+        // must be a BOOTREPLY (op=2) since this is a packet received from the server.
+        if header.op != 2 {
+            err!(DhcpError::MalformedPacket);
         }
 
-        if self.0.len() < 2 {
-            // Malformed option
-            return None;
+        // options must start with the magic cookie to be valid
+        if options_data.len() < 4 {
+            err!(DhcpError::MissingMagicCookie);
         }
 
-        let id = self.0[0].into();
-        let length = self.0[1];
-        if self.0.len() < 2 + length as usize {
-            // Malformed option
-            return None;
+        if options_data[..4] != MAGIC_COOKIE {
+            err!(DhcpError::InvalidMagicCookie);
         }
 
-        let data = &self.0[2..2 + length as usize];
+        let mut options = Vec::new();
 
-        self.0 = &self.0[2 + length as usize..];
+        for option in DhcpOptionIter(&options_data[4..]) {
+            options.push(try_log!(option));
+        }
 
-        Some(DhcpOption { id, data })
+        Ok(Self {
+            header: *header,
+            options,
+        })
+    }
+}
+
+/// Parsed DHCP Offer message
+#[derive(Debug, Clone)]
+struct DhcpOffer {
+    xid: u32,
+
+    // required
+    server_id: Ipv4Addr,
+    offered_ip: Ipv4Addr,
+    subnet_mask: Ipv4Addr,
+
+    // optional
+    _router: Option<Ipv4Addr>,
+    _lease_time: Option<u32>,
+}
+
+impl TryFrom<DhcpPacket> for DhcpOffer {
+    type Error = DhcpError;
+
+    fn try_from(value: DhcpPacket) -> Result<Self, Self::Error> {
+        if value.message_type() != Some(DhcpMessageType::Offer) {
+            err!(DhcpError::InvalidMessageType);
+        }
+
+        let Some(server_id) = value.server_identifier() else {
+            err!(DhcpError::MissingServerIdentifier);
+        };
+
+        let Some(subnet_mask) = value.subnet_mask() else {
+            err!(DhcpError::MissingSubnetMask);
+        };
+
+        Ok(Self {
+            xid: value.header.xid.get(),
+            server_id,
+            offered_ip: value.header.yiaddr,
+            subnet_mask,
+            _router: value.router(),
+            _lease_time: value.lease_time(),
+        })
+    }
+}
+
+/// Parsed DHCP Ack message
+#[derive(Debug, Clone)]
+struct DhcpAck {
+    xid: u32,
+
+    // required
+    server_id: Ipv4Addr,
+    assigned_ip: Ipv4Addr,
+    subnet_mask: Ipv4Addr,
+
+    // optional
+    router: Option<Ipv4Addr>,
+}
+
+impl TryFrom<DhcpPacket> for DhcpAck {
+    type Error = DhcpError;
+
+    fn try_from(value: DhcpPacket) -> Result<Self, Self::Error> {
+        if value.message_type() != Some(DhcpMessageType::Ack) {
+            err!(DhcpError::InvalidMessageType);
+        }
+
+        let Some(server_id) = value.server_identifier() else {
+            err!(DhcpError::MissingServerIdentifier);
+        };
+
+        let Some(subnet_mask) = value.subnet_mask() else {
+            err!(DhcpError::MissingSubnetMask);
+        };
+
+        Ok(Self {
+            xid: value.header.xid.get(),
+            server_id,
+            assigned_ip: value.header.yiaddr,
+            subnet_mask,
+            router: value.router(),
+        })
+    }
+}
+
+/// State machine for DHCP negotiation on a single interface.
+#[derive(Debug, Clone)]
+enum DhcpState {
+    Discovering { xid: u32 },
+    Requesting(DhcpOffer),
+    Bound(DhcpAck),
+}
+
+impl DhcpState {
+    /// Returns the transaction ID for the current state.
+    fn xid(&self) -> u32 {
+        match self {
+            DhcpState::Discovering { xid } => *xid,
+            DhcpState::Requesting(dhcp_offer) => dhcp_offer.xid,
+            DhcpState::Bound(dhcp_ack) => dhcp_ack.xid,
+        }
+    }
+
+    /// Begins the DHCP negotiation process by sending a Discover message and transitioning to the
+    /// `Discovering` state with the generated transaction ID.
+    fn begin(interface_id: InterfaceId) -> Result<Self, DhcpError> {
+        let xid = try_log!(discover(interface_id));
+
+        Ok(DhcpState::Discovering { xid })
+    }
+
+    /// Handles a received DHCP Offer message, validating the transaction ID and sending a Request
+    /// message in response, then transitioning to the `Requesting` state.
+    fn on_offer(&self, interface_id: InterfaceId, offer: DhcpOffer) -> Result<Self, DhcpError> {
+        match self {
+            Self::Discovering { xid } if *xid == offer.xid => {
+                try_log!(request(interface_id, &offer));
+
+                Ok(Self::Requesting(offer))
+            }
+            _ => Err(DhcpError::TransactionMismatch),
+        }
+    }
+
+    /// Handles a received DHCP Ack message, validating the transaction ID and offered parameters,
+    /// then configuring the interface with the assigned IP address and subnet mask, adding a
+    /// default route if a router is provided, and transitioning to the `Bound` state.
+    fn on_ack(&self, interface_id: InterfaceId, ack: DhcpAck) -> Result<Self, DhcpError> {
+        match self {
+            Self::Requesting(offer) if offer.xid == ack.xid => {
+                if offer.server_id != ack.server_id {
+                    err!(DhcpError::ServerMismatch);
+                }
+
+                if offer.offered_ip != ack.assigned_ip || offer.subnet_mask != ack.subnet_mask {
+                    err!(DhcpError::AddressMismatch);
+                }
+
+                try_log!(
+                    interface::set_interface_ipv4(
+                        interface_id,
+                        Some(Ipv4Config {
+                            addr: ack.assigned_ip,
+                            prefix_len: Ipv4Addr::mask_to_prefix_len(ack.subnet_mask).unwrap(),
+                        }),
+                    )
+                    .map_err(|_| DhcpError::TransportError)
+                );
+
+                // add gateway if router option is provided
+                if let Some(router) = ack.router {
+                    route::upsert_route(RouteEntry {
+                        dest_ip: Ipv4Addr::UNSPECIFIED,
+                        prefix_len: 0,
+                        gateway: Some(router),
+                        interface_id,
+                        metric: 100, // default metric for DHCP routes, higher than other routes
+                        owner: RouteOwner::Dhcp,
+                    });
+                }
+
+                Ok(Self::Bound(ack))
+            }
+
+            _ => Err(DhcpError::TransactionMismatch),
+        }
     }
 }
 
@@ -177,9 +602,14 @@ impl<'a> Iterator for DhcpOptionIter<'a> {
 /// This function constructs the entire Ethernet + IPv4 + UDP + BOOTP + DHCP packet from scratch
 /// since we cannot use UDP's `SocketTable::send()` without an IP address, and DHCP requires
 /// specific handling of broadcast packets and options.
-fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<(), NetError> {
+fn transmit_dhcp(
+    interface_id: InterfaceId,
+    xid: u32,
+    options: &[DhcpOption],
+) -> Result<(), NetError> {
     // calculate the total size of the DHCP options (+1 for the END option)
-    let options_size = options.iter().map(DhcpOption::byte_len).sum::<usize>() + 1;
+    // 1 byte for ID + 1 byte for length + data length
+    let options_size = options.iter().map(|o| o.data_len() + 2).sum::<usize>() + 1;
     let dhcp_size = BootpHeader::SIZE + MAGIC_COOKIE.len() + options_size;
 
     // arbitrary limit to static buffer size, can be increased if needed
@@ -197,7 +627,7 @@ fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<()
         + 256 /* extra space for options */];
     let mut offset = 0;
 
-    let Some(interface) = interface::find_interface_by_id(id) else {
+    let Some(interface) = interface::find_interface_by_id(interface_id) else {
         err!(NetError::InterfaceNotFound)
     };
 
@@ -216,7 +646,7 @@ fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<()
     .append_to(&mut packet, &mut offset);
 
     // always send from client (68) to server (67)
-    // UDP offset is ignored for DHCP, no need to calculate
+    // UDP checksum is ignored for DHCP, no need to calculate
     UdpHeader::new(68, 67, dhcp_size).append_to(&mut packet, &mut offset);
 
     let mut header = BootpHeader::new_request();
@@ -224,7 +654,7 @@ fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<()
     header.chaddr[..6].copy_from_slice(&mac.0);
     // set the broadcast flag since we don't have an IP address yet
     header.flags = Be::new(0x8000u16);
-    // set the transaction ID to match between Discover and Request
+    // set the transaction ID
     header.xid = Be::new(xid);
 
     header.append_to(&mut packet, &mut offset);
@@ -244,54 +674,34 @@ fn transmit_dhcp(id: InterfaceId, xid: u32, options: &[DhcpOption]) -> Result<()
 
 /// Sends a DHCP Discover to find available DHCP servers and obtain an IP address lease.
 ///
-/// This is the first step in the DHCP state machine, and is typically called when an interface is
-/// initialized without an IP address.
-///
-/// The client generates a random transaction ID to match the Discover with subsequent Offer and
-/// Request messages from the server.
-fn discover(id: InterfaceId) -> Result<u32, NetError> {
+/// The client generates a random transaction ID to match the Discover with subsequent messages from
+/// the server.
+fn discover(interface_id: InterfaceId) -> Result<u32, DhcpError> {
     let options = [
         // DHCP Discover
-        DhcpOption::new(DhcpOptionType::MessageType, &[1]),
+        DhcpOption::MessageType(DhcpMessageType::Discover),
     ];
 
     let xid = rng::rand_u32();
 
-    log!(transmit_dhcp(id, xid, &options)).map(|_| xid)
+    match log!(transmit_dhcp(interface_id, xid, &options)) {
+        Ok(_) => Ok(xid),
+        Err(_) => Err(DhcpError::TransportError),
+    }
 }
 
 /// Sends a DHCP Request in response to a received DHCP Offer.
-fn request(
-    id: InterfaceId,
-    xid: u32,
-    server_ip: Ipv4Addr,
-    offered_ip: Ipv4Addr,
-) -> Result<(), NetError> {
+fn request(interface_id: InterfaceId, offer: &DhcpOffer) -> Result<(), DhcpError> {
     let options = [
         // DHCP Request
-        DhcpOption::new(DhcpOptionType::MessageType, &[3]),
+        DhcpOption::MessageType(DhcpMessageType::Request),
         // Request the same IP address that was offered to us
-        DhcpOption::new(DhcpOptionType::RequestedIpAddress, &offered_ip.0),
+        DhcpOption::AddressRequest(offer.offered_ip),
         // Include the Server Identifier to specify which server we're accepting the offer from
-        DhcpOption::new(DhcpOptionType::ServerIdentifier, &server_ip.0),
+        DhcpOption::ServerIdentifier(offer.server_id),
     ];
 
-    log!(transmit_dhcp(id, xid, &options))
-}
-
-/// DHCP state machine
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DhcpState {
-    WaitingForOffer {
-        xid: u32,
-    },
-    WaitingForAck {
-        xid: u32,
-        offered_ip: Ipv4Addr,
-        prefix_len: u8,
-        router: Ipv4Addr,
-        server_ip: Ipv4Addr,
-    },
+    log!(transmit_dhcp(interface_id, offer.xid, &options)).map_err(|_| DhcpError::TransportError)
 }
 
 /// Thread for handling DHCP negotiation for the given interface.
@@ -301,106 +711,41 @@ pub fn dhcp_thread(interface_id: InterfaceId) {
     let socket = SocketTable::open(Ipv4Addr::UNSPECIFIED, 68, Some(interface_id))
         .expect("failed to open DHCP client port");
 
-    let Ok(xid) = log!(discover(interface_id)) else {
+    let Ok(mut state) = log!(DhcpState::begin(interface_id)) else {
         SocketTable::close(socket);
         return;
     };
 
-    let mut state = DhcpState::WaitingForOffer { xid };
-
-    // receive incoming DHCP packets
     while let Ok((_ip, _port, packet)) = log!(SocketTable::receive(socket)) {
-        let Some((header, options)) = BootpHeader::from_bytes_with_rest(&packet) else {
+        let Ok(dhcp) = log!(DhcpPacket::parse(&packet)) else {
             continue;
         };
 
-        if header.op != 2 || options.len() < 4 || options[..4] != MAGIC_COOKIE {
+        if dhcp.header.xid.get() != state.xid() {
             continue;
         }
 
-        if header.xid.get() != xid {
-            continue;
-        }
+        match dhcp.message_type() {
+            Some(DhcpMessageType::Offer) => {
+                let Ok(offer) = log!(DhcpOffer::try_from(dhcp)) else {
+                    continue;
+                };
 
-        let mut message_type: Option<u8> = None;
-        let mut server_id: Option<Ipv4Addr> = None;
-        let mut subnet_mask: Option<Ipv4Addr> = None;
-        let mut router: Option<Ipv4Addr> = None;
-
-        // DhcpOptionIter is responsible from verifying the data length
-        for option in DhcpOptionIter(&options[4..]) {
-            match option.id {
-                DhcpOptionType::MessageType => message_type = Some(option.data[0]),
-                DhcpOptionType::ServerIdentifier => {
-                    server_id = Some(Ipv4Addr(option.data.try_into().unwrap()))
-                }
-                DhcpOptionType::SubnetMask => {
-                    subnet_mask = Some(Ipv4Addr(option.data.try_into().unwrap()))
-                }
-                DhcpOptionType::Router => router = Some(Ipv4Addr(option.data.try_into().unwrap())),
-                _ => {}
-            }
-        }
-
-        match message_type {
-            // DHCP Offer
-            Some(2) if matches!(state, DhcpState::WaitingForOffer { .. }) => {
-                if let Some(server) = server_id {
-                    let Some(prefix_len) = subnet_mask.and_then(Ipv4Addr::mask_to_prefix_len)
-                    else {
-                        continue;
-                    };
-
-                    let Some(router) = router else {
-                        continue;
-                    };
-
-                    if log!(request(interface_id, xid, server, header.yiaddr)).is_err() {
-                        continue;
-                    }
-
-                    state = DhcpState::WaitingForAck {
-                        xid,
-                        offered_ip: header.yiaddr,
-                        prefix_len,
-                        router,
-                        server_ip: server,
-                    }
-                }
+                state = match state.on_offer(interface_id, offer) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
             }
 
-            // DHCP Ack
-            Some(5) => {
-                // TODO: ignoring all other fields for now like DNS, lease time, etc.
-                if let DhcpState::WaitingForAck {
-                    offered_ip,
-                    prefix_len,
-                    router,
-                    ..
-                } = state
-                {
-                    let _ = log!(interface::set_interface_ipv4(
-                        interface_id,
-                        Some(Ipv4Config {
-                            addr: offered_ip,
-                            prefix_len,
-                        }),
-                    ));
+            Some(DhcpMessageType::Ack) => {
+                let Ok(ack) = log!(DhcpAck::try_from(dhcp)) else {
+                    continue;
+                };
 
-                    // add gateway
-                    route::upsert_route(RouteEntry {
-                        dest_ip: Ipv4Addr::UNSPECIFIED,
-                        prefix_len: 0,
-                        gateway: Some(router),
-                        interface_id,
-                        metric: 100, // default metric for DHCP routes, higher than other routes
-                        owner: RouteOwner::Dhcp,
-                    });
-
-                    // we now have an IP, break the loop to exit
-                    // TODO: keep listening for possible updates in the future.
-                    break;
-                }
+                state = match state.on_ack(interface_id, ack) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
             }
 
             _ => {}
