@@ -414,8 +414,14 @@ pub fn handle_udp(
         err!(NetError::MalformedPacket)
     };
 
+    // verify length
+    let udp_len = req_udp.len.get() as usize;
+    if udp_len < UdpHeader::SIZE || udp_len > req_data.len() + UdpHeader::SIZE {
+        err!(NetError::MalformedPacket);
+    }
+
     // truncate data to declared length in the header
-    let payload_len = (req_udp.len.get() as usize).saturating_sub(UdpHeader::SIZE);
+    let payload_len = udp_len.saturating_sub(UdpHeader::SIZE);
     let req_data = &req_data[..payload_len.min(req_data.len())];
 
     let mut table = SOCKET_TABLE.lock();
