@@ -43,7 +43,16 @@ impl ArpCache {
     fn insert(ip: Ipv4Addr, mac: MacAddr) {
         let mut cache = ARP_CACHE.lock();
 
-        if let Some(entry) = cache.entries.iter_mut().find(|entry| entry.is_none()) {
+        // check for existing mapping and update.
+        // if doesn't exist, find an empty slot and insert.
+        // if doesn't exist, evict a "random" entry and insert.
+        if let Some(matching) = cache
+            .entries
+            .iter_mut()
+            .find(|entry| entry.as_ref().is_some_and(|e| e.ip == ip))
+        {
+            matching.as_mut().unwrap().mac = mac;
+        } else if let Some(entry) = cache.entries.iter_mut().find(|entry| entry.is_none()) {
             *entry = Some(ArpCacheEntry { ip, mac });
         } else {
             // drop a "random" entry if the cache is full
