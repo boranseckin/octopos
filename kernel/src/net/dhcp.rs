@@ -365,8 +365,13 @@ impl<'a> DhcpPacket<'a> {
     /// If multiple routers are present, returns the first one.
     fn router(&self) -> Option<Ipv4Addr> {
         self.options.iter().find_map(|op| match op {
-            // length of data is already verified at parsing
-            DhcpOption::Router(routers) => Ipv4Addr::try_from(&routers[..4]).ok(),
+            DhcpOption::Router(routers) => {
+                if routers.len() < 4 {
+                    return None;
+                }
+
+                Ipv4Addr::try_from(&routers[..4]).ok()
+            }
             _ => None,
         })
     }
