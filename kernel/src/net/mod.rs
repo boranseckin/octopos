@@ -42,6 +42,7 @@ pub enum NetError {
     PacketTooLarge,
     ResourceUnavailable,
     InterfaceNotFound,
+    ChecksumFailed,
 }
 
 impl core::fmt::Display for NetError {
@@ -61,6 +62,7 @@ impl core::fmt::Display for NetError {
             NetError::PacketTooLarge => write!(f, "packet is too large"),
             NetError::ResourceUnavailable => write!(f, "resource unavailable"),
             NetError::InterfaceNotFound => write!(f, "interface not found"),
+            NetError::ChecksumFailed => write!(f, "checksum verification failed"),
         }
     }
 }
