@@ -1,7 +1,7 @@
-use crate::net::icmp;
 use crate::net::interface::InterfaceId;
 use crate::net::udp;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
+use crate::net::{icmp, internet_checksum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -95,11 +95,30 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<(), NetEr
         err!(NetError::MalformedPacket)
     };
 
-    // Make sure the packet is not malformed so that the len is smaller than the header size.
+    let ver = req_ipv4.ver_ihl >> 4;
+    let ihl = req_ipv4.ver_ihl & 0xf;
+
+    // Only accept version 4 and 20-byte packets (ihl=5 * 4).
+    if ver != 4 || ihl != 5 {
+        err!(NetError::MalformedPacket);
+    }
+
+    // Make sure the length is greater than the header size and that the packet fits the length
+    // spceified in the header.
     let total_len = req_ipv4.len() as usize;
-    if total_len < Ipv4Header::SIZE {
+    if total_len < Ipv4Header::SIZE || packet.len() < total_len {
         err!(NetError::MalformedPacket)
     }
+
+    // Checksum control
+    let header_without_sum = Ipv4Header {
+        sum: Be::new(0),
+        ..*req_ipv4
+    };
+    if internet_checksum(&[header_without_sum.as_bytes()]) != req_ipv4.sum.get() {
+        err!(NetError::ChecksumFailed);
+    }
+
     // Remove extra padding bytes added by the NIC, if any.
     let ipv4_payload_len = total_len - Ipv4Header::SIZE;
     let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
