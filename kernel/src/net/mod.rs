@@ -20,6 +20,7 @@ pub(crate) mod interface;
 pub(crate) mod ipv4;
 pub(crate) mod loopback;
 pub(crate) mod route;
+pub(crate) mod socket;
 pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;

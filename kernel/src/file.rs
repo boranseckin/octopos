@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use crate::console::Console;
 use crate::fs::{BSIZE, FsError, Inode, Stat};
 use crate::log::Operation;
-use crate::net::udp::SocketTable;
+use crate::net::socket::{SockAddr, Socket};
 use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
 use crate::pipe::Pipe;
 use crate::proc;
@@ -20,7 +20,7 @@ pub enum FileType {
     Pipe { pipe: Arc<Pipe> },
     Inode { inode: Inode },
     Device { inode: Inode, major: u16 },
-    Socket { socket_id: usize },
+    Socket { socket: Socket },
 }
 
 /// File metadata protected by table-wide spinlock
@@ -136,7 +136,7 @@ impl File {
                 let _op = Operation::begin();
                 inode.put();
             }
-            FileType::Socket { socket_id } => SocketTable::close(socket_id),
+            FileType::Socket { socket } => socket.close(),
         }
     }
 
@@ -201,7 +201,7 @@ impl File {
                 None => err!(SysError::NoEntry),
             },
 
-            FileType::Socket { socket_id: _ } => {
+            FileType::Socket { socket: _ } => {
                 // reads from socket should go through recv()
                 err!(SysError::BadDescriptor);
             }
@@ -266,7 +266,7 @@ impl File {
                 None => err!(SysError::NoEntry),
             },
 
-            FileType::Socket { socket_id: _ } => {
+            FileType::Socket { socket: _ } => {
                 // writes to socket should go through send()
                 err!(SysError::InvalidArgument);
             }
@@ -282,9 +282,10 @@ impl File {
             }
             FileType::Device { .. } => err!(SysError::NotImplemented),
 
-            FileType::Socket { socket_id } => {
+            FileType::Socket { socket } => {
                 if cmd == Ioctl::SOCKET_GET_PORT {
-                    Ok(SocketTable::get_port_number(*socket_id) as usize)
+                    let SockAddr::Inet { port, .. } = socket.local_addr();
+                    Ok(port as usize)
                 } else {
                     err!(SysError::NotImplemented)
                 }

@@ -1,5 +1,7 @@
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::string::ToString;
+use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::Ipv4Proto;
@@ -18,68 +20,117 @@ pub const MAX_UDP_PAYLOAD: usize = 1024;
 
 /// An entry in the receive queue for a socket, representing a single received UDP datagram.
 #[derive(Debug)]
-struct ReceiveEntry {
+pub struct ReceiveEntry {
     src_ip: Ipv4Addr,
     src_port: u16,
     payload: Box<[u8]>,
 }
 
-/// An entry in the socket table, representing a bound UDP port and its receive queue.
+/// A bound UDP socket. The binding is fixed at creation; only the receive state is mutable.
 /// The queue has a fixed maximum depth; if the queue is full, incoming datagrams for that port will
 /// be dropped until space is available.
 #[derive(Debug)]
-struct SocketEntry {
-    bound_ip: Ipv4Addr,
-    bound_port: u16,
-    bound_interface: Option<InterfaceId>,
-    receive_queue: [Option<ReceiveEntry>; MAX_RECV_QUEUE_DEPTH],
+pub struct UdpSocket {
+    pub bound_ip: Ipv4Addr,
+    pub bound_port: u16,
+    pub bound_interface: Option<InterfaceId>,
+    inner: SpinLock<UdpSocketInner>,
 }
 
-impl SocketEntry {
-    /// Creates a new SocketEntry bound to the given (`ip`, `port`, `interface`), with an empty
-    /// receive queue.
-    fn new(ip: Ipv4Addr, port: u16, interface: Option<InterfaceId>) -> Self {
-        Self {
-            bound_ip: ip,
-            bound_port: port,
-            bound_interface: interface,
-            receive_queue: [const { None }; MAX_RECV_QUEUE_DEPTH],
+#[derive(Debug)]
+struct UdpSocketInner {
+    receive_queue: VecDeque<ReceiveEntry>, // bound by MAX_RECV_QUEUE_DEPTH
+    closed: bool,
+}
+
+impl UdpSocket {
+    /// Binds a new socket and registers in the UDP table.
+    ///
+    /// - If the `ip` argument is `UNSPECIFIED`, it will match datagrams sent to any of the host's IP addresses.
+    /// - If the `port` argument is `0`, it will assign an ephemeral port automatically.
+    /// - If the `interface` argument is `Some`, the socket will only receive datagrams that arrived
+    ///   on that interface. If `None`, it will receive datagrams from any interface.
+    pub fn bind(
+        ip: Ipv4Addr,
+        port: u16,
+        interface: Option<InterfaceId>,
+    ) -> Result<Arc<Self>, NetError> {
+        let mut table = UDP_TABLE.lock();
+        log!(table.add(ip, port, interface))
+    }
+
+    /// Unregisters from the table, marks closed, wakes sleepers.
+    pub fn close(self: &Arc<Self>) {
+        {
+            let mut table = UDP_TABLE.lock();
+            table.remove(self);
+
+            let mut inner = self.inner.lock();
+            inner.closed = true;
         }
+
+        proc::wakeup(self.channel());
     }
 
-    /// Enqueues a received datagram into the socket's receive queue.
-    /// Returns `Err` if the queue is full.
-    fn enqueue(&mut self, entry: ReceiveEntry) -> Result<(), NetError> {
-        let Some(next) = self.receive_queue.iter_mut().find(|e| e.is_none()) else {
-            err!(NetError::QueueFull);
+    pub fn send(&self, dest_ip: Ipv4Addr, dest_port: u16, buf: &[u8]) -> Result<(), NetError> {
+        log!(transmit_udp(dest_ip, dest_port, self.bound_port, buf))
+    }
+
+    /// Blocks until a datagram arrives, the socket is closed, or the process is killed.
+    pub fn receive(&self) -> Result<(Ipv4Addr, u16, Box<[u8]>), NetError> {
+        let entry = loop {
+            if proc::current_proc().is_killed() {
+                err!(NetError::Interrupted)
+            }
+
+            let mut inner = self.inner.lock();
+            if inner.closed {
+                err!(NetError::BadSocket)
+            }
+
+            if let Some(entry) = inner.receive_queue.pop_front() {
+                break entry;
+            }
+
+            inner = proc::sleep(self.channel(), inner);
         };
-        *next = Some(entry);
-        Ok(())
+
+        Ok((entry.src_ip, entry.src_port, entry.payload))
     }
 
-    /// Dequeues a datagram from the socket's receive queue.
-    fn dequeue(&mut self) -> Option<ReceiveEntry> {
-        self.receive_queue.iter_mut().find_map(|e| e.take())
+    /// Called from `handle_udp`. Drops the datagram if the queue is full or the socket is closed.
+    pub fn deliver(&self, entry: ReceiveEntry) {
+        let mut inner = self.inner.lock();
+
+        if inner.closed || inner.receive_queue.len() >= MAX_RECV_QUEUE_DEPTH {
+            return;
+        }
+
+        inner.receive_queue.push_back(entry);
+    }
+
+    pub fn channel(&self) -> Channel {
+        Channel::Socket(self as *const _ as usize)
     }
 }
 
 /// Global socket table, protected by a spinlock.
 /// Each entry is either None (unused) or Some(SocketEntry) for a bound port.
 #[derive(Debug)]
-pub struct SocketTable {
-    entries: [Option<SocketEntry>; NSOCKET],
+struct UdpTable {
+    entries: [Option<Arc<UdpSocket>>; NSOCKET],
     next_ephemeral: u16,
 }
 
-static SOCKET_TABLE: SpinLock<SocketTable> = SpinLock::new(
-    SocketTable {
+static UDP_TABLE: SpinLock<UdpTable> = SpinLock::new(
+    UdpTable {
         entries: [const { None }; NSOCKET],
         next_ephemeral: EPHEMERAL_PORT_START,
     },
     "sockets",
 );
 
-impl SocketTable {
+impl UdpTable {
     /// Returns the next ephemeral port and advances the counter.
     /// The counter wraps within the range [`EPHEMERAL_PORT_START`, `EPHEMERAL_PORT_END`).
     fn next_ephemeral(&mut self) -> u16 {
@@ -109,30 +160,25 @@ impl SocketTable {
         ip: Ipv4Addr,
         port: u16,
         interface: Option<InterfaceId>,
-    ) -> Option<usize> {
+    ) -> Option<Arc<UdpSocket>> {
+        let matches = |s: &&Arc<UdpSocket>, target_ip: Ipv4Addr| {
+            s.bound_port == port
+                && s.bound_ip == target_ip
+                && Self::interface_overlap(s.bound_interface, interface)
+        };
+
         // prefer (ip == bound_ip, port, interface) match, fall back to wildcard 0.0.0.0:port
         self.entries
             .iter()
-            .position(|e| {
-                e.as_ref()
-                    .filter(|s| {
-                        s.bound_port == port
-                            && s.bound_ip == ip
-                            && Self::interface_overlap(s.bound_interface, interface)
-                    })
-                    .is_some()
-            })
+            .flatten()
+            .find(|s| matches(s, ip))
             .or_else(|| {
-                self.entries.iter().position(|e| {
-                    e.as_ref()
-                        .filter(|s| {
-                            s.bound_port == port
-                                && s.bound_ip == Ipv4Addr::UNSPECIFIED
-                                && Self::interface_overlap(s.bound_interface, interface)
-                        })
-                        .is_some()
-                })
+                self.entries
+                    .iter()
+                    .flatten()
+                    .find(|s| matches(s, Ipv4Addr::UNSPECIFIED))
             })
+            .cloned()
     }
 
     /// Checks if the combination of (`ip`, `port`, `interface`) will conflict with an existing
@@ -148,61 +194,36 @@ impl SocketTable {
     /// Interface conflicts if either the existing or the new one is `None`, or they are the same.
     fn is_bind_conflict(&self, ip: Ipv4Addr, port: u16, interface: Option<InterfaceId>) -> bool {
         if ip == Ipv4Addr::UNSPECIFIED {
-            self.entries.iter().any(|e| {
-                e.as_ref()
-                    .filter(|s| {
-                        s.bound_port == port
-                            && Self::interface_overlap(s.bound_interface, interface)
-                    })
-                    .is_some()
+            self.entries.iter().flatten().any(|s| {
+                s.bound_port == port && Self::interface_overlap(s.bound_interface, interface)
             })
         } else {
-            self.entries.iter().any(|e| {
-                e.as_ref()
-                    .filter(|s| {
-                        s.bound_port == port
-                            && (s.bound_ip == ip || s.bound_ip == Ipv4Addr::UNSPECIFIED)
-                            && Self::interface_overlap(s.bound_interface, interface)
-                    })
-                    .is_some()
+            self.entries.iter().flatten().any(|s| {
+                s.bound_port == port
+                    && (s.bound_ip == ip || s.bound_ip == Ipv4Addr::UNSPECIFIED)
+                    && Self::interface_overlap(s.bound_interface, interface)
             })
         }
     }
 
-    /// Returns the bound port for the socket with the given `socket_id`.
-    pub fn get_port_number(socket_id: usize) -> u16 {
-        assert!(socket_id < NSOCKET, "invalid socket id");
-        SOCKET_TABLE.lock().entries[socket_id]
-            .as_ref()
-            .expect("socket id to be valid")
-            .bound_port
-    }
-
-    /// Opens a new socket bound to the given (ip, port, interface), returning its index
-    /// (`socket_id`) into the `SOCKET_TABLE`.
-    ///
-    /// - If the `ip` argument is `UNSPECIFIED`, it will match datagrams sent to any of the host's IP
-    ///   addresses.
-    /// - If the `port` argument is `0`, it will assign an ephemeral port automatically.
-    /// - If the `interface` argument is `Some`, the socket will only receive datagrams that arrived
-    ///   on that interface. If `None`, it will receive datagrams from any interface.
-    pub fn open(
+    /// Resolves the port to bind: picks a free ephemeral port if `port == 0`, otherwise checks for
+    /// a confglicting binding. Caller must hold the table lock.
+    fn resolve_port(
+        &mut self,
         ip: Ipv4Addr,
         port: u16,
         interface: Option<InterfaceId>,
-    ) -> Result<usize, NetError> {
-        let mut table = SOCKET_TABLE.lock();
-
+    ) -> Result<u16, NetError> {
         // resolve the port to bind
         let bind_port = if port == 0 {
             // scan the ephemeral range for a port not already in use
-            let mut current = table.next_ephemeral();
+            let mut current = self.next_ephemeral();
             let start = current;
 
             'ephemeral: loop {
-                for entry in table.entries.iter().flatten() {
+                for entry in self.entries.iter().flatten() {
                     if entry.bound_port == current {
-                        current = table.next_ephemeral();
+                        current = self.next_ephemeral();
 
                         if current == start {
                             // we've looped all the way around and found no free ports
@@ -218,87 +239,57 @@ impl SocketTable {
             }
         } else {
             // check if there is a conflicting binding
-            if table.is_bind_conflict(ip, port, interface) {
+            if self.is_bind_conflict(ip, port, interface) {
                 err!(NetError::PortInUse);
             }
             port
         };
 
-        // find a free slot
-        let Some(id) = table.entries.iter().position(|e| e.is_none()) else {
+        Ok(bind_port)
+    }
+
+    /// Resovles the port, creates the socket, and inserts it into a free slot, all under the
+    /// caller's table lock so no other bind can claim the same port in between.
+    fn add(
+        &mut self,
+        ip: Ipv4Addr,
+        port: u16,
+        interface: Option<InterfaceId>,
+    ) -> Result<Arc<UdpSocket>, NetError> {
+        let Some(id) = self.entries.iter().position(|e| e.is_none()) else {
             err!(NetError::TableFull);
         };
 
-        table.entries[id] = Some(SocketEntry::new(ip, bind_port, interface));
+        let port = try_log!(self.resolve_port(ip, port, interface));
 
-        Ok(id)
+        let socket = Arc::new(UdpSocket {
+            bound_ip: ip,
+            bound_port: port,
+            bound_interface: interface,
+            inner: SpinLock::new(
+                UdpSocketInner {
+                    receive_queue: VecDeque::with_capacity(MAX_RECV_QUEUE_DEPTH),
+                    closed: false,
+                },
+                "udp_socket",
+            ),
+        });
+
+        self.entries[id] = Some(socket.clone());
+
+        Ok(socket)
     }
 
-    /// Closes the socket with the given `socket_id`.
-    pub fn close(socket_id: usize) {
-        if socket_id < NSOCKET {
-            let mut table = SOCKET_TABLE.lock();
-            table.entries[socket_id] = None;
+    /// Removes a socket from the table.
+    fn remove(&mut self, socket: &Arc<UdpSocket>) {
+        if let Some(id) = self
+            .entries
+            .iter()
+            .flatten()
+            .position(|e| Arc::ptr_eq(e, socket))
+        {
+            self.entries[id] = None;
         }
-    }
-
-    /// Receives a datagram from the socket with the given `socket_id`, returning the source IP,
-    /// source port, and payload. If the receive queue is empty, the calling process will sleep
-    /// until a datagram is available or the process is killed.
-    pub fn receive(socket_id: usize) -> Result<(Ipv4Addr, u16, Box<[u8]>), NetError> {
-        if socket_id >= NSOCKET {
-            err!(NetError::BadSocket)
-        }
-
-        let mut table = SOCKET_TABLE.lock();
-
-        if table.entries[socket_id].is_none() {
-            err!(NetError::BadSocket)
-        }
-
-        let entry = loop {
-            if proc::current_proc().is_killed() {
-                err!(NetError::Interrupted)
-            }
-
-            // re-borrow socket on each iteration
-            let Some(socket) = table.entries[socket_id].as_mut() else {
-                err!(NetError::BadSocket);
-            };
-
-            if let Some(entry) = socket.dequeue() {
-                break entry;
-            }
-
-            table = proc::sleep(Channel::Buffer(socket as *const _ as usize), table);
-        };
-
-        Ok((entry.src_ip, entry.src_port, entry.payload))
-    }
-
-    /// Sends a datagram from the socket with the given `socket_id` to the specified destination IP
-    /// and port, with the given payload.
-    pub fn send(
-        socket_id: usize,
-        dest_ip: Ipv4Addr,
-        dest_port: u16,
-        buf: &[u8],
-    ) -> Result<(), NetError> {
-        if socket_id >= NSOCKET {
-            err!(NetError::BadSocket)
-        }
-
-        let bound_port = {
-            let table = SOCKET_TABLE.lock();
-
-            let Some(socket) = table.entries[socket_id].as_ref() else {
-                err!(NetError::BadSocket)
-            };
-
-            socket.bound_port
-        };
-
-        log!(transmit_udp(dest_ip, dest_port, bound_port, buf))
     }
 }
 
@@ -424,33 +415,35 @@ pub fn handle_udp(
     let payload_len = udp_len.saturating_sub(UdpHeader::SIZE);
     let req_data = &req_data[..payload_len.min(req_data.len())];
 
-    let mut table = SOCKET_TABLE.lock();
+    let socket = {
+        let Some(socket) =
+            UDP_TABLE
+                .lock()
+                .ingress_lookup(dest_ip, req_udp.dest_port.get(), Some(interface_id))
+        else {
+            // no socket is bound to this (ip, port), drop it
+            return Ok(());
+        };
 
-    let Some(socket_id) =
-        table.ingress_lookup(dest_ip, req_udp.dest_port.get(), Some(interface_id))
-    else {
-        // no socket is bound to this (ip, port), drop it
-        return Ok(());
+        socket.clone()
     };
-
-    let socket = table.entries[socket_id].as_mut().expect("socket to exist");
 
     // do not return here if the queue is full, might as well wakeup the proc so that they can
     // process the full queue.
-    let _ = log!(socket.enqueue(ReceiveEntry {
+    socket.deliver(ReceiveEntry {
         src_ip,
         src_port: req_udp.src_port.get(),
         payload: req_data.into(),
-    }));
+    });
 
-    proc::wakeup(Channel::Buffer(socket as *const _ as usize));
+    proc::wakeup(socket.channel());
 
     Ok(())
 }
 
 /// Dumps the current state of the socket table for debugging purposes.
 pub fn dump() {
-    let table = SOCKET_TABLE.lock();
+    let table = UDP_TABLE.lock();
 
     println!("");
     for (id, entry) in table.entries.iter().enumerate() {
