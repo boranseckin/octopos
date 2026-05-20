@@ -4,7 +4,7 @@ use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::route::{self, RouteEntry, RouteOwner};
-use crate::net::udp::{SocketTable, UdpHeader};
+use crate::net::udp::{UdpHeader, UdpSocket};
 use crate::net::{Be, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
 use crate::rng;
 
@@ -693,15 +693,15 @@ fn request(interface_id: InterfaceId, offer: &DhcpOffer) -> Result<(), DhcpError
 ///
 // TODO: implement retries and backoff for failed attempts
 pub fn dhcp_thread(interface_id: InterfaceId) {
-    let socket = SocketTable::open(Ipv4Addr::UNSPECIFIED, 68, Some(interface_id))
+    let socket = UdpSocket::bind(Ipv4Addr::UNSPECIFIED, 68, Some(interface_id))
         .expect("failed to open DHCP client port");
 
     let Ok(mut state) = log!(DhcpState::begin(interface_id)) else {
-        SocketTable::close(socket);
+        socket.close();
         return;
     };
 
-    while let Ok((_ip, _port, packet)) = log!(SocketTable::receive(socket)) {
+    while let Ok((_ip, _port, packet)) = log!(socket.receive()) {
         let Ok(dhcp) = log!(DhcpPacket::parse(&packet)) else {
             continue;
         };
@@ -737,5 +737,5 @@ pub fn dhcp_thread(interface_id: InterfaceId) {
         }
     }
 
-    SocketTable::close(socket);
+    socket.close();
 }

@@ -2,10 +2,21 @@ use alloc::vec;
 
 use crate::file::{FILE_TABLE, File, FileType};
 use crate::net::Ipv4Addr;
-use crate::net::udp::{MAX_UDP_PAYLOAD, SocketTable};
+use crate::net::socket::{SockAddr, Socket};
+use crate::net::udp::MAX_UDP_PAYLOAD;
 use crate::proc::{self, copy_from_user};
 use crate::syscall::{SysError, SyscallArgs};
 use crate::sysfile::fd_alloc;
+
+/// Returns the socket behind `file`, or `InvalidArgument` if it is not a socket.
+/// The file lock is released on return, so callers may block on the socket.
+fn file_socket(file: &File) -> Result<Socket, SysError> {
+    let inner = FILE_TABLE.inner[file.id].lock();
+    let FileType::Socket { socket } = &inner.r#type else {
+        err!(SysError::InvalidArgument)
+    };
+    Ok(socket.clone())
+}
 
 /// Opens a new UDP socket and returns a file descriptor for it.
 ///
@@ -30,8 +41,7 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
         err!(SysError::InvalidArgument)
     };
 
-    let socket_id =
-        try_log!(SocketTable::open(Ipv4Addr::UNSPECIFIED, port, None).map_err(SysError::from));
+    let socket = try_log!(Socket::open_udp(Ipv4Addr::UNSPECIFIED, port).map_err(SysError::from));
 
     // allocate a file structure and a file descriptor
     let (fd, file) = match log!(File::alloc()) {
@@ -39,19 +49,19 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
             Ok(fd) => (fd, file),
             Err(e) => {
                 file.close();
-                SocketTable::close(socket_id);
+                socket.close();
                 return Err(e);
             }
         },
         Err(e) => {
-            SocketTable::close(socket_id);
+            socket.close();
             return Err(SysError::from(e));
         }
     };
 
     // set file type; writeable/readable stays as false.
     let mut inner = FILE_TABLE.inner[file.id].lock();
-    inner.r#type = FileType::Socket { socket_id };
+    inner.r#type = FileType::Socket { socket };
 
     Ok(fd)
 }
@@ -92,14 +102,7 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
         err!(SysError::InvalidArgument)
     };
 
-    // check file type and retrieve socket_id, but drop the lock before moving forward.
-    let socket_id = {
-        let inner = FILE_TABLE.inner[file.id].lock();
-        let FileType::Socket { socket_id } = inner.r#type else {
-            err!(SysError::InvalidArgument)
-        };
-        socket_id
-    };
+    let socket = try_log!(file_socket(&file));
 
     // copy IP in the network order
     let mut dest_ip = [0u8; 4];
@@ -113,7 +116,13 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
         err!(SysError::BadAddress)
     }
 
-    try_log!(SocketTable::send(socket_id, dest_ip, dest_port, &payload));
+    try_log!(socket.send(
+        SockAddr::Inet {
+            ip: dest_ip,
+            port: dest_port,
+        },
+        &payload
+    ));
 
     Ok(buf_len)
 }
@@ -149,17 +158,11 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {
     let src_ip_ptr = args.get_addr(3);
     let src_port_ptr = args.get_addr(4);
 
-    // check file type and retrieve socket_id, but drop the lock before receive since it might sleep
-    let socket_id = {
-        let inner = FILE_TABLE.inner[file.id].lock();
-        let FileType::Socket { socket_id } = inner.r#type else {
-            err!(SysError::InvalidArgument)
-        };
-        socket_id
-    };
+    let socket = try_log!(file_socket(&file));
 
-    let (ip, port, received) = try_log!(SocketTable::receive(socket_id));
+    let (addr, received) = try_log!(socket.receive());
     let copy_len = received.len().min(buf_len);
+    let SockAddr::Inet { ip, port } = addr;
 
     if log!(proc::copy_to_user(&ip.0, src_ip_ptr)).is_err()
         || log!(proc::copy_to_user(&port.to_ne_bytes(), src_port_ptr)).is_err()

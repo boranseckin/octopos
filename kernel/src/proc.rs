@@ -301,6 +301,8 @@ pub enum Channel {
     PipeWrite(usize),
     /// Network
     Network,
+    /// Socket receive queue
+    Socket(usize),
 }
 
 /// Process control block
