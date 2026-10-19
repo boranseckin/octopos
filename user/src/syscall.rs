@@ -1,7 +1,7 @@
 pub mod raw {
     use core::arch::asm;
 
-    use kernel::abi::{Stat, Syscall};
+    use kernel::abi::{RawSockAddr, Stat, Syscall};
 
     #[inline(always)]
     fn syscall0(syscall: Syscall) -> isize {
@@ -59,7 +59,7 @@ pub mod raw {
     }
 
     #[inline(always)]
-    fn syscall5(syscall: Syscall, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> isize {
+    fn syscall4(syscall: Syscall, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
         let ret: isize;
         unsafe {
             asm!(
@@ -69,7 +69,6 @@ pub mod raw {
                 in("a1") a1,
                 in("a2") a2,
                 in("a3") a3,
-                in("a4") a4,
             );
         }
         ret
@@ -169,42 +168,16 @@ pub mod raw {
         syscall3(Syscall::Ioctl, fd, cmd, arg)
     }
 
-    pub fn socket(port: u16) -> isize {
-        syscall1(Syscall::Socket, port as usize)
+    pub fn socket(typ: usize, addr: *const RawSockAddr) -> isize {
+        syscall2(Syscall::Socket, typ, addr as usize)
     }
 
-    pub fn send(
-        fd: usize,
-        buf: *const u8,
-        len: usize,
-        dest_ip: *const u8,
-        dest_port: u16,
-    ) -> isize {
-        syscall5(
-            Syscall::Send,
-            fd,
-            buf as usize,
-            len,
-            dest_ip as usize,
-            dest_port as usize,
-        )
+    pub fn send(fd: usize, buf: *const u8, len: usize, dest_addr: *const RawSockAddr) -> isize {
+        syscall4(Syscall::Send, fd, buf as usize, len, dest_addr as usize)
     }
 
-    pub fn receive(
-        fd: usize,
-        buf: *mut u8,
-        len: usize,
-        src_ip: *mut u8,
-        src_port: *mut u16,
-    ) -> isize {
-        syscall5(
-            Syscall::Receive,
-            fd,
-            buf as usize,
-            len,
-            src_ip as usize,
-            src_port as usize,
-        )
+    pub fn receive(fd: usize, buf: *mut u8, len: usize, src_addr: *mut RawSockAddr) -> isize {
+        syscall4(Syscall::Receive, fd, buf as usize, len, src_addr as usize)
     }
 
     pub fn random(buf: *mut u8, len: usize) -> isize {
@@ -212,7 +185,7 @@ pub mod raw {
     }
 }
 
-use kernel::abi::{MAXPATH, Stat, SysError};
+use kernel::abi::{MAXPATH, RawSockAddr, SockAddr, SocketType, Stat, SysError};
 
 /// A file descriptor returned by or passed to syscalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -413,32 +386,36 @@ pub fn ioctl(fd: Fd, cmd: usize, arg: usize) -> Result<usize, SysError> {
     check(raw::ioctl(fd.as_raw(), cmd, arg))
 }
 
-pub fn socket(port: u16) -> Result<Fd, SysError> {
-    check(raw::socket(port)).map(Fd)
+pub fn socket(typ: SocketType, addr: SockAddr) -> Result<Fd, SysError> {
+    check(raw::socket(
+        typ as usize,
+        &RawSockAddr::from(addr) as *const RawSockAddr,
+    ))
+    .map(Fd)
 }
 
-pub fn send(fd: Fd, buf: &[u8], dest_ip: &[u8; 4], dest_port: u16) -> Result<usize, SysError> {
+pub fn send(fd: Fd, buf: &[u8], dest_addr: SockAddr) -> Result<usize, SysError> {
     check(raw::send(
         fd.as_raw(),
         buf.as_ptr(),
         buf.len(),
-        dest_ip.as_ptr(),
-        dest_port,
+        &RawSockAddr::from(dest_addr) as *const RawSockAddr,
     ))
 }
 
-pub fn receive(
-    fd: Fd,
-    buf: &mut [u8],
-    src_ip: &mut [u8; 4],
-    src_port: &mut u16,
-) -> Result<usize, SysError> {
-    check(raw::receive(
+pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<(usize, SockAddr), SysError> {
+    let mut src_addr = RawSockAddr::default();
+
+    let value = check(raw::receive(
         fd.as_raw(),
         buf.as_mut_ptr(),
         buf.len(),
-        src_ip.as_mut_ptr(),
-        src_port as *mut u16,
+        &mut src_addr as *mut RawSockAddr,
+    ))?;
+
+    Ok((
+        value,
+        SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
     ))
 }
 

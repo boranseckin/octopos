@@ -9,11 +9,85 @@ use crate::spinlock::SpinLock;
 
 const MAX_RECV_QUEUE_DEPTH: usize = 8;
 
+#[repr(usize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketType {
+    Udp = 1,
+    Ping = 2,
+}
+
+impl TryFrom<usize> for SocketType {
+    type Error = NetError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Udp),
+            2 => Ok(Self::Ping),
+            _ => Err(NetError::BadSocket),
+        }
+    }
+}
+
 /// Address of a socket endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SockAddr {
     /// IPv4 address and port, used by UDP sockets.
     Inet { ip: Ipv4Addr, port: u16 },
+}
+
+impl SockAddr {
+    pub const fn inet(ip: Ipv4Addr, port: u16) -> Self {
+        Self::Inet { ip, port }
+    }
+
+    pub const fn any_inet() -> Self {
+        Self::Inet {
+            ip: Ipv4Addr::UNSPECIFIED,
+            port: 0,
+        }
+    }
+
+    pub const fn any_inet_with_port(port: u16) -> Self {
+        Self::Inet {
+            ip: Ipv4Addr::UNSPECIFIED,
+            port,
+        }
+    }
+}
+
+/// Wire format of a socket address shared with user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RawSockAddr {
+    pub family: u16,
+    pub port: u16,
+    pub addr: [u8; 4],
+}
+
+impl From<SockAddr> for RawSockAddr {
+    fn from(value: SockAddr) -> Self {
+        match value {
+            SockAddr::Inet { ip, port } => Self {
+                family: 1,
+                port,
+                addr: ip.0,
+            },
+        }
+    }
+}
+
+impl TryFrom<RawSockAddr> for SockAddr {
+    type Error = NetError;
+
+    fn try_from(value: RawSockAddr) -> Result<Self, Self::Error> {
+        match value.family {
+            1 => Ok(Self::Inet {
+                ip: Ipv4Addr::from(value.addr),
+                port: value.port,
+            }),
+            _ => Err(NetError::InvalidAddress),
+        }
+    }
 }
 
 /// Handle to a socket of any type. Cloning refers to the same underlying socket.
