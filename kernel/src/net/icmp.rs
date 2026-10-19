@@ -212,18 +212,12 @@ pub struct IcmpHeader {
 }
 
 impl IcmpHeader {
-    pub const SIZE: usize = size_of::<Self>();
-
     fn r#type(&self) -> IcmpType {
         IcmpType::from(self.r#type)
     }
 
     fn echo_ident(&self) -> u16 {
         (self.rest.get() >> 16) as u16
-    }
-
-    fn echo_seq(&self) -> u16 {
-        (self.rest.get() & 0xFFFF) as u16
     }
 
     #[must_use]

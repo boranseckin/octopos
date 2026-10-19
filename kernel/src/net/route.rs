@@ -1,8 +1,9 @@
+use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use crate::net::interface::{self, InterfaceId};
-use crate::net::{Ipv4Addr, Ipv4Config, NetError};
+use crate::net::{self, Ipv4Addr, Ipv4Config, NetError};
 use crate::spinlock::SpinLock;
 
 /// Owner of a route entry, used for tracking which component added the route.
@@ -10,10 +11,23 @@ use crate::spinlock::SpinLock;
 pub enum RouteOwner {
     /// Route added by an interface's address and prefix.
     Interface,
+    /// Route to one of the host's own addresses via loopback.
+    Local(InterfaceId),
     /// Route added by the DHCP client when it receives an IP address lease.
     Dhcp,
     /// Route added by a static configuration.
     _Static,
+}
+
+impl core::fmt::Display for RouteOwner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            RouteOwner::Interface => write!(f, "if"),
+            RouteOwner::Local(interface_id) => write!(f, "local:{interface_id}"),
+            RouteOwner::Dhcp => write!(f, "dhcp"),
+            RouteOwner::_Static => write!(f, "static"),
+        }
+    }
 }
 
 /// Routing information for a destination subnet.
@@ -34,6 +48,9 @@ pub struct RouteEntry {
     /// Owner of this route, used for tracking which component added this route and allowing it to
     /// remove the route later if needed.
     pub owner: RouteOwner,
+    /// Preferred source address for packets using this route. If `None`, the outgoing interface's
+    /// address is used.
+    pub pref_src: Option<Ipv4Addr>,
 }
 
 static ROUTES: SpinLock<Vec<RouteEntry>> = SpinLock::new(Vec::new(), "net_routes");
@@ -79,8 +96,22 @@ pub fn upsert_route(route: RouteEntry) {
 pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
     let mut routes = ROUTES.lock();
 
-    // Remove any existing Interface owned route.
-    routes.retain(|r| !(r.interface_id == interface_id && r.owner == RouteOwner::Interface));
+    // Remove any existing Interface owned route or local route to this interface.
+    routes.retain(|r| {
+        !matches!(r.owner, RouteOwner::Interface if r.interface_id == interface_id)
+            && r.owner != RouteOwner::Local(interface_id)
+    });
+
+    // Add a new route for the interface's local loopback.
+    routes.push(RouteEntry {
+        dest_ip: ipv4.addr,
+        prefix_len: 32,
+        gateway: None,
+        interface_id: InterfaceId(0),
+        metric: 0,
+        owner: RouteOwner::Local(interface_id),
+        pref_src: Some(ipv4.addr),
+    });
 
     // Add a new route for the interface's IP address and prefix.
     routes.push(RouteEntry {
@@ -91,6 +122,7 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
         interface_id,
         metric: 10,
         owner: RouteOwner::Interface,
+        pref_src: None,
     });
 }
 
@@ -116,24 +148,23 @@ pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry, NetError> {
 
 /// Prints the current routing table for debugging purposes.
 pub fn dump() {
-    let routes = ROUTES.lock();
+    let mut routes = ROUTES.lock().clone();
+    routes.sort_by_key(route_sort_key);
 
     println!("");
     for route in routes.iter() {
+        let interface = interface::find_interface_by_id(route.interface_id).unwrap();
+        let src = net::source_addr(route, &interface).map_or("-".to_string(), |s| s.to_string());
+
+        let dest = format!("{}/{}", route.dest_ip, route.prefix_len);
+        let gateway = route
+            .gateway
+            .map_or("direct".to_string(), |gw| gw.to_string());
+        let owner = route.owner.to_string();
+
         println!(
-            "{}/{} via {} dev {} metric {} owner {:?}",
-            route.dest_ip,
-            route.prefix_len,
-            route
-                .gateway
-                .map(|gw| gw.to_string())
-                .unwrap_or_else(|| "direct".to_string()),
-            interface::find_interface_by_id(route.interface_id)
-                .unwrap()
-                .config
-                .name,
-            route.metric,
-            route.owner
+            "{:<18} via {:<15} dev {:<8} metric {:<5} owner {:<10} src {}",
+            dest, gateway, interface.config.name, route.metric, owner, src,
         );
     }
 }
