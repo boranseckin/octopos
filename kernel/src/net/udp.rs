@@ -20,7 +20,7 @@ pub const MAX_UDP_PAYLOAD: usize = 1024;
 
 /// An entry in the receive queue for a socket, representing a single received UDP datagram.
 #[derive(Debug)]
-pub struct ReceiveEntry {
+struct ReceiveEntry {
     src_ip: Ipv4Addr,
     src_port: u16,
     payload: Box<[u8]>,
@@ -73,6 +73,13 @@ impl UdpSocket {
     }
 
     pub fn send(&self, dest_ip: Ipv4Addr, dest_port: u16, buf: &[u8]) -> Result<(), NetError> {
+        {
+            let inner = self.inner.lock();
+            if inner.closed {
+                err!(NetError::BadSocket)
+            }
+        }
+
         log!(transmit_udp(dest_ip, dest_port, self.bound_port, buf))
     }
 
@@ -99,7 +106,7 @@ impl UdpSocket {
     }
 
     /// Called from `handle_udp`. Drops the datagram if the queue is full or the socket is closed.
-    pub fn deliver(&self, entry: ReceiveEntry) {
+    fn deliver(&self, entry: ReceiveEntry) {
         let mut inner = self.inner.lock();
 
         if inner.closed || inner.receive_queue.len() >= MAX_RECV_QUEUE_DEPTH {
@@ -109,7 +116,7 @@ impl UdpSocket {
         inner.receive_queue.push_back(entry);
     }
 
-    pub fn channel(&self) -> Channel {
+    fn channel(&self) -> Channel {
         Channel::Socket(self as *const _ as usize)
     }
 }
