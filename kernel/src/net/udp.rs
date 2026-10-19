@@ -1,30 +1,19 @@
 use alloc::boxed::Box;
-use alloc::collections::VecDeque;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::Ipv4Proto;
 use crate::net::route;
+use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 use crate::param::NSOCKET;
-use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
-
-const MAX_RECV_QUEUE_DEPTH: usize = 8;
 
 const EPHEMERAL_PORT_START: u16 = 49152;
 const EPHEMERAL_PORT_END: u16 = 65535;
 
 pub const MAX_UDP_PAYLOAD: usize = 1024;
-
-/// An entry in the receive queue for a socket, representing a single received UDP datagram.
-#[derive(Debug)]
-struct ReceiveEntry {
-    src_ip: Ipv4Addr,
-    src_port: u16,
-    payload: Box<[u8]>,
-}
 
 /// A bound UDP socket. The binding is fixed at creation; only the receive state is mutable.
 /// The queue has a fixed maximum depth; if the queue is full, incoming datagrams for that port will
@@ -34,13 +23,7 @@ pub struct UdpSocket {
     pub bound_ip: Ipv4Addr,
     pub bound_port: u16,
     pub bound_interface: Option<InterfaceId>,
-    inner: SpinLock<UdpSocketInner>,
-}
-
-#[derive(Debug)]
-struct UdpSocketInner {
-    receive_queue: VecDeque<ReceiveEntry>, // bound by MAX_RECV_QUEUE_DEPTH
-    closed: bool,
+    queue: RecvQueue,
 }
 
 impl UdpSocket {
@@ -64,60 +47,28 @@ impl UdpSocket {
         {
             let mut table = UDP_TABLE.lock();
             table.remove(self);
-
-            let mut inner = self.inner.lock();
-            inner.closed = true;
         }
 
-        proc::wakeup(self.channel());
+        self.queue.close();
     }
 
     pub fn send(&self, dest_ip: Ipv4Addr, dest_port: u16, buf: &[u8]) -> Result<(), NetError> {
-        {
-            let inner = self.inner.lock();
-            if inner.closed {
-                err!(NetError::BadSocket)
-            }
+        if self.queue.is_closed() {
+            err!(NetError::BadSocket)
         }
 
         log!(transmit_udp(dest_ip, dest_port, self.bound_port, buf))
     }
 
-    /// Blocks until a datagram arrives, the socket is closed, or the process is killed.
     pub fn receive(&self) -> Result<(Ipv4Addr, u16, Box<[u8]>), NetError> {
-        let entry = loop {
-            if proc::current_proc().is_killed() {
-                err!(NetError::Interrupted)
-            }
-
-            let mut inner = self.inner.lock();
-            if inner.closed {
-                err!(NetError::BadSocket)
-            }
-
-            if let Some(entry) = inner.receive_queue.pop_front() {
-                break entry;
-            }
-
-            inner = proc::sleep(self.channel(), inner);
-        };
-
-        Ok((entry.src_ip, entry.src_port, entry.payload))
+        let (addr, payload) = try_log!(self.queue.receive());
+        let SockAddr::Inet { ip, port } = addr;
+        Ok((ip, port, payload))
     }
 
-    /// Called from `handle_udp`. Drops the datagram if the queue is full or the socket is closed.
-    fn deliver(&self, entry: ReceiveEntry) {
-        let mut inner = self.inner.lock();
-
-        if inner.closed || inner.receive_queue.len() >= MAX_RECV_QUEUE_DEPTH {
-            return;
-        }
-
-        inner.receive_queue.push_back(entry);
-    }
-
-    fn channel(&self) -> Channel {
-        Channel::Socket(self as *const _ as usize)
+    fn deliver(&self, ip: Ipv4Addr, port: u16, payload: Box<[u8]>) {
+        let addr = SockAddr::Inet { ip, port };
+        self.queue.deliver(addr, payload);
     }
 }
 
@@ -273,13 +224,7 @@ impl UdpTable {
             bound_ip: ip,
             bound_port: port,
             bound_interface: interface,
-            inner: SpinLock::new(
-                UdpSocketInner {
-                    receive_queue: VecDeque::with_capacity(MAX_RECV_QUEUE_DEPTH),
-                    closed: false,
-                },
-                "udp_socket",
-            ),
+            queue: RecvQueue::new(),
         }) else {
             err!(NetError::ResourceUnavailable);
         };
@@ -434,13 +379,7 @@ pub fn handle_udp(
 
     // do not return here if the queue is full, might as well wakeup the proc so that they can
     // process the full queue.
-    socket.deliver(ReceiveEntry {
-        src_ip,
-        src_port: req_udp.src_port.get(),
-        payload: req_data.into(),
-    });
-
-    proc::wakeup(socket.channel());
+    socket.deliver(src_ip, req_udp.src_port.get(), req_data.into());
 
     Ok(())
 }
