@@ -3,8 +3,8 @@
 
 use user::*;
 
-const USAGE: &str = "usage: net listen <port>
-       net send <address> <port> [message]";
+const USAGE: &str = "usage: udp listen <port>
+       udp send <address> <port> [message]";
 
 #[unsafe(no_mangle)]
 fn main(args: Args) {
