@@ -85,7 +85,7 @@ static UDP_TABLE: SpinLock<UdpTable> = SpinLock::new(
         entries: [const { None }; NSOCKET],
         next_ephemeral: EPHEMERAL_PORT_START,
     },
-    "sockets",
+    "udp_sockets",
 );
 
 impl UdpTable {

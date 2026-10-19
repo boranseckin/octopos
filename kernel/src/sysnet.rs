@@ -18,7 +18,7 @@ fn file_socket(file: &File) -> Result<Socket, SysError> {
     Ok(socket.clone())
 }
 
-/// Opens a new UDP socket and returns a file descriptor for it.
+/// Opens a new socket and returns a file descriptor for it.
 ///
 /// # Arguments
 ///
@@ -46,41 +46,38 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
         err!(SysError::InvalidArgument)
     };
 
-    match socket_type {
-        SocketType::Udp => {
-            let raw_addr_va = args.get_addr(1);
-            let raw_addr: RawSockAddr =
-                try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
-            let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
+    let raw_addr_va = args.get_addr(1);
+    let raw_addr: RawSockAddr =
+        try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
+    let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
 
-            let SockAddr::Inet { ip, port } = addr;
-            let socket = try_log!(Socket::open_udp(ip, port).map_err(SysError::from));
+    let SockAddr::Inet { ip, port } = addr;
+    let socket = match socket_type {
+        SocketType::Udp => try_log!(Socket::open_udp(ip, port).map_err(SysError::from)),
+        SocketType::Ping => try_log!(Socket::open_ping(port).map_err(SysError::from)),
+    };
 
-            // allocate a file structure and a file descriptor
-            let (fd, file) = match log!(File::alloc()) {
-                Ok(mut file) => match log!(fd_alloc(file.clone())) {
-                    Ok(fd) => (fd, file),
-                    Err(e) => {
-                        file.close();
-                        socket.close();
-                        return Err(e);
-                    }
-                },
-                Err(e) => {
-                    socket.close();
-                    return Err(SysError::from(e));
-                }
-            };
-
-            // set file type; writeable/readable stays as false.
-            let mut inner = FILE_TABLE.inner[file.id].lock();
-            inner.r#type = FileType::Socket { socket };
-
-            Ok(fd)
+    // allocate a file structure and a file descriptor
+    let (fd, file) = match log!(File::alloc()) {
+        Ok(mut file) => match log!(fd_alloc(file.clone())) {
+            Ok(fd) => (fd, file),
+            Err(e) => {
+                file.close();
+                socket.close();
+                return Err(e);
+            }
+        },
+        Err(e) => {
+            socket.close();
+            return Err(SysError::from(e));
         }
+    };
 
-        SocketType::Ping => todo!(),
-    }
+    // set file type; writeable/readable stays as false.
+    let mut inner = FILE_TABLE.inner[file.id].lock();
+    inner.r#type = FileType::Socket { socket };
+
+    Ok(fd)
 }
 
 /// Sends a UDP datagram to the specified destination.
