@@ -5,6 +5,7 @@ use crate::net::udp::UdpSocket;
 use crate::net::{Ipv4Addr, NetError};
 
 /// Address of a socket endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SockAddr {
     /// IPv4 address and port, used by UDP sockets.
     Inet { ip: Ipv4Addr, port: u16 },
