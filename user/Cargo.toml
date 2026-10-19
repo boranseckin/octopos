@@ -204,5 +204,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "_ping"
+path = "testbin/ping.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { package = "octopos", path = "../kernel", version = "1.0.0" }
