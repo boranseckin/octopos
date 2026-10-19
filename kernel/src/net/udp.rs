@@ -262,7 +262,7 @@ impl UdpTable {
 
         let port = try_log!(self.resolve_port(ip, port, interface));
 
-        let socket = Arc::new(UdpSocket {
+        let Ok(socket) = Arc::try_new(UdpSocket {
             bound_ip: ip,
             bound_port: port,
             bound_interface: interface,
@@ -273,7 +273,9 @@ impl UdpTable {
                 },
                 "udp_socket",
             ),
-        });
+        }) else {
+            err!(NetError::ResourceUnavailable);
+        };
 
         self.entries[id] = Some(socket.clone());
 
