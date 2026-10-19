@@ -1,10 +1,10 @@
-use alloc::{slice, vec};
+use alloc::vec;
 
 use crate::abi::{RawSockAddr, SocketType};
 use crate::file::{FILE_TABLE, File, FileType};
 use crate::net::socket::{SockAddr, Socket};
 use crate::net::udp::MAX_UDP_PAYLOAD;
-use crate::proc::{self, copy_from_user};
+use crate::proc::{self, copy_from_user, copy_struct_from_user};
 use crate::syscall::{SysError, SyscallArgs};
 use crate::sysfile::fd_alloc;
 
@@ -49,17 +49,8 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
     match socket_type {
         SocketType::Udp => {
             let raw_addr_va = args.get_addr(1);
-            let mut raw_addr = RawSockAddr::default();
-
-            // # Safety: RawSockAddr is repr(C).
-            let dst = unsafe {
-                slice::from_raw_parts_mut(
-                    &mut raw_addr as *mut RawSockAddr as *mut u8,
-                    size_of::<RawSockAddr>(),
-                )
-            };
-            try_log!(proc::copy_from_user(raw_addr_va, dst).map_err(|_| SysError::BadAddress));
-
+            let raw_addr: RawSockAddr =
+                try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
             let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
 
             let SockAddr::Inet { ip, port } = addr;
@@ -126,15 +117,8 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
     let socket = try_log!(file_socket(&file));
 
     let raw_addr_va = args.get_addr(3);
-    let mut raw_addr = RawSockAddr::default();
-    // # Safety: RawSockAddr is repr(C).
-    let dst = unsafe {
-        slice::from_raw_parts_mut(
-            &mut raw_addr as *mut RawSockAddr as *mut u8,
-            size_of::<RawSockAddr>(),
-        )
-    };
-    try_log!(proc::copy_from_user(raw_addr_va, dst).map_err(|_| SysError::BadAddress));
+    let raw_addr: RawSockAddr =
+        try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
     let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
 
     let mut payload = vec![0u8; buf_len];
@@ -180,14 +164,8 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {
     let (addr, received) = try_log!(socket.receive());
     let copy_len = received.len().min(buf_len);
     let raw_addr = RawSockAddr::from(addr);
-    let raw_addr_slice = unsafe {
-        slice::from_raw_parts(
-            &raw_addr as *const RawSockAddr as *const u8,
-            size_of::<RawSockAddr>(),
-        )
-    };
 
-    if log!(proc::copy_to_user(raw_addr_slice, src_addr_ptr)).is_err()
+    if log!(proc::copy_struct_to_user(&raw_addr, src_addr_ptr)).is_err()
         || log!(proc::copy_to_user(&received[..copy_len], buf_addr)).is_err()
     {
         err!(SysError::BadAddress)
