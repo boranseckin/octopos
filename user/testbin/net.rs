@@ -96,6 +96,35 @@ fn test_receive_truncation() {
     close(fd).expect("close");
 }
 
+fn test_add_remove_multiple() {
+    let fd1 = socket(0).expect("socket open");
+    let fd2 = socket(0).expect("socket open");
+    let fd3 = socket(0).expect("socket open");
+
+    let port2 = ioctl(fd2, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+    let port3 = ioctl(fd3, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+
+    close(fd1).expect("close");
+    close(fd3).expect("close");
+
+    let fd3 = socket(port3).expect("socket open");
+
+    let payload = b"octopos UDP echo test";
+    send(fd2, payload, &Ipv4Addr::LOOPBACK.0, port2).expect("send");
+
+    let mut buf = [0u8; 64];
+    let mut src_ip = [0u8; 4];
+    let mut src_port = 0u16;
+    let n = receive(fd2, &mut buf, &mut src_ip, &mut src_port).expect("receive");
+
+    assert_eq!(&buf[..n], payload, "echo payload mismatch");
+    assert_eq!(src_ip, Ipv4Addr::LOOPBACK.0, "echo source IP must be host");
+    assert_eq!(src_port, port2, "echo source port must be echo server port");
+
+    close(fd2).expect("close");
+    close(fd3).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -104,4 +133,5 @@ fn main(_args: Args) {
     test_send_returns_byte_count();
     test_echo_round_trip();
     test_receive_truncation();
+    test_add_remove_multiple();
 }
