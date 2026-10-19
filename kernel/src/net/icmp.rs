@@ -264,7 +264,7 @@ pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<(), NetError> {
         err!(NetError::MalformedPacket)
     };
 
-    if header.calculate_checksum(req_data) != header.sum.get() {
+    if header.calculate_checksum(payload) != header.sum.get() {
         err!(NetError::ChecksumFailed)
     }
 
@@ -275,7 +275,7 @@ pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<(), NetError> {
             log!(net::transmit(
                 src_ip,
                 Ipv4Proto::Icmp,
-                &[icmp.as_bytes(), req_data]
+                &[icmp.as_bytes(), payload]
             ))
         }
         IcmpType::EchoReply => {
