@@ -4,6 +4,7 @@ use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
+use alloc::slice;
 use alloc::string::String;
 
 use crate::error::KernelError;
@@ -1193,6 +1194,28 @@ pub fn copy_from_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
             .copy_from(src, dst)
     )
     .map_err(|e| e.into())
+}
+
+/// Marker for plain-old-data ABI types.
+///
+/// # Safety
+/// Implementors must be `repr(C)`, valid for any bit pattern, and contain no padding bytes.
+pub unsafe trait Pod: Copy + Default {}
+
+/// Copies a struct from kernel to user space.
+pub fn copy_struct_to_user<T: Pod>(src: &T, dst: VA) -> Result<(), KernelError> {
+    // Safety: Pod implementors are safe to reconstruct.
+    let slice = unsafe { slice::from_raw_parts(src as *const T as *const u8, size_of::<T>()) };
+    log!(copy_to_user(slice, dst))
+}
+
+/// Copies a struct from user to kernel space.
+pub fn copy_struct_from_user<T: Pod>(src: VA) -> Result<T, KernelError> {
+    let mut dst = T::default();
+    // Safety: Pod implementors are safe to reconstruct.
+    let slice = unsafe { slice::from_raw_parts_mut(&mut dst as *mut T as *mut u8, size_of::<T>()) };
+    try_log!(copy_from_user(src, slice));
+    Ok(dst)
 }
 
 /// Initializes the process table.

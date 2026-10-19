@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 
 use crate::net::udp::UdpSocket;
 use crate::net::{Ipv4Addr, NetError};
-use crate::proc::{self, Channel};
+use crate::proc::{self, Channel, Pod};
 use crate::spinlock::SpinLock;
 
 const MAX_RECV_QUEUE_DEPTH: usize = 8;
@@ -63,6 +63,9 @@ pub struct RawSockAddr {
     pub port: u16,
     pub addr: [u8; 4],
 }
+
+// Safety: RawSockAddr is repr(C), with no padding, and with primitive types.
+unsafe impl Pod for RawSockAddr {}
 
 impl From<SockAddr> for RawSockAddr {
     fn from(value: SockAddr) -> Self {
