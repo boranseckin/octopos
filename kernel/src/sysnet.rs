@@ -1,7 +1,7 @@
-use alloc::vec;
+use alloc::{slice, vec};
 
+use crate::abi::{RawSockAddr, SocketType};
 use crate::file::{FILE_TABLE, File, FileType};
-use crate::net::Ipv4Addr;
 use crate::net::socket::{SockAddr, Socket};
 use crate::net::udp::MAX_UDP_PAYLOAD;
 use crate::proc::{self, copy_from_user};
@@ -22,8 +22,9 @@ fn file_socket(file: &File) -> Result<Socket, SysError> {
 ///
 /// # Arguments
 ///
-/// - `a0` (`u16`): port number to bind. Pass `0` to auto-assign an ephemeral port in the
-///   range `[49152, 65535)`.
+/// - `a0` (`SocketType`): type of socket.
+/// - `a1` (`*const RawSockAddr`): address and port of socket. 0.0.0.0:0 is wildcard IP, ephemeral
+///   port/ident.
 ///
 /// # Returns
 ///
@@ -31,39 +32,64 @@ fn file_socket(file: &File) -> Result<Socket, SysError> {
 ///
 /// # Errors
 ///
-/// - `InvalidArgument`: port value does not fit in a `u16`.
+/// - `InvalidArgument`: the socket type or the address family is wrong.
 /// - `AlreadyExists`: the requested port is already bound by another socket.
-/// - `ResourceUnavailable`: no free ephemeral ports (only when `a0 == 0`).
+/// - `ResourceUnavailable`: no free ephemeral ports (only when `a1 == null`).
 /// - `FileTableFull`: the system-wide file or socket table is full.
 /// - `TooManyFiles`: the calling process has no free file descriptor slots.
 pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
-    let Ok(port) = u16::try_from(args.get_int(0)) else {
+    let Ok(socket_type) = usize::try_from(args.get_int(0)) else {
         err!(SysError::InvalidArgument)
     };
 
-    let socket = try_log!(Socket::open_udp(Ipv4Addr::UNSPECIFIED, port).map_err(SysError::from));
-
-    // allocate a file structure and a file descriptor
-    let (fd, file) = match log!(File::alloc()) {
-        Ok(mut file) => match log!(fd_alloc(file.clone())) {
-            Ok(fd) => (fd, file),
-            Err(e) => {
-                file.close();
-                socket.close();
-                return Err(e);
-            }
-        },
-        Err(e) => {
-            socket.close();
-            return Err(SysError::from(e));
-        }
+    let Ok(socket_type) = SocketType::try_from(socket_type) else {
+        err!(SysError::InvalidArgument)
     };
 
-    // set file type; writeable/readable stays as false.
-    let mut inner = FILE_TABLE.inner[file.id].lock();
-    inner.r#type = FileType::Socket { socket };
+    match socket_type {
+        SocketType::Udp => {
+            let raw_addr_va = args.get_addr(1);
+            let mut raw_addr = RawSockAddr::default();
 
-    Ok(fd)
+            // # Safety: RawSockAddr is repr(C).
+            let dst = unsafe {
+                slice::from_raw_parts_mut(
+                    &mut raw_addr as *mut RawSockAddr as *mut u8,
+                    size_of::<RawSockAddr>(),
+                )
+            };
+            try_log!(proc::copy_from_user(raw_addr_va, dst).map_err(|_| SysError::BadAddress));
+
+            let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
+
+            let SockAddr::Inet { ip, port } = addr;
+            let socket = try_log!(Socket::open_udp(ip, port).map_err(SysError::from));
+
+            // allocate a file structure and a file descriptor
+            let (fd, file) = match log!(File::alloc()) {
+                Ok(mut file) => match log!(fd_alloc(file.clone())) {
+                    Ok(fd) => (fd, file),
+                    Err(e) => {
+                        file.close();
+                        socket.close();
+                        return Err(e);
+                    }
+                },
+                Err(e) => {
+                    socket.close();
+                    return Err(SysError::from(e));
+                }
+            };
+
+            // set file type; writeable/readable stays as false.
+            let mut inner = FILE_TABLE.inner[file.id].lock();
+            inner.r#type = FileType::Socket { socket };
+
+            Ok(fd)
+        }
+
+        SocketType::Ping => todo!(),
+    }
 }
 
 /// Sends a UDP datagram to the specified destination.
@@ -73,8 +99,7 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
 /// - `a0` (`Fd`): socket file descriptor.
 /// - `a1` (`*const u8`): pointer to the payload buffer.
 /// - `a2` (`usize`): payload length in bytes. Must not exceed `MAX_UDP_PAYLOAD`.
-/// - `a3` (`*const [u8; 4]`): pointer to the destination IPv4 address in network byte order.
-/// - `a4` (`u16`): destination port number in host byte order.
+/// - `a3` (`*const RawSockAddr`): pointer to the destination socket address.
 ///
 /// # Returns
 ///
@@ -97,32 +122,27 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
     if buf_len > MAX_UDP_PAYLOAD {
         err!(SysError::MessageTooLarge)
     }
-    let dest_ip_ptr = args.get_addr(3);
-    let Ok(dest_port) = u16::try_from(args.get_int(4)) else {
-        err!(SysError::InvalidArgument)
-    };
 
     let socket = try_log!(file_socket(&file));
 
-    // copy IP in the network order
-    let mut dest_ip = [0u8; 4];
-    if log!(copy_from_user(dest_ip_ptr, &mut dest_ip)).is_err() {
-        err!(SysError::BadAddress)
-    }
-    let dest_ip = Ipv4Addr(dest_ip);
+    let raw_addr_va = args.get_addr(3);
+    let mut raw_addr = RawSockAddr::default();
+    // # Safety: RawSockAddr is repr(C).
+    let dst = unsafe {
+        slice::from_raw_parts_mut(
+            &mut raw_addr as *mut RawSockAddr as *mut u8,
+            size_of::<RawSockAddr>(),
+        )
+    };
+    try_log!(proc::copy_from_user(raw_addr_va, dst).map_err(|_| SysError::BadAddress));
+    let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
 
     let mut payload = vec![0u8; buf_len];
     if log!(copy_from_user(buf_addr, &mut payload)).is_err() {
         err!(SysError::BadAddress)
     }
 
-    try_log!(socket.send(
-        SockAddr::Inet {
-            ip: dest_ip,
-            port: dest_port,
-        },
-        &payload
-    ));
+    try_log!(socket.send(addr, &payload));
 
     Ok(buf_len)
 }
@@ -135,9 +155,7 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
 /// - `a1` (`*mut u8`): pointer to the receive buffer.
 /// - `a2` (`usize`): receive buffer capacity in bytes. If the datagram is larger, excess bytes
 ///   are silently discarded.
-/// - `a3` (`*mut [u8; 4]`): pointer to a 4-byte output buffer for the source IPv4 address in
-///   network byte order.
-/// - `a4` (`*mut u16`): pointer to a `u16` output for the source port in host byte order.
+/// - `a3` (`*mut RawSockAddr`): pointer to a source socket address.
 ///
 /// # Returns
 ///
@@ -155,17 +173,21 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {
     let (_, file) = try_log!(args.get_file(0));
     let buf_addr = args.get_addr(1);
     let buf_len = args.get_int(2) as usize;
-    let src_ip_ptr = args.get_addr(3);
-    let src_port_ptr = args.get_addr(4);
+    let src_addr_ptr = args.get_addr(3);
 
     let socket = try_log!(file_socket(&file));
 
     let (addr, received) = try_log!(socket.receive());
     let copy_len = received.len().min(buf_len);
-    let SockAddr::Inet { ip, port } = addr;
+    let raw_addr = RawSockAddr::from(addr);
+    let raw_addr_slice = unsafe {
+        slice::from_raw_parts(
+            &raw_addr as *const RawSockAddr as *const u8,
+            size_of::<RawSockAddr>(),
+        )
+    };
 
-    if log!(proc::copy_to_user(&ip.0, src_ip_ptr)).is_err()
-        || log!(proc::copy_to_user(&port.to_ne_bytes(), src_port_ptr)).is_err()
+    if log!(proc::copy_to_user(raw_addr_slice, src_addr_ptr)).is_err()
         || log!(proc::copy_to_user(&received[..copy_len], buf_addr)).is_err()
     {
         err!(SysError::BadAddress)
