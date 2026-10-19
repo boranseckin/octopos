@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
+use crate::net::icmp::PingSocket;
 use crate::net::udp::UdpSocket;
 use crate::net::{Ipv4Addr, NetError};
 use crate::proc::{self, Channel, Pod};
@@ -98,6 +99,7 @@ impl TryFrom<RawSockAddr> for SockAddr {
 #[derive(Debug, Clone)]
 pub enum Socket {
     Udp(Arc<UdpSocket>),
+    Ping(Arc<PingSocket>),
 }
 
 impl Socket {
@@ -105,9 +107,14 @@ impl Socket {
         Ok(Self::Udp(try_log!(UdpSocket::bind(ip, port, None))))
     }
 
+    pub fn open_ping(ident: u16) -> Result<Self, NetError> {
+        Ok(Self::Ping(try_log!(PingSocket::bind(ident))))
+    }
+
     pub fn close(&self) {
         match self {
             Socket::Udp(udp_socket) => udp_socket.close(),
+            Socket::Ping(ping_socket) => ping_socket.close(),
         }
     }
 
@@ -116,6 +123,11 @@ impl Socket {
             Socket::Udp(udp_socket) => SockAddr::Inet {
                 ip: udp_socket.bound_ip,
                 port: udp_socket.bound_port,
+            },
+
+            Socket::Ping(ping_socket) => SockAddr::Inet {
+                ip: Ipv4Addr::UNSPECIFIED,
+                port: ping_socket.ident,
             },
         }
     }
@@ -126,6 +138,11 @@ impl Socket {
                 let SockAddr::Inet { ip, port } = remote_addr;
                 udp_socket.send(ip, port, buf)
             }
+
+            Socket::Ping(ping_socket) => {
+                let SockAddr::Inet { ip, port: _ } = remote_addr;
+                ping_socket.send(ip, buf)
+            }
         }
     }
 
@@ -135,6 +152,8 @@ impl Socket {
                 let (ip, port, buf) = try_log!(udp_socket.receive());
                 Ok((SockAddr::Inet { ip, port }, buf))
             }
+
+            Socket::Ping(ping_socket) => log!(ping_socket.receive()),
         }
     }
 }
