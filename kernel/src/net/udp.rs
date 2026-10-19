@@ -282,13 +282,12 @@ impl UdpTable {
 
     /// Removes a socket from the table.
     fn remove(&mut self, socket: &Arc<UdpSocket>) {
-        if let Some(id) = self
+        if let Some(entry) = self
             .entries
-            .iter()
-            .flatten()
-            .position(|e| Arc::ptr_eq(e, socket))
+            .iter_mut()
+            .find(|e| e.as_ref().is_some_and(|s| Arc::ptr_eq(s, socket)))
         {
-            self.entries[id] = None;
+            *entry = None;
         }
     }
 }
