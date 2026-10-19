@@ -148,23 +148,56 @@ pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry, NetError> {
 
 /// Prints the current routing table for debugging purposes.
 pub fn dump() {
+    // header and rows share one format string so the columns always line up.
+    // widths fit the longest value of each column, e.g. "255.255.255.255/32" and "kernel".
+    macro_rules! row {
+        ($dest:expr, $gateway:expr, $dev:expr, $metric:expr, $proto:expr, $scope:expr, $src:expr) => {
+            println!(
+                "{:<18} {:<15} {:<6} {:<6} {:<6} {:<6} {}",
+                $dest, $gateway, $dev, $metric, $proto, $scope, $src
+            )
+        };
+    }
+
     let mut routes = ROUTES.lock().clone();
-    routes.sort_by_key(route_sort_key);
+    routes.sort_by_key(|r| core::cmp::Reverse(route_sort_key(r)));
 
     println!("");
+    row!(
+        "DESTINATION",
+        "GATEWAY",
+        "DEVICE",
+        "METRIC",
+        "PROTO",
+        "SCOPE",
+        "SOURCE"
+    );
+
     for route in routes.iter() {
-        let interface = interface::find_interface_by_id(route.interface_id).unwrap();
-        let src = net::source_addr(route, &interface).map_or("-".to_string(), |s| s.to_string());
+        let interface = interface::find_interface_by_id(route.interface_id);
+        let device = interface.as_ref().map_or("-", |i| i.config.name);
+        let src = interface
+            .as_ref()
+            .and_then(|i| net::source_addr(route, i))
+            .map_or("-".to_string(), |s| s.to_string());
 
         let dest = format!("{}/{}", route.dest_ip, route.prefix_len);
         let gateway = route
             .gateway
             .map_or("direct".to_string(), |gw| gw.to_string());
-        let owner = route.owner.to_string();
+        let owner = match route.owner {
+            RouteOwner::Interface | RouteOwner::Local(_) => "kernel",
+            RouteOwner::Dhcp => "dhcp",
+            RouteOwner::_Static => "static",
+        };
+        let scope = if matches!(route.owner, RouteOwner::Local(_)) {
+            "host"
+        } else if route.gateway.is_some() {
+            "global"
+        } else {
+            "link"
+        };
 
-        println!(
-            "{:<18} via {:<15} dev {:<8} metric {:<5} owner {:<10} src {}",
-            dest, gateway, interface.config.name, route.metric, owner, src,
-        );
+        row!(dest, gateway, device, route.metric, owner, scope, src);
     }
 }
