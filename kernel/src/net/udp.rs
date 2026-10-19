@@ -416,17 +416,13 @@ pub fn handle_udp(
     let payload_len = udp_len.saturating_sub(UdpHeader::SIZE);
     let req_data = &req_data[..payload_len.min(req_data.len())];
 
-    let socket = {
-        let Some(socket) =
-            UDP_TABLE
-                .lock()
-                .ingress_lookup(dest_ip, req_udp.dest_port.get(), Some(interface_id))
-        else {
-            // no socket is bound to this (ip, port), drop it
-            return Ok(());
-        };
-
-        socket.clone()
+    let Some(socket) =
+        UDP_TABLE
+            .lock()
+            .ingress_lookup(dest_ip, req_udp.dest_port.get(), Some(interface_id))
+    else {
+        // no socket is bound to this (ip, port), drop it
+        return Ok(());
     };
 
     // do not return here if the queue is full, might as well wakeup the proc so that they can
