@@ -572,6 +572,7 @@ impl DhcpState {
                         interface_id,
                         metric: 100, // default metric for DHCP routes, higher than other routes
                         owner: RouteOwner::Dhcp,
+                        pref_src: None,
                     });
                 }
 

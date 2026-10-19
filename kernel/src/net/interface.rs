@@ -6,8 +6,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::net::dhcp;
-use crate::net::route::{self, RouteEntry, RouteOwner};
-use crate::net::{Ipv4Addr, Ipv4Config, MacAddr, NetError};
+use crate::net::route;
+use crate::net::{Ipv4Config, MacAddr, NetError};
 use crate::proc;
 use crate::spinlock::SpinLock;
 
@@ -72,15 +72,7 @@ pub fn register_interface(config: InterfaceConfig, device: Arc<dyn NetDevice>) -
     let id = InterfaceId::next_interface_id();
 
     if let Some(ipv4) = config.ipv4 {
-        route::upsert_route(RouteEntry {
-            dest_ip: ipv4.addr
-                & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
-            prefix_len: ipv4.prefix_len,
-            gateway: None,
-            interface_id: id,
-            metric: 10,
-            owner: RouteOwner::Interface,
-        });
+        route::replace_interface_route(id, ipv4);
     };
 
     let needs_dhcp = device.needs_dhcp();

@@ -464,6 +464,11 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
     !(sum as u16)
 }
 
+/// Source address for a packet sent via `route` on `interface`.
+pub fn source_addr(route: &RouteEntry, interface: &InterfaceEntry) -> Option<Ipv4Addr> {
+    route.pref_src.or(interface.config.ipv4.map(|c| c.addr))
+}
+
 /// Transmits a packet after looking up the best route for the destination IP address, and passing
 /// it to the corresponding interface.
 /// Packets are passed as a list of segments that will be concatenated together.
@@ -493,14 +498,14 @@ pub fn transmit_with_route(
     segments: &[&[u8]],
 ) -> Result<(), NetError> {
     let src_mac = interface.config.mac;
-    let Some(src_ipv4) = interface.config.ipv4 else {
+    let Some(src_ipv4) = source_addr(&route, &interface) else {
         err!(NetError::NotConfigured);
     };
 
     let payload_len = segments.iter().fold(0, |acc, &s| acc + s.len());
 
     let eth = EthernetHeader::new(MacAddr::UNSPECIFIED, src_mac, EtherType::Ipv4);
-    let ipv4 = Ipv4Header::new(src_ipv4.addr, dest_ip, proto, payload_len).add_checksum();
+    let ipv4 = Ipv4Header::new(src_ipv4, dest_ip, proto, payload_len).add_checksum();
 
     let mut packet = Vec::with_capacity(EthernetHeader::SIZE + ipv4.len() as usize);
 

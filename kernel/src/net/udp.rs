@@ -4,9 +4,9 @@ use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::Ipv4Proto;
-use crate::net::route;
 use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
+use crate::net::{route, source_addr};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
 
@@ -326,15 +326,12 @@ fn transmit_udp(
         err!(NetError::NotConfigured);
     };
 
-    let Some(src_ipv4) = interface.config.ipv4 else {
+    let Some(src_ipv4) = source_addr(&route, &interface) else {
         err!(NetError::NotConfigured);
     };
 
-    let header = UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(
-        src_ipv4.addr,
-        dest_ip,
-        payload,
-    );
+    let header =
+        UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(src_ipv4, dest_ip, payload);
 
     log!(net::transmit_with_route(
         route,
