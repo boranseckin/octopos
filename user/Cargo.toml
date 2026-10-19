@@ -121,6 +121,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "ping"
+path = "bin/ping.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "demo"
 path = "bin/demo.rs"
 test = false
