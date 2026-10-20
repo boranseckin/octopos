@@ -362,7 +362,9 @@ pub unsafe fn init() {
     state.set_mask(E1000_MMIO_TIPG, (10) | (8 << 10) | (6 << 20));
 
     // register the network interface with the network stack
-    let interface_id = interface::register_interface(
+    let interface_id = InterfaceId::next_interface_id();
+    interface::register_interface(
+        interface_id,
         InterfaceConfig {
             name: "e1000",
             mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
