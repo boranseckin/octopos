@@ -71,6 +71,10 @@ impl PingSocket {
     fn deliver(&self, from: SockAddr, payload: &[u8]) {
         self.queue.deliver(from, Box::from(payload));
     }
+
+    pub fn set_receive_timeout(&self, ticks: usize) {
+        self.queue.set_timeout(ticks);
+    }
 }
 
 struct PingTable {

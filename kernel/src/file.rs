@@ -282,14 +282,19 @@ impl File {
             }
             FileType::Device { .. } => err!(SysError::NotImplemented),
 
-            FileType::Socket { socket } => {
-                if cmd == Ioctl::SOCKET_GET_PORT {
+            FileType::Socket { socket } => match cmd {
+                Ioctl::SOCKET_GET_PORT => {
                     let SockAddr::Inet { port, .. } = socket.local_addr();
                     Ok(port as usize)
-                } else {
-                    err!(SysError::NotImplemented)
                 }
-            }
+
+                Ioctl::SOCKET_SET_RECV_TIMEOUT => {
+                    socket.set_receive_timeout(arg);
+                    Ok(0)
+                }
+
+                _ => err!(SysError::NotImplemented),
+            },
 
             _ => err!(SysError::BadDescriptor),
         }
@@ -322,6 +327,7 @@ impl Ioctl {
     pub const CONSOLE_SET_FG_PID: usize = 2;
 
     pub const SOCKET_GET_PORT: usize = 3;
+    pub const SOCKET_SET_RECV_TIMEOUT: usize = 4;
 }
 
 /// Console device major number

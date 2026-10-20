@@ -1108,6 +1108,7 @@ pub unsafe fn kernel_thread_entry() {
 }
 
 /// Like `sleep`, but also wakes once `TICKS >= deadline`.
+/// Caller should still check for condition and deadline, after being woken up.
 pub fn sleep_until<T>(
     channel: Channel,
     deadline: Option<usize>,
