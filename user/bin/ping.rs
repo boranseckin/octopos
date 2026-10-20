@@ -61,6 +61,7 @@ fn main(args: Args) {
     };
 
     let fd = socket(SocketType::Ping, SockAddr::any_inet()).expect("socket open");
+    ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, 10).expect("socket timeout to set");
 
     for seq in 0..count {
         let msg = echo_request(seq, uptime() as u64);
@@ -69,7 +70,15 @@ fn main(args: Args) {
         // skip stale replies to earlier requests until ours arrives
         let mut buf = [0u8; 64];
         loop {
-            let (len, src) = receive(fd, &mut buf).expect("socket receive");
+            let (len, src) = match receive(fd, &mut buf) {
+                Ok(res) => res,
+                Err(SysError::TimedOut) => {
+                    println!("request timeout for seq={}", seq);
+                    break;
+                }
+                Err(e) => panic!("{e}"),
+            };
+
             let SockAddr::Inet { ip, .. } = src;
 
             match parse_echo_reply(&buf[..len]) {

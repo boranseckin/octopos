@@ -44,6 +44,7 @@ pub enum NetError {
     ResourceUnavailable,
     InterfaceNotFound,
     ChecksumFailed,
+    TimedOut,
 }
 
 impl core::fmt::Display for NetError {
@@ -64,6 +65,7 @@ impl core::fmt::Display for NetError {
             NetError::ResourceUnavailable => write!(f, "resource unavailable"),
             NetError::InterfaceNotFound => write!(f, "interface not found"),
             NetError::ChecksumFailed => write!(f, "checksum verification failed"),
+            NetError::TimedOut => write!(f, "timed out"),
         }
     }
 }

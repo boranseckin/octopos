@@ -70,6 +70,10 @@ impl UdpSocket {
         let addr = SockAddr::Inet { ip, port };
         self.queue.deliver(addr, payload);
     }
+
+    pub fn set_receive_timeout(&self, ticks: usize) {
+        self.queue.set_timeout(ticks);
+    }
 }
 
 /// Global socket table, protected by a spinlock.

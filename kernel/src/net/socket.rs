@@ -7,6 +7,7 @@ use crate::net::udp::UdpSocket;
 use crate::net::{Ipv4Addr, NetError};
 use crate::proc::{self, Channel, Pod};
 use crate::spinlock::SpinLock;
+use crate::trap::TICKS;
 
 const MAX_RECV_QUEUE_DEPTH: usize = 8;
 
@@ -118,6 +119,13 @@ impl Socket {
         }
     }
 
+    pub fn set_receive_timeout(&self, ticks: usize) {
+        match self {
+            Socket::Udp(udp_socket) => udp_socket.set_receive_timeout(ticks),
+            Socket::Ping(ping_socket) => ping_socket.set_receive_timeout(ticks),
+        }
+    }
+
     pub fn local_addr(&self) -> SockAddr {
         match self {
             Socket::Udp(udp_socket) => SockAddr::Inet {
@@ -167,6 +175,8 @@ pub struct RecvQueue {
 struct RecvQueueInner {
     entries: VecDeque<(SockAddr, Box<[u8]>)>, // bound by MAX_RECV_QUEUE_DEPTH
     closed: bool,
+    /// Receive timeout in ticks. 0 = block forever.
+    timeout: usize,
 }
 
 impl RecvQueue {
@@ -177,10 +187,15 @@ impl RecvQueue {
                 RecvQueueInner {
                     entries: VecDeque::with_capacity(MAX_RECV_QUEUE_DEPTH),
                     closed: false,
+                    timeout: 0,
                 },
                 "recv_queue",
             ),
         }
+    }
+
+    pub fn set_timeout(&self, ticks: usize) {
+        self.inner.lock().timeout = ticks;
     }
 
     /// Delivers a packet to the RecvQueue.
@@ -200,6 +215,11 @@ impl RecvQueue {
     /// Receives a packet from the RecvQueue.
     /// Sleeps until a packet arrives, the socket is closed, or the process is killed.
     pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
+        let deadline = match self.inner.lock().timeout {
+            0 => None,
+            timeout => Some(TICKS.lock().saturating_add(timeout)),
+        };
+
         loop {
             if proc::current_proc().is_killed() {
                 err!(NetError::Interrupted)
@@ -214,7 +234,11 @@ impl RecvQueue {
                 return Ok(entry);
             }
 
-            inner = proc::sleep(self.channel(), inner);
+            if deadline.is_some_and(|d| d < *TICKS.lock()) {
+                err!(NetError::TimedOut)
+            }
+
+            inner = proc::sleep_until(self.channel(), deadline, inner);
         }
     }
 
