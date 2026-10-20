@@ -199,6 +199,34 @@ fn test_reject_invalid_messages() {
     close(fd).expect("close");
 }
 
+/// Ping sockets share the receive queue with UDP, so the timeout applies to them too.
+fn test_receive_timeout() {
+    const TIMEOUT: usize = 3;
+
+    let (fd, _) = open_ping(0).expect("socket open");
+    ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, TIMEOUT).expect("ioctl set receive timeout");
+
+    let start = uptime();
+    let mut buf = [0u8; 64];
+    assert_eq!(
+        receive(fd, &mut buf).map(|(n, _)| n),
+        Err(SysError::TimedOut),
+        "receive with no request sent must time out"
+    );
+    assert!(
+        uptime() - start >= TIMEOUT,
+        "receive must not time out before the deadline"
+    );
+
+    // a reply still arrives before the timeout
+    let mut request = [0u8; 64];
+    let len = echo_request(&mut request, 0, 9, 0, PAYLOAD);
+    send(fd, &request[..len], SockAddr::inet(Ipv4Addr::LOOPBACK, 0)).expect("send");
+    receive(fd, &mut buf).expect("reply must arrive before the timeout");
+
+    close(fd).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_echo_round_trip();
@@ -207,4 +235,5 @@ fn main(_args: Args) {
     test_ephemeral_ident();
     test_duplicate_ident();
     test_reject_invalid_messages();
+    test_receive_timeout();
 }

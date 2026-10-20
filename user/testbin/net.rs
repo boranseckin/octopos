@@ -131,6 +131,101 @@ fn test_add_remove_multiple() {
     close(fd3).expect("close");
 }
 
+/// Opens a UDP socket on an ephemeral port and returns it with its port.
+fn open_udp() -> (Fd, u16) {
+    let fd = socket(SocketType::Udp, SockAddr::any_inet()).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+    (fd, port)
+}
+
+fn set_receive_timeout(fd: Fd, ticks: usize) {
+    ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, ticks).expect("ioctl set receive timeout");
+}
+
+/// With nothing to receive, receive() gives up after the timeout, and not before it.
+fn test_receive_timeout() {
+    const TIMEOUT: usize = 3;
+
+    let (fd, _) = open_udp();
+    set_receive_timeout(fd, TIMEOUT);
+
+    let start = uptime();
+    let mut buf = [0u8; 64];
+    assert_eq!(
+        receive(fd, &mut buf).map(|(n, _)| n),
+        Err(SysError::TimedOut),
+        "receive with nothing queued must time out"
+    );
+    assert!(
+        uptime() - start >= TIMEOUT,
+        "receive must not time out before the deadline"
+    );
+
+    close(fd).expect("close");
+}
+
+/// The deadline is computed per call, so a second receive waits the full timeout again.
+fn test_receive_timeout_per_call() {
+    const TIMEOUT: usize = 2;
+
+    let (fd, _) = open_udp();
+    set_receive_timeout(fd, TIMEOUT);
+
+    let mut buf = [0u8; 64];
+    for _ in 0..2 {
+        let start = uptime();
+        assert_eq!(
+            receive(fd, &mut buf).map(|(n, _)| n),
+            Err(SysError::TimedOut),
+            "receive with nothing queued must time out"
+        );
+        assert!(
+            uptime() - start >= TIMEOUT,
+            "each receive must wait the full timeout"
+        );
+    }
+
+    close(fd).expect("close");
+}
+
+/// A queued datagram is returned well before a long timeout expires.
+fn test_receive_before_timeout() {
+    const TIMEOUT: usize = 50;
+
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, TIMEOUT);
+
+    let payload = b"octopos UDP timeout test";
+    send(fd, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+    let start = uptime();
+    let mut buf = [0u8; 64];
+    let (n, _) = receive(fd, &mut buf).expect("receive must not time out");
+    assert_eq!(&buf[..n], payload, "payload mismatch");
+    assert!(
+        uptime() - start < TIMEOUT,
+        "receive must return as soon as the datagram arrives"
+    );
+
+    close(fd).expect("close");
+}
+
+/// Setting the timeout back to 0 restores blocking receive, which still delivers datagrams.
+fn test_receive_timeout_cleared() {
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, 2);
+    set_receive_timeout(fd, 0);
+
+    let payload = b"octopos UDP blocking test";
+    send(fd, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+    let mut buf = [0u8; 64];
+    let (n, _) = receive(fd, &mut buf).expect("blocking receive");
+    assert_eq!(&buf[..n], payload, "payload mismatch");
+
+    close(fd).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -140,4 +235,8 @@ fn main(_args: Args) {
     test_echo_round_trip();
     test_receive_truncation();
     test_add_remove_multiple();
+    test_receive_timeout();
+    test_receive_timeout_per_call();
+    test_receive_before_timeout();
+    test_receive_timeout_cleared();
 }
