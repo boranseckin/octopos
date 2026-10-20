@@ -336,6 +336,8 @@ pub struct ProcInner {
     pub state: ProcState,
     /// If Some, sleeping on chan
     pub channel: Option<Channel>,
+    /// If Some, a sleeping proc becomes runnable once TICKS reaches this value.
+    pub wake_at: Option<usize>,
     /// If true, have been killed
     pub killed: bool,
     /// Exit status to be returned to parent's wait
@@ -349,6 +351,7 @@ impl ProcInner {
         Self {
             state: ProcState::Unused,
             channel: None,
+            wake_at: None,
             killed: false,
             xstate: 0,
             pid: Pid(0),
@@ -1104,9 +1107,12 @@ pub unsafe fn kernel_thread_entry() {
     exit(0);
 }
 
-/// Atomically releases a condition's lock and sleeps on channel.
-/// Reacquires the condition's lock when awakened.
-pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
+/// Like `sleep`, but also wakes once `TICKS >= deadline`.
+pub fn sleep_until<T>(
+    channel: Channel,
+    deadline: Option<usize>,
+    condition_lock: SpinLockGuard<'_, T>,
+) -> SpinLockGuard<'_, T> {
     // To make sure the condition is not resolved before we sleep, we acquire proc's lock before
     // unlocking the condition's lock. `wakeup()` must also acquire proc's lock to resolve the
     // condition, which it cannot do before we release it.
@@ -1119,6 +1125,7 @@ pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinL
 
         // go to sleep.
         inner.channel = Some(channel);
+        inner.wake_at = deadline;
         inner.state = ProcState::Sleeping;
 
         // this is where we switch to scheduler (to another proc).
@@ -1128,15 +1135,21 @@ pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinL
         // this is where we switch back to the original proc.
 
         inner.channel = None;
+        inner.wake_at = None;
     } // drop inner lock
 
     // reacquire original lock.
     condition_mutex.lock()
 }
 
-/// Wakes up all processes sleeping on channel.
-/// Must be called without any proc lock.
-pub fn wakeup(channel: Channel) {
+/// Atomically releases a condition's lock and sleeps on channel.
+/// Reacquires the condition's lock when awakened.
+pub fn sleep<T>(channel: Channel, condition_lock: SpinLockGuard<'_, T>) -> SpinLockGuard<'_, T> {
+    sleep_until(channel, None, condition_lock)
+}
+
+/// Wakes every sleeping proc (other than the caller) if `should_wake` returns true.
+fn wakeup_when(should_wake: impl Fn(&ProcInner) -> bool) {
     // do not unwrap current proc here, since it might not exist if it is called from the
     // scheduler's context.
     let current_proc = current_proc_opt();
@@ -1147,10 +1160,22 @@ pub fn wakeup(channel: Channel) {
         }
 
         let mut inner = proc.inner.lock();
-        if inner.state == ProcState::Sleeping && inner.channel == Some(channel) {
+        if inner.state == ProcState::Sleeping && should_wake(&inner) {
             inner.state = ProcState::Runnable;
         }
     }
+}
+
+/// Wakes up all processes sleeping on channel.
+/// Must be called without any proc lock.
+pub fn wakeup(channel: Channel) {
+    wakeup_when(|p| p.channel == Some(channel));
+}
+
+/// Called once per tick. Wakes procs sleeping on Ticks channel, or has a wake_at condition and the
+/// time has passed.
+pub fn wakeup_ticks(now: usize) {
+    wakeup_when(|p| p.channel == Some(Channel::Ticks) || p.wake_at.is_some_and(|t| t <= now));
 }
 
 /// Kills the process with the given pid.
