@@ -3,7 +3,7 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use crate::net::interface::{self, InterfaceId};
-use crate::net::{self, Ipv4Addr, Ipv4Config, NetError};
+use crate::net::{self, Ipv4Addr, Ipv4Config, NetError, loopback};
 use crate::spinlock::SpinLock;
 
 /// Owner of a route entry, used for tracking which component added the route.
@@ -107,7 +107,7 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
         dest_ip: ipv4.addr,
         prefix_len: 32,
         gateway: None,
-        interface_id: InterfaceId(0),
+        interface_id: loopback::interface_id(),
         metric: 0,
         owner: RouteOwner::Local(interface_id),
         pref_src: Some(ipv4.addr),

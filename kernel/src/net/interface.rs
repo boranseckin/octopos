@@ -67,10 +67,8 @@ pub struct InterfaceEntry {
 
 static INTERFACES: SpinLock<Vec<InterfaceEntry>> = SpinLock::new(Vec::new(), "net_interfaces");
 
-/// Registers a network interface with the network stack and returns its assigned `InterfaceId.
-pub fn register_interface(config: InterfaceConfig, device: Arc<dyn NetDevice>) -> InterfaceId {
-    let id = InterfaceId::next_interface_id();
-
+/// Registers a network interface with the given id and the network stack.
+pub fn register_interface(id: InterfaceId, config: InterfaceConfig, device: Arc<dyn NetDevice>) {
     if let Some(ipv4) = config.ipv4 {
         route::replace_interface_route(id, ipv4);
     };
@@ -86,8 +84,6 @@ pub fn register_interface(config: InterfaceConfig, device: Arc<dyn NetDevice>) -
         let thread_name = format!("dhcp-{}", name);
         proc::spawn_kernel_thread(move || dhcp::dhcp_thread(id), &thread_name);
     }
-
-    id
 }
 
 /// Sets the IPv4 configuration for a network interface, replacing any existing configuration.

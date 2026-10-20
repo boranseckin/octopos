@@ -5,22 +5,20 @@ use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
 use crate::net::{self, Ipv4Addr, Ipv4Config, MacAddr, NetError};
 use crate::sync::OnceLock;
 
+static LOOPBACK_ID: OnceLock<InterfaceId> = OnceLock::new();
+
+pub fn interface_id() -> InterfaceId {
+    *LOOPBACK_ID.get().expect("loopback to be setup")
+}
+
 /// A loopback network interface that allows the kernel to send packets to itself, bypassing the
 /// physical layer.
-struct LoopbackInterface {
-    interface_id: OnceLock<InterfaceId>,
-}
+struct LoopbackInterface {}
 
 impl NetDevice for LoopbackInterface {
     fn transmit(&self, packet: &[u8]) -> Result<(), NetError> {
         // directly enqueue the packet for reception
-        log!(net::enqueue_incoming(
-            *self
-                .interface_id
-                .get()
-                .expect("loopback interface ID not set"),
-            Box::from(packet)
-        ))
+        log!(net::enqueue_incoming(interface_id(), Box::from(packet)))
     }
 
     fn needs_arp(&self) -> bool {
@@ -35,11 +33,14 @@ impl NetDevice for LoopbackInterface {
 }
 
 pub fn init() {
-    let device = Arc::new(LoopbackInterface {
-        interface_id: OnceLock::new(),
-    });
+    let device = Arc::new(LoopbackInterface {});
 
-    let interface_id = interface::register_interface(
+    let id = InterfaceId::next_interface_id();
+
+    LOOPBACK_ID.initialize(|| Ok::<_, ()>(id));
+
+    interface::register_interface(
+        id,
         InterfaceConfig {
             name: "lo",
             mac: MacAddr::UNSPECIFIED,
@@ -49,8 +50,6 @@ pub fn init() {
             }),
             is_up: true,
         },
-        device.clone(),
+        device,
     );
-
-    device.interface_id.initialize(|| Ok::<_, ()>(interface_id));
 }
