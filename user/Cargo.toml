@@ -114,6 +114,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "ip"
+path = "bin/ip.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "udp"
 path = "bin/udp.rs"
 test = false
