@@ -1,7 +1,7 @@
-pub mod raw {
+mod raw {
     use core::arch::asm;
 
-    use kernel::abi::{RawRoute, RawSockAddr, RouteOp, Stat, Syscall};
+    use kernel::abi::{InterfaceOp, RawInterface, RawRoute, RawSockAddr, RouteOp, Stat, Syscall};
 
     #[inline(always)]
     fn syscall0(syscall: Syscall) -> isize {
@@ -180,6 +180,24 @@ pub mod raw {
         syscall4(Syscall::Receive, fd, buf as usize, len, src_addr as usize)
     }
 
+    pub fn interface_get(interface: *mut RawInterface, index: usize) -> isize {
+        syscall3(
+            Syscall::Interface,
+            InterfaceOp::Get as usize,
+            interface as usize,
+            index,
+        )
+    }
+
+    pub fn interface_set_ipv4(interface: *const RawInterface) -> isize {
+        syscall3(
+            Syscall::Interface,
+            InterfaceOp::SetIpv4 as usize,
+            interface as usize,
+            0,
+        )
+    }
+
     pub fn route_get(route: *mut RawRoute, index: usize) -> isize {
         syscall3(Syscall::Route, RouteOp::Get as usize, route as usize, index)
     }
@@ -198,7 +216,8 @@ pub mod raw {
 }
 
 use kernel::abi::{
-    MAXPATH, RawRoute, RawSockAddr, RouteEntry, SockAddr, SocketType, Stat, SysError,
+    InterfaceId, Ipv4Addr, MAXPATH, RawInterface, RawRoute, RawSockAddr, RouteEntry, SockAddr,
+    SocketType, Stat, SysError,
 };
 
 /// A file descriptor returned by or passed to syscalls.
@@ -430,6 +449,31 @@ pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<(usize, SockAddr), SysError> {
     Ok((
         value,
         SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
+    ))
+}
+
+pub fn interface_get(index: usize) -> Result<RawInterface, SysError> {
+    let mut raw_interface = RawInterface::default();
+
+    check_unit(raw::interface_get(
+        &mut raw_interface as *mut RawInterface,
+        index,
+    ))?;
+
+    Ok(raw_interface)
+}
+
+/// Sets the IPv4 address of interface `id`. `0.0.0.0` clears it.
+pub fn interface_set_ipv4(id: InterfaceId, addr: Ipv4Addr, prefix_len: u8) -> Result<(), SysError> {
+    let raw_interface = RawInterface {
+        id: id.0,
+        addr: addr.0,
+        prefix_len,
+        ..Default::default()
+    };
+
+    check_unit(raw::interface_set_ipv4(
+        &raw_interface as *const RawInterface,
     ))
 }
 
