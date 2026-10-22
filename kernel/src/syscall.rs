@@ -156,6 +156,9 @@ impl From<NetError> for SysError {
             NetError::InterfaceNotFound => SysError::NoEntry,
             NetError::ChecksumFailed => SysError::InvalidArgument,
             NetError::TimedOut => SysError::TimedOut,
+            NetError::RouteExists => SysError::AlreadyExists,
+            NetError::GatewayUnreachable => SysError::InvalidArgument,
+            NetError::NotPermitted => SysError::NotPermitted,
         }
     }
 }

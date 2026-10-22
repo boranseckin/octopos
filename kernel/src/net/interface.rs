@@ -102,8 +102,11 @@ pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Config>) -> Result<(
     // drop interfaces lock before add_route
     drop(ifs);
 
+    // replace interfaces ipv4 routes or remove all routes.
     if let Some(ipv4) = ipv4 {
         route::replace_interface_route(id, ipv4);
+    } else {
+        route::remove_interface_routes(id);
     }
 
     Ok(())

@@ -40,11 +40,14 @@ pub enum NetError {
     TransmitFailed,
     Interrupted,
     RouteNotFound,
+    RouteExists,
     PacketTooLarge,
     ResourceUnavailable,
     InterfaceNotFound,
+    GatewayUnreachable,
     ChecksumFailed,
     TimedOut,
+    NotPermitted,
 }
 
 impl core::fmt::Display for NetError {
@@ -61,11 +64,14 @@ impl core::fmt::Display for NetError {
             NetError::TransmitFailed => write!(f, "packet transmission failed"),
             NetError::Interrupted => write!(f, "operation interrupted"),
             NetError::RouteNotFound => write!(f, "route not found"),
+            NetError::RouteExists => write!(f, "route already exists"),
             NetError::PacketTooLarge => write!(f, "packet is too large"),
             NetError::ResourceUnavailable => write!(f, "resource unavailable"),
             NetError::InterfaceNotFound => write!(f, "interface not found"),
+            NetError::GatewayUnreachable => write!(f, "gateway unreachable"),
             NetError::ChecksumFailed => write!(f, "checksum verification failed"),
             NetError::TimedOut => write!(f, "timed out"),
+            NetError::NotPermitted => write!(f, "not permitted"),
         }
     }
 }
@@ -479,7 +485,7 @@ pub fn source_addr(route: &RouteEntry, interface: &InterfaceEntry) -> Option<Ipv
 pub fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
     let route = try_log!(route::best_route_for(dest_ip));
 
-    let Some(interface) = interface::find_interface_by_id(route.interface_id) else {
+    let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::InterfaceNotFound);
     };
 
