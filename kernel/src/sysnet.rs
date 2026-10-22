@@ -5,7 +5,7 @@ use crate::net::interface::{self, InterfaceId, RawInterface};
 use crate::net::route::{self, RawRoute, RouteEntry};
 use crate::net::socket::{RawSockAddr, SockAddr, Socket, SocketType};
 use crate::net::udp::MAX_UDP_PAYLOAD;
-use crate::net::{Ipv4Addr, Ipv4Config};
+use crate::net::{Ipv4Addr, Ipv4Cidr};
 use crate::proc::{self, copy_from_user, copy_struct_from_user, copy_struct_to_user};
 use crate::syscall::{SysError, SyscallArgs};
 use crate::sysfile::fd_alloc;
@@ -230,7 +230,7 @@ pub fn sys_interface(args: &SyscallArgs) -> Result<usize, SysError> {
                 try_log!(copy_struct_from_user(raw_interface_va).map_err(|_| SysError::BadAddress));
 
             let addr = Ipv4Addr::from(raw_interface.addr);
-            let ipv4 = (addr != Ipv4Addr::UNSPECIFIED).then_some(Ipv4Config {
+            let ipv4 = (addr != Ipv4Addr::UNSPECIFIED).then_some(Ipv4Cidr {
                 addr,
                 prefix_len: raw_interface.prefix_len,
             });

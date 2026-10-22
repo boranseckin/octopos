@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
-use crate::net::{self, Ipv4Addr, Ipv4Config, MacAddr, NetError};
+use crate::net::{self, Ipv4Addr, Ipv4Cidr, MacAddr, NetError};
 use crate::sync::OnceLock;
 
 static LOOPBACK_ID: OnceLock<InterfaceId> = OnceLock::new();
@@ -44,7 +44,7 @@ pub fn init() {
         InterfaceConfig {
             name: "lo",
             mac: MacAddr::UNSPECIFIED,
-            ipv4: Some(Ipv4Config {
+            ipv4: Some(Ipv4Cidr {
                 addr: Ipv4Addr([127, 0, 0, 1]),
                 prefix_len: 8,
             }),

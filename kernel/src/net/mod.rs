@@ -241,16 +241,37 @@ impl core::fmt::Display for Ipv4Addr {
     }
 }
 
-/// IPv4 configuration for a network interface.
+/// IPv4 CIDR configuration.
 #[derive(Debug, Clone, Copy)]
-pub struct Ipv4Config {
+pub struct Ipv4Cidr {
     /// IPv4 address
     pub addr: Ipv4Addr,
     /// Number of leading bits in the subnet mask.
     pub prefix_len: u8,
 }
 
-impl core::fmt::Display for Ipv4Config {
+impl core::str::FromStr for Ipv4Cidr {
+    type Err = NetError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (addr, prefix_len) = s.split_once('/').unwrap_or((s, "32"));
+
+        let Ok(prefix_len) = prefix_len.parse() else {
+            err!(NetError::InvalidAddress)
+        };
+
+        if prefix_len > 32 {
+            err!(NetError::InvalidAddress)
+        }
+
+        Ok(Self {
+            addr: try_log!(Ipv4Addr::from_str(addr)),
+            prefix_len,
+        })
+    }
+}
+
+impl core::fmt::Display for Ipv4Cidr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}/{}", self.addr, self.prefix_len)
     }

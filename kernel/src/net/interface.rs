@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use crate::net::dhcp;
 use crate::net::loopback;
 use crate::net::route;
-use crate::net::{Ipv4Addr, Ipv4Config, MacAddr, NetError};
+use crate::net::{Ipv4Addr, Ipv4Cidr, MacAddr, NetError};
 use crate::proc;
 use crate::proc::Pod;
 use crate::spinlock::SpinLock;
@@ -51,7 +51,7 @@ pub struct InterfaceConfig {
     pub mac: MacAddr,
     /// IPv4 configuration, if configured.
     /// If `None`, the interface is not configured and cannot send or receive IP packets.
-    pub ipv4: Option<Ipv4Config>,
+    pub ipv4: Option<Ipv4Cidr>,
     /// Whether the interface is functional or not.
     pub is_up: bool,
 }
@@ -161,7 +161,7 @@ pub fn register_interface(id: InterfaceId, config: InterfaceConfig, device: Arc<
 ///
 /// If `ipv4` is `None`, the interface is marked as not configured and cannot send or receive IP
 /// packets.
-pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Config>) -> Result<(), NetError> {
+pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Cidr>) -> Result<(), NetError> {
     // if address is being set, make sure it has a valid prefix len.
     // /0 would make every destination on-link; not allowed.
     if let Some(c) = ipv4

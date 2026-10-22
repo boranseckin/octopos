@@ -5,7 +5,7 @@ use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::route::{self, RouteEntry, RouteKind, RouteOwner};
 use crate::net::udp::{UdpHeader, UdpSocket};
-use crate::net::{Be, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
+use crate::net::{Be, Ipv4Addr, Ipv4Cidr, MacAddr, NetError, NetworkHeader};
 use crate::rng;
 
 /// Vendor Information "Magic Cookie"
@@ -555,7 +555,7 @@ impl DhcpState {
                 try_log!(
                     interface::set_interface_ipv4(
                         interface_id,
-                        Some(Ipv4Config {
+                        Some(Ipv4Cidr {
                             addr: ack.assigned_ip,
                             prefix_len: Ipv4Addr::mask_to_prefix_len(ack.subnet_mask).unwrap(),
                         }),

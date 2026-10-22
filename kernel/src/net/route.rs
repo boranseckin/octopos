@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::net::interface::{self, InterfaceId};
 use crate::net::loopback;
-use crate::net::{self, Ipv4Addr, Ipv4Config, NetError};
+use crate::net::{self, Ipv4Addr, Ipv4Cidr, NetError};
 use crate::proc::Pod;
 use crate::spinlock::SpinLock;
 
@@ -277,7 +277,7 @@ pub fn remove_interface_routes(interface_id: InterfaceId) {
 
 /// Removes all routes owned by the specified interface and adds a new route for the interface's IP
 /// address and prefix.
-pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Config) {
+pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Cidr) {
     let mut routes = ROUTES.lock();
 
     // Remove any existing kernel owned route for this interface.
