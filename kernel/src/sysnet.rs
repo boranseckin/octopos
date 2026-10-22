@@ -1,6 +1,7 @@
 use alloc::vec;
 
 use crate::file::{FILE_TABLE, File, FileType};
+use crate::net::interface::{self, InterfaceId, RawInterface};
 use crate::net::route::{self, RawRoute, RouteEntry};
 use crate::net::socket::{RawSockAddr, SockAddr, Socket, SocketType};
 use crate::net::udp::MAX_UDP_PAYLOAD;
@@ -170,6 +171,78 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {
     }
 
     Ok(copy_len)
+}
+
+#[repr(usize)]
+pub enum InterfaceOp {
+    Get = 1,
+    SetIpv4 = 2,
+}
+
+impl TryFrom<usize> for InterfaceOp {
+    type Error = SysError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Get),
+            2 => Ok(Self::SetIpv4),
+            _ => err!(SysError::InvalidArgument),
+        }
+    }
+}
+
+/// Reads or configures a network interface.
+///
+/// # Arguments
+///
+/// - `a0` (`InterfaceOp`): operation to perform.
+/// - `a1` (`*mut RawInterface`): pointer to the interface struct. Its direction depends on the
+///   operation.
+/// - `a2` (`usize`): operation-specific argument.
+///
+/// # Operations
+///
+/// - `Get`: writes the interface at index `a2` into `a1`. Indices start at 0 and are contiguous;
+///   iterate until `NoEntry`. The table may change between calls, so a listing can skip or
+///   repeat an entry.
+/// - `SetIpv4`: reads `id`, `addr` and `prefix_len` from `a1` and sets that interface's address.
+///   The kernel replaces its own routes for the interface. An `addr` of 0.0.0.0 clears the address
+///   and removes every route on the interface. The other fields of `a1` are ignored, as is `a2`.
+pub fn sys_interface(args: &SyscallArgs) -> Result<usize, SysError> {
+    let op = try_log!(InterfaceOp::try_from(args.get_int(0) as usize));
+    let raw_interface_va = args.get_addr(1);
+
+    match op {
+        InterfaceOp::Get => {
+            let index = args.get_int(2) as usize;
+
+            let interface = try_log!(interface::interface_at(index));
+            let raw_interface = RawInterface::from(interface);
+
+            try_log!(
+                copy_struct_to_user(&raw_interface, raw_interface_va)
+                    .map_err(|_| SysError::BadAddress)
+            );
+        }
+
+        InterfaceOp::SetIpv4 => {
+            let raw_interface: RawInterface =
+                try_log!(copy_struct_from_user(raw_interface_va).map_err(|_| SysError::BadAddress));
+
+            let addr = Ipv4Addr::from(raw_interface.addr);
+            let ipv4 = (addr != Ipv4Addr::UNSPECIFIED).then_some(Ipv4Config {
+                addr,
+                prefix_len: raw_interface.prefix_len,
+            });
+
+            try_log!(interface::set_interface_ipv4(
+                InterfaceId(raw_interface.id),
+                ipv4
+            ))
+        }
+    }
+
+    Ok(0)
 }
 
 #[repr(usize)]
