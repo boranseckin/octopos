@@ -523,19 +523,21 @@ pub fn transmit_with_route(
     if !interface.device.needs_arp() {
         // packet does not require address resolution, send it.
         log!(interface.device.transmit(&packet))
-    } else if let Some(dest_mac) = ArpCache::lookup(dest_ip) {
-        // packet requires MAC address but we have it cached, fill it and send it.
-        packet[..6].copy_from_slice(&dest_mac.0);
-        log!(interface.device.transmit(&packet))
     } else {
         // if gateway is specified, ARP for the gateway IP instead of the destination IP, since
         // that's the next hop we need to send the packet to.
         let arp_target = route.gateway.unwrap_or(dest_ip);
 
-        // packet requires MAC address and we don't have it, queue the packet and send an ARP
-        // request. once the reply is received, the packet will be sent.
-        try_log!(OutgoingQueue::enqueue(arp_target, interface.device, packet));
-        log!(arp::request(interface.id, arp_target))
+        if let Some(dest_mac) = ArpCache::lookup(arp_target) {
+            // packet requires MAC address but we have it cached, fill it and send it.
+            packet[..6].copy_from_slice(&dest_mac.0);
+            log!(interface.device.transmit(&packet))
+        } else {
+            // packet requires MAC address and we don't have it, queue the packet and send an ARP
+            // request. once the reply is received, the packet will be sent.
+            try_log!(OutgoingQueue::enqueue(arp_target, interface.device, packet));
+            log!(arp::request(interface.id, arp_target))
+        }
     }
 }
 
