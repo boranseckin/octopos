@@ -215,6 +215,8 @@ mod raw {
     }
 }
 
+use core::fmt::Display;
+
 use kernel::abi::{
     InterfaceId, Ipv4Addr, MAXPATH, RawInterface, RawRoute, RawSockAddr, RouteEntry, SockAddr,
     SocketType, Stat, SysError,
@@ -293,7 +295,7 @@ pub fn exit(code: usize) -> ! {
     raw::exit(code)
 }
 
-pub fn exit_with_msg(msg: &str) -> ! {
+pub fn exit_with_msg(msg: impl Display) -> ! {
     eprintln!("{}", msg);
     exit(1);
 }
