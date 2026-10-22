@@ -2,6 +2,8 @@
 pub use crate::file::{CONSOLE, Ioctl, OpenFlag};
 pub use crate::fs::{DIRSIZE, Directory, InodeType, Stat};
 pub use crate::net::Ipv4Addr;
+pub use crate::net::route::{RawRoute, RouteEntry, RouteKind, RouteOwner};
 pub use crate::net::socket::{RawSockAddr, SockAddr, SocketType};
 pub use crate::param::MAXPATH;
 pub use crate::syscall::{SysError, Syscall};
+pub use crate::sysnet::{RouteFlag, RouteOp};

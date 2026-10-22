@@ -1,7 +1,7 @@
 pub mod raw {
     use core::arch::asm;
 
-    use kernel::abi::{RawSockAddr, Stat, Syscall};
+    use kernel::abi::{RawRoute, RawSockAddr, RouteOp, Stat, Syscall};
 
     #[inline(always)]
     fn syscall0(syscall: Syscall) -> isize {
@@ -180,12 +180,26 @@ pub mod raw {
         syscall4(Syscall::Receive, fd, buf as usize, len, src_addr as usize)
     }
 
+    pub fn route_get(route: *mut RawRoute, index: usize) -> isize {
+        syscall3(Syscall::Route, RouteOp::Get as usize, route as usize, index)
+    }
+
+    pub fn route_add(route: *const RawRoute, flags: usize) -> isize {
+        syscall3(Syscall::Route, RouteOp::Add as usize, route as usize, flags)
+    }
+
+    pub fn route_remove(route: *const RawRoute) -> isize {
+        syscall2(Syscall::Route, RouteOp::Remove as usize, route as usize)
+    }
+
     pub fn random(buf: *mut u8, len: usize) -> isize {
         syscall2(Syscall::Random, buf as usize, len)
     }
 }
 
-use kernel::abi::{MAXPATH, RawSockAddr, SockAddr, SocketType, Stat, SysError};
+use kernel::abi::{
+    MAXPATH, RawRoute, RawSockAddr, RouteEntry, SockAddr, SocketType, Stat, SysError,
+};
 
 /// A file descriptor returned by or passed to syscalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,6 +431,26 @@ pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<(usize, SockAddr), SysError> {
         value,
         SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
     ))
+}
+
+pub fn route_get(index: usize) -> Result<RouteEntry, SysError> {
+    let mut raw_route = RawRoute::default();
+
+    check(raw::route_get(&mut raw_route as *mut RawRoute, index))?;
+
+    Ok(RouteEntry::try_from(raw_route)?)
+}
+
+pub fn route_add(route: &RouteEntry, flags: usize) -> Result<(), SysError> {
+    let raw_route = RawRoute::from(*route);
+
+    check_unit(raw::route_add(&raw_route as *const RawRoute, flags))
+}
+
+pub fn route_remove(route: &RouteEntry) -> Result<(), SysError> {
+    let raw_route = RawRoute::from(*route);
+
+    check_unit(raw::route_remove(&raw_route as *const RawRoute))
 }
 
 pub fn random(buf: &mut [u8]) -> Result<(), SysError> {

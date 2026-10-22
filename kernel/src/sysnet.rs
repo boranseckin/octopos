@@ -1,10 +1,11 @@
 use alloc::vec;
 
-use crate::abi::{RawSockAddr, SocketType};
 use crate::file::{FILE_TABLE, File, FileType};
-use crate::net::socket::{SockAddr, Socket};
+use crate::net::route::{self, RawRoute, RouteEntry};
+use crate::net::socket::{RawSockAddr, SockAddr, Socket, SocketType};
 use crate::net::udp::MAX_UDP_PAYLOAD;
-use crate::proc::{self, copy_from_user, copy_struct_from_user};
+use crate::net::{Ipv4Addr, Ipv4Config};
+use crate::proc::{self, copy_from_user, copy_struct_from_user, copy_struct_to_user};
 use crate::syscall::{SysError, SyscallArgs};
 use crate::sysfile::fd_alloc;
 
@@ -169,4 +170,96 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {
     }
 
     Ok(copy_len)
+}
+
+#[repr(usize)]
+pub enum RouteOp {
+    Get = 1,
+    Add = 2,
+    Remove = 3,
+}
+
+impl TryFrom<usize> for RouteOp {
+    type Error = SysError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Get),
+            2 => Ok(Self::Add),
+            3 => Ok(Self::Remove),
+            _ => err!(SysError::InvalidArgument),
+        }
+    }
+}
+
+pub struct RouteFlag;
+
+impl RouteFlag {
+    pub const ROUTE_REPLACE: usize = 1;
+}
+
+/// Reads or modifies the routing table.
+///
+/// # Arguments
+///
+/// - `a0` (`RouteOp`): operation to perform.
+/// - `a1` (`*mut RawRoute`): pointer to the route struct. Its direction depends on the operation.
+/// - `a2` (`usize`): operation-specific argument.
+///
+/// # Operations
+///
+/// - `Get`: writes the route at index `a2` into `a1`. Indices start at 0 and are contiguous;
+///   iterate until `NoEntry`. The table may change between calls, so a listing can skip or
+///   repeat an entry.
+/// - `Add`: reads a route from `a1` and adds it. `a2` holds `RouteFlag` bits. With
+///   `ROUTE_REPLACE`, an existing route with the same key is overwritten instead of rejected.
+/// - `Remove`: reads a route from `a1` and removes the stored route with the same key. Fields
+///   outside the key are ignored. `a2` is ignored.
+///
+/// A route's key is its destination, prefix length, gateway and interface. In `RawRoute`, a
+/// `gateway` or `pref_src` of 0.0.0.0 means `None`.
+///
+/// Only routes owned by `Dhcp` or `Static` can be added or removed. `Kernel` routes and `Local`
+/// routes are created and removed by the kernel when interface addresses change.
+pub fn sys_route(args: &SyscallArgs) -> Result<usize, SysError> {
+    let op = try_log!(RouteOp::try_from(args.get_int(0) as usize));
+    let raw_route_va = args.get_addr(1);
+
+    match op {
+        RouteOp::Get => {
+            let index = args.get_int(2) as usize;
+
+            let route = try_log!(route::route_at(index));
+            let raw_route = RawRoute::from(route);
+
+            try_log!(
+                copy_struct_to_user(&raw_route, raw_route_va).map_err(|_| SysError::BadAddress)
+            );
+
+            Ok(0)
+        }
+
+        RouteOp::Add => {
+            let flags = args.get_int(2) as usize;
+            let replace = flags & RouteFlag::ROUTE_REPLACE != 0;
+
+            let raw_route: RawRoute =
+                try_log!(copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress));
+            let route = try_log!(RouteEntry::try_from(raw_route));
+
+            try_log!(route::add_route(route, replace));
+
+            Ok(0)
+        }
+
+        RouteOp::Remove => {
+            let raw_route: RawRoute =
+                try_log!(copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress));
+            let route = try_log!(RouteEntry::try_from(raw_route));
+
+            try_log!(route::remove_route(&route));
+
+            Ok(0)
+        }
+    }
 }

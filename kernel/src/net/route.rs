@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use crate::net::interface::{self, InterfaceId};
 use crate::net::loopback;
 use crate::net::{self, Ipv4Addr, Ipv4Config, NetError};
+use crate::proc::Pod;
 use crate::spinlock::SpinLock;
 
 /// Owner of a route entry, used for tracking which component added the route.
@@ -17,6 +18,19 @@ pub enum RouteOwner {
     Dhcp = 2,
     /// Route added by a static configuration.
     Static = 3,
+}
+
+impl TryFrom<u8> for RouteOwner {
+    type Error = NetError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Kernel),
+            2 => Ok(Self::Dhcp),
+            3 => Ok(Self::Static),
+            _ => err!(NetError::NotPermitted),
+        }
+    }
 }
 
 impl core::fmt::Display for RouteOwner {
@@ -38,6 +52,18 @@ pub enum RouteKind {
     /// Addressed to this host; delivered through loopback.
     /// `interface_id` is the interface that owns the address.
     Local = 2,
+}
+
+impl TryFrom<u8> for RouteKind {
+    type Error = NetError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Unicast),
+            2 => Ok(Self::Local),
+            _ => err!(NetError::NotPermitted),
+        }
+    }
 }
 
 impl core::fmt::Display for RouteKind {
@@ -76,6 +102,65 @@ pub struct RouteEntry {
     pub pref_src: Option<Ipv4Addr>,
 }
 
+/// Wire format of a route shared with user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RawRoute {
+    pub dest: [u8; 4],
+    pub gateway: [u8; 4],  // 0.0.0.0 = direct
+    pub pref_src: [u8; 4], // 0.0.0.0 = none
+    pub metric: u32,
+    pub interface_id: u16,
+    pub owner: u8,
+    pub kind: u8,
+    pub prefix_len: u8,
+    pub _pad: [u8; 3],
+}
+
+/// # Safety: only contains primitive type, padded to align to 4 bytes
+unsafe impl Pod for RawRoute {}
+
+impl From<RouteEntry> for RawRoute {
+    fn from(value: RouteEntry) -> Self {
+        Self {
+            dest: value.dest_ip.0,
+            gateway: value.gateway.map_or([0; 4], |g| g.0),
+            pref_src: value.pref_src.map_or([0; 4], |g| g.0),
+            metric: value.metric,
+            interface_id: value.interface_id.0,
+            owner: value.owner as u8,
+            kind: value.kind as u8,
+            prefix_len: value.prefix_len,
+            _pad: [0; 3],
+        }
+    }
+}
+
+impl TryFrom<RawRoute> for RouteEntry {
+    type Error = NetError;
+
+    fn try_from(value: RawRoute) -> Result<Self, Self::Error> {
+        Ok(Self {
+            dest_ip: Ipv4Addr::from(value.dest),
+            prefix_len: value.prefix_len,
+            gateway: if value.gateway == [0; 4] {
+                None
+            } else {
+                Some(Ipv4Addr::from(value.gateway))
+            },
+            interface_id: InterfaceId(value.interface_id),
+            metric: value.metric,
+            owner: try_log!(RouteOwner::try_from(value.owner)),
+            kind: try_log!(RouteKind::try_from(value.kind)),
+            pref_src: if value.pref_src == [0; 4] {
+                None
+            } else {
+                Some(Ipv4Addr::from(value.pref_src))
+            },
+        })
+    }
+}
+
 static ROUTES: SpinLock<Vec<RouteEntry>> = SpinLock::new(Vec::new(), "net_routes");
 
 impl PartialEq for RouteEntry {
@@ -98,6 +183,15 @@ pub fn route_matches(dest_ip: Ipv4Addr, route: &RouteEntry) -> bool {
 pub fn route_sort_key(route: &RouteEntry) -> (u8, core::cmp::Reverse<u32>) {
     // Sort by longest prefix length first, then by lowest metric.
     (route.prefix_len, core::cmp::Reverse(route.metric))
+}
+
+/// Returns a copy of the route entry at a given index.
+pub fn route_at(index: usize) -> Result<RouteEntry, NetError> {
+    if let Some(route) = ROUTES.lock().get(index) {
+        Ok(*route)
+    } else {
+        err!(NetError::RouteNotFound)
+    }
 }
 
 /// Adds a new route after validating it.
