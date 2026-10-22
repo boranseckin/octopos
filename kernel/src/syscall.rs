@@ -280,6 +280,7 @@ pub enum Syscall {
     Send = 25,
     Receive = 26,
     Random = 27,
+    Route = 29,
 }
 
 impl TryFrom<usize> for Syscall {
@@ -314,6 +315,7 @@ impl TryFrom<usize> for Syscall {
             25 => Ok(Syscall::Send),
             26 => Ok(Syscall::Receive),
             27 => Ok(Syscall::Random),
+            29 => Ok(Syscall::Route),
             _ => Err(SysError::NotImplemented),
         }
     }
@@ -357,6 +359,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Send => sys_send(&args),
             Syscall::Receive => sys_receive(&args),
             Syscall::Random => sys_random(&args),
+            Syscall::Route => sys_route(&args),
         },
         Err(e) => Err(e),
     };
