@@ -326,7 +326,7 @@ fn transmit_udp(
     // To avoid double lookup, we are using net::transmit_with_route().
     let route = try_log!(route::best_route_for(dest_ip));
 
-    let Some(interface) = interface::find_interface_by_id(route.interface_id) else {
+    let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::NotConfigured);
     };
 

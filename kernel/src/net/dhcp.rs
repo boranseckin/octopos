@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
-use crate::net::route::{self, RouteEntry, RouteOwner};
+use crate::net::route::{self, RouteEntry, RouteKind, RouteOwner};
 use crate::net::udp::{UdpHeader, UdpSocket};
 use crate::net::{Be, Ipv4Addr, Ipv4Config, MacAddr, NetError, NetworkHeader};
 use crate::rng;
@@ -565,15 +565,20 @@ impl DhcpState {
 
                 // add gateway if router option is provided
                 if let Some(router) = ack.router {
-                    route::upsert_route(RouteEntry {
-                        dest_ip: Ipv4Addr::UNSPECIFIED,
-                        prefix_len: 0,
-                        gateway: Some(router),
-                        interface_id,
-                        metric: 100, // default metric for DHCP routes, higher than other routes
-                        owner: RouteOwner::Dhcp,
-                        pref_src: None,
-                    });
+                    // an unusable router is not fatal, the lease is still valid without it.
+                    let _ = log!(route::add_route(
+                        RouteEntry {
+                            dest_ip: Ipv4Addr::UNSPECIFIED,
+                            prefix_len: 0,
+                            gateway: Some(router),
+                            interface_id,
+                            metric: 100, // default metric for DHCP routes, higher than other routes
+                            owner: RouteOwner::Dhcp,
+                            kind: RouteKind::Unicast,
+                            pref_src: None,
+                        },
+                        true,
+                    ));
                 }
 
                 Ok(Self::Bound(ack))
