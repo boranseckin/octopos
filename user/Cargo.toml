@@ -218,5 +218,12 @@ test = false
 doctest = false
 bench = false
 
+[[bin]]
+name = "_netconf"
+path = "testbin/netconf.rs"
+test = false
+doctest = false
+bench = false
+
 [dependencies]
 kernel = { package = "octopos", path = "../kernel", version = "1.0.0" }
