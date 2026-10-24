@@ -3,19 +3,24 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
 use crate::net::icmp::PingSocket;
+use crate::net::packet::PacketSocket;
 use crate::net::udp::UdpSocket;
-use crate::net::{Ipv4Addr, NetError};
+use crate::net::{InterfaceId, Ipv4Addr, MacAddr, NetError, interface};
 use crate::proc::{self, Channel, Pod};
 use crate::spinlock::SpinLock;
 use crate::trap::TICKS;
 
-const MAX_RECV_QUEUE_DEPTH: usize = 8;
+const MAX_RECV_QUEUE_DEPTH: usize = 16;
+
+const ANY_INTERFACE: u16 = u16::MAX;
+const ANY_ETHER_TYPE: u16 = u16::MAX;
 
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketType {
     Udp = 1,
     Ping = 2,
+    Packet = 3,
 }
 
 impl TryFrom<usize> for SocketType {
@@ -25,6 +30,7 @@ impl TryFrom<usize> for SocketType {
         match value {
             1 => Ok(Self::Udp),
             2 => Ok(Self::Ping),
+            3 => Ok(Self::Packet),
             _ => Err(NetError::BadSocket),
         }
     }
@@ -35,6 +41,16 @@ impl TryFrom<usize> for SocketType {
 pub enum SockAddr {
     /// IPv4 address and port, used by UDP sockets.
     Inet { ip: Ipv4Addr, port: u16 },
+
+    /// Link layer endpoint, used by packet sockets.
+    Link {
+        /// None = any interface
+        interface: Option<InterfaceId>,
+        /// None = every EtherType
+        ether_type: Option<u16>,
+        /// Peer MAC. Filled in on receive, ignored on bind and send.
+        mac: MacAddr,
+    },
 }
 
 impl SockAddr {
@@ -61,22 +77,72 @@ impl SockAddr {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RawSockAddr {
+    /// 1 = inet, 2 = link
     pub family: u16,
-    pub port: u16,
-    pub addr: [u8; 4],
+    /// inet: port(2) addr(4) pad(8)
+    /// link: interface(2) ether_type(2) mac(6) pad(4)
+    pub data: [u8; 14],
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct RawInetAddr {
+    port: u16,
+    ipv4: [u8; 4],
+    _pad: [u8; 8],
+}
+
+const _: () = assert!(size_of::<RawInetAddr>() == 14);
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct RawLinkAddr {
+    /// ANY_INTERFACE = any
+    interface: u16,
+    /// ANY_ETHER_TYPE = any
+    ether_type: u16,
+    mac: [u8; 6],
+    _pad: [u8; 4],
+}
+
+const _: () = assert!(size_of::<RawLinkAddr>() == 14);
 
 // Safety: RawSockAddr is repr(C), with no padding, and with primitive types.
 unsafe impl Pod for RawSockAddr {}
 
 impl From<SockAddr> for RawSockAddr {
     fn from(value: SockAddr) -> Self {
+        // # Safety: Raw address structs consist of only primitive types with no implicit padding.
         match value {
-            SockAddr::Inet { ip, port } => Self {
-                family: 1,
-                port,
-                addr: ip.0,
-            },
+            SockAddr::Inet { ip, port } => {
+                let raw = RawInetAddr {
+                    port,
+                    ipv4: ip.0,
+                    ..Default::default()
+                };
+                Self {
+                    family: 1,
+                    data: unsafe { core::mem::transmute::<RawInetAddr, [u8; 14]>(raw) },
+                }
+            }
+
+            SockAddr::Link {
+                interface,
+                ether_type,
+                mac,
+            } => {
+                let raw = RawLinkAddr {
+                    interface: interface.map_or(ANY_INTERFACE, |i| i.0),
+                    ether_type: ether_type.unwrap_or(ANY_ETHER_TYPE),
+                    mac: mac.0,
+                    ..Default::default()
+                };
+
+                Self {
+                    family: 2,
+                    data: unsafe { core::mem::transmute::<RawLinkAddr, [u8; 14]>(raw) },
+                }
+            }
         }
     }
 }
@@ -85,11 +151,35 @@ impl TryFrom<RawSockAddr> for SockAddr {
     type Error = NetError;
 
     fn try_from(value: RawSockAddr) -> Result<Self, Self::Error> {
+        // # Safety: Raw address structs consist of only primitive types with no implicit padding.
         match value.family {
-            1 => Ok(Self::Inet {
-                ip: Ipv4Addr::from(value.addr),
-                port: value.port,
-            }),
+            1 => {
+                let raw: RawInetAddr = unsafe { core::mem::transmute(value.data) };
+
+                Ok(Self::Inet {
+                    ip: Ipv4Addr::from(raw.ipv4),
+                    port: raw.port,
+                })
+            }
+
+            2 => {
+                let raw: RawLinkAddr = unsafe { core::mem::transmute(value.data) };
+
+                Ok(Self::Link {
+                    interface: if raw.interface == ANY_INTERFACE {
+                        None
+                    } else {
+                        Some(InterfaceId(raw.interface))
+                    },
+                    ether_type: if raw.ether_type == ANY_ETHER_TYPE {
+                        None
+                    } else {
+                        Some(raw.ether_type)
+                    },
+                    mac: MacAddr(raw.mac),
+                })
+            }
+
             _ => Err(NetError::InvalidAddress),
         }
     }
@@ -101,6 +191,7 @@ impl TryFrom<RawSockAddr> for SockAddr {
 pub enum Socket {
     Udp(Arc<UdpSocket>),
     Ping(Arc<PingSocket>),
+    Packet(Arc<PacketSocket>),
 }
 
 impl Socket {
@@ -112,10 +203,20 @@ impl Socket {
         Ok(Self::Ping(try_log!(PingSocket::bind(ident))))
     }
 
+    pub fn open_packet(
+        interface: Option<InterfaceId>,
+        ether_type: Option<u16>,
+    ) -> Result<Self, NetError> {
+        Ok(Self::Packet(try_log!(PacketSocket::bind(
+            interface, ether_type
+        ))))
+    }
+
     pub fn close(&self) {
         match self {
             Socket::Udp(udp_socket) => udp_socket.close(),
             Socket::Ping(ping_socket) => ping_socket.close(),
+            Socket::Packet(packet_socket) => packet_socket.close(),
         }
     }
 
@@ -123,6 +224,7 @@ impl Socket {
         match self {
             Socket::Udp(udp_socket) => udp_socket.set_receive_timeout(ticks),
             Socket::Ping(ping_socket) => ping_socket.set_receive_timeout(ticks),
+            Socket::Packet(packet_socket) => packet_socket.set_receive_timeout(ticks),
         }
     }
 
@@ -137,31 +239,56 @@ impl Socket {
                 ip: Ipv4Addr::UNSPECIFIED,
                 port: ping_socket.ident,
             },
+
+            Socket::Packet(packet_socket) => SockAddr::Link {
+                interface: packet_socket.interface,
+                ether_type: packet_socket.ether_type,
+                mac: packet_socket
+                    .interface
+                    .and_then(interface::find_interface_by_id)
+                    .map_or(MacAddr::UNSPECIFIED, |i| i.config.mac),
+            },
         }
     }
 
     pub fn send(&self, remote_addr: SockAddr, buf: &[u8]) -> Result<(), NetError> {
         match self {
             Socket::Udp(udp_socket) => {
-                let SockAddr::Inet { ip, port } = remote_addr;
-                udp_socket.send(ip, port, buf)
+                let SockAddr::Inet { ip, port } = remote_addr else {
+                    err!(NetError::InvalidAddress)
+                };
+
+                log!(udp_socket.send(ip, port, buf))
             }
 
             Socket::Ping(ping_socket) => {
-                let SockAddr::Inet { ip, port: _ } = remote_addr;
-                ping_socket.send(ip, buf)
+                let SockAddr::Inet { ip, port: _ } = remote_addr else {
+                    err!(NetError::InvalidAddress)
+                };
+
+                log!(ping_socket.send(ip, buf))
+            }
+
+            Socket::Packet(packet_socket) => {
+                let SockAddr::Link {
+                    interface,
+                    ether_type: _,
+                    mac: _,
+                } = remote_addr
+                else {
+                    err!(NetError::InvalidAddress)
+                };
+
+                log!(packet_socket.send(interface, buf))
             }
         }
     }
 
     pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
         match self {
-            Socket::Udp(udp_socket) => {
-                let (ip, port, buf) = try_log!(udp_socket.receive());
-                Ok((SockAddr::Inet { ip, port }, buf))
-            }
-
+            Socket::Udp(udp_socket) => log!(udp_socket.receive()),
             Socket::Ping(ping_socket) => log!(ping_socket.receive()),
+            Socket::Packet(packet_socket) => log!(packet_socket.receive()),
         }
     }
 }

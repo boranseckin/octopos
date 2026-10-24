@@ -4,7 +4,6 @@ use crate::file::{FILE_TABLE, File, FileType};
 use crate::net::interface::{self, InterfaceId, RawInterface};
 use crate::net::route::{self, RawRoute, RouteEntry};
 use crate::net::socket::{RawSockAddr, SockAddr, Socket, SocketType};
-use crate::net::udp::MAX_UDP_PAYLOAD;
 use crate::net::{Ipv4Addr, Ipv4Cidr};
 use crate::proc::{self, copy_from_user, copy_struct_from_user, copy_struct_to_user};
 use crate::syscall::{SysError, SyscallArgs};
@@ -25,8 +24,7 @@ fn file_socket(file: &File) -> Result<Socket, SysError> {
 /// # Arguments
 ///
 /// - `a0` (`SocketType`): type of socket.
-/// - `a1` (`*const RawSockAddr`): address and port of socket. 0.0.0.0:0 is wildcard IP, ephemeral
-///   port/ident.
+/// - `a1` (`*const RawSockAddr`): address of socket.
 ///
 /// # Returns
 ///
@@ -53,10 +51,32 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
         try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
     let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
 
-    let SockAddr::Inet { ip, port } = addr;
     let socket = match socket_type {
-        SocketType::Udp => try_log!(Socket::open_udp(ip, port).map_err(SysError::from)),
-        SocketType::Ping => try_log!(Socket::open_ping(port).map_err(SysError::from)),
+        SocketType::Udp => {
+            let SockAddr::Inet { ip, port } = addr else {
+                err!(SysError::InvalidArgument);
+            };
+            try_log!(Socket::open_udp(ip, port).map_err(SysError::from))
+        }
+
+        SocketType::Ping => {
+            let SockAddr::Inet { ip: _, port } = addr else {
+                err!(SysError::InvalidArgument);
+            };
+            try_log!(Socket::open_ping(port).map_err(SysError::from))
+        }
+
+        SocketType::Packet => {
+            let SockAddr::Link {
+                interface,
+                ether_type,
+                mac: _,
+            } = addr
+            else {
+                err!(SysError::InvalidArgument)
+            };
+            try_log!(Socket::open_packet(interface, ether_type).map_err(SysError::from))
+        }
     };
 
     // allocate a file structure and a file descriptor
@@ -82,13 +102,13 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(fd)
 }
 
-/// Sends a UDP datagram to the specified destination.
+/// Sends a packet on the socket.
 ///
 /// # Arguments
 ///
 /// - `a0` (`Fd`): socket file descriptor.
 /// - `a1` (`*const u8`): pointer to the payload buffer.
-/// - `a2` (`usize`): payload length in bytes. Must not exceed `MAX_UDP_PAYLOAD`.
+/// - `a2` (`usize`): payload length in bytes.
 /// - `a3` (`*const RawSockAddr`): pointer to the destination socket address.
 ///
 /// # Returns
@@ -97,7 +117,7 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
 ///
 /// # Errors
 ///
-/// - `MessageTooLarge`: payload length exceeds `MAX_UDP_PAYLOAD`.
+/// - `MessageTooLarge`: payload length exceeds limit.
 /// - `InvalidArgument`: `a0` is not a socket file descriptor, or `a4` does not fit in a `u16`.
 /// - `BadDescriptor`: `a0` is not a valid open file descriptor.
 /// - `BadAddress`: `a1` or `a3` is not a valid user-space pointer.
@@ -109,9 +129,6 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
     let (_, file) = try_log!(args.get_file(0));
     let buf_addr = args.get_addr(1);
     let buf_len = args.get_int(2) as usize;
-    if buf_len > MAX_UDP_PAYLOAD {
-        err!(SysError::MessageTooLarge)
-    }
 
     let socket = try_log!(file_socket(&file));
 
@@ -130,7 +147,7 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(buf_len)
 }
 
-/// Receives a UDP datagram on the socket, blocking until one arrives.
+/// Receives a packet from the socket, blocking until one arrives.
 ///
 /// # Arguments
 ///

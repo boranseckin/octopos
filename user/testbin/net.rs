@@ -69,7 +69,10 @@ fn test_echo_round_trip() {
     let SockAddr::Inet {
         ip: src_ip,
         port: src_port,
-    } = addr;
+    } = addr
+    else {
+        unreachable!()
+    };
 
     assert_eq!(&buf[..n], payload, "echo payload mismatch");
     assert_eq!(src_ip, Ipv4Addr::LOOPBACK, "echo source IP must be host");
@@ -121,7 +124,10 @@ fn test_add_remove_multiple() {
     let SockAddr::Inet {
         ip: src_ip,
         port: src_port,
-    } = addr;
+    } = addr
+    else {
+        unreachable!()
+    };
 
     assert_eq!(&buf[..n], payload, "echo payload mismatch");
     assert_eq!(src_ip, Ipv4Addr::LOOPBACK, "echo source IP must be host");

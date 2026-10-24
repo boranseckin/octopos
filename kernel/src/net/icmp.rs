@@ -4,6 +4,7 @@ use alloc::sync::Arc;
 use crate::abi::SockAddr;
 use crate::net::ipv4::Ipv4Proto;
 use crate::net::socket::RecvQueue;
+use crate::net::udp::MAX_UDP_PAYLOAD;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
@@ -41,6 +42,10 @@ impl PingSocket {
     ///
     /// The ident is overwritten for security, and the checksum is recalculated.
     pub fn send(&self, dest_ip: Ipv4Addr, buf: &[u8]) -> Result<(), NetError> {
+        if buf.len() > MAX_UDP_PAYLOAD {
+            err!(NetError::PacketTooLarge)
+        }
+
         if self.queue.is_closed() {
             err!(NetError::BadSocket);
         }

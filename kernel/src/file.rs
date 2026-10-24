@@ -284,7 +284,9 @@ impl File {
 
             FileType::Socket { socket } => match cmd {
                 Ioctl::SOCKET_GET_PORT => {
-                    let SockAddr::Inet { port, .. } = socket.local_addr();
+                    let SockAddr::Inet { port, .. } = socket.local_addr() else {
+                        err!(SysError::InvalidArgument)
+                    };
                     Ok(port as usize)
                 }
 

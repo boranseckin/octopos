@@ -79,7 +79,9 @@ fn main(args: Args) {
                 Err(e) => exit_with_msg(e),
             };
 
-            let SockAddr::Inet { ip, .. } = src;
+            let SockAddr::Inet { ip, .. } = src else {
+                unreachable!("should be inet socket")
+            };
 
             match parse_echo_reply(&buf[..len]) {
                 Some((reply_seq, sent)) if reply_seq == seq => {

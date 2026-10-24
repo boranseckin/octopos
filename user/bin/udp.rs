@@ -29,7 +29,9 @@ fn main(args: Args) {
 
             loop {
                 let (rc_len, rc_addr) = receive(fd, &mut buf).expect("receive failed");
-                let SockAddr::Inet { ip, port } = rc_addr;
+                let SockAddr::Inet { ip, port } = rc_addr else {
+                    unreachable!("should be a inet socket")
+                };
 
                 println!(
                     "[{}:{}]: {}",

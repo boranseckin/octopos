@@ -53,6 +53,10 @@ impl UdpSocket {
     }
 
     pub fn send(&self, dest_ip: Ipv4Addr, dest_port: u16, buf: &[u8]) -> Result<(), NetError> {
+        if buf.len() > MAX_UDP_PAYLOAD {
+            err!(NetError::PacketTooLarge)
+        }
+
         if self.queue.is_closed() {
             err!(NetError::BadSocket)
         }
@@ -60,10 +64,8 @@ impl UdpSocket {
         log!(transmit_udp(dest_ip, dest_port, self.bound_port, buf))
     }
 
-    pub fn receive(&self) -> Result<(Ipv4Addr, u16, Box<[u8]>), NetError> {
-        let (addr, payload) = try_log!(self.queue.receive());
-        let SockAddr::Inet { ip, port } = addr;
-        Ok((ip, port, payload))
+    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
+        log!(self.queue.receive())
     }
 
     fn deliver(&self, ip: Ipv4Addr, port: u16, payload: Box<[u8]>) {

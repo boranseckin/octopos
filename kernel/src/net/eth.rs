@@ -24,11 +24,11 @@ impl From<Be<u16>> for EtherType {
 #[derive(Debug, Clone, Copy)]
 pub struct EthernetHeader {
     /// Destination MAC Address
-    dst: MacAddr,
+    pub dst: MacAddr,
     /// Source MAC Address
-    src: MacAddr,
+    pub src: MacAddr,
     /// Type
-    ether_type: Be<u16>,
+    pub ether_type: Be<u16>,
 }
 
 impl EthernetHeader {

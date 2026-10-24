@@ -707,7 +707,7 @@ pub fn dhcp_thread(interface_id: InterfaceId) {
         return;
     };
 
-    while let Ok((_ip, _port, packet)) = log!(socket.receive()) {
+    while let Ok((_, packet)) = log!(socket.receive()) {
         let Ok(dhcp) = log!(DhcpPacket::parse(&packet)) else {
             continue;
         };

@@ -19,6 +19,7 @@ pub(crate) mod icmp;
 pub(crate) mod interface;
 pub(crate) mod ipv4;
 pub(crate) mod loopback;
+pub(crate) mod packet;
 pub(crate) mod route;
 pub(crate) mod socket;
 pub(crate) mod udp;
@@ -572,10 +573,12 @@ pub fn transmit_with_route(
 
 /// Receives a packet, parses the Ethernet header, and dispatches to the appropriate handler based
 /// on the EtherType.
-fn receive(id: InterfaceId, packet: Box<[u8]>) -> Result<(), NetError> {
-    let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&packet) else {
+fn receive(id: InterfaceId, frame: Box<[u8]>) -> Result<(), NetError> {
+    let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&frame) else {
         err!(NetError::MalformedPacket);
     };
+
+    packet::deliver_all(id, eth, &frame);
 
     match eth.ether_type() {
         EtherType::Arp => log!(arp::handle_arp(id, eth, data)),
