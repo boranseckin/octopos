@@ -48,24 +48,24 @@ fn main(args: Args) {
         exit_with_msg(USAGE);
     };
     let dest_ip = dest_ip.parse::<Ipv4Addr>().unwrap_or_else(|_| {
-        exit_with_msg("ping: invalid IP address");
+        exit_with_msg("invalid address");
     });
     // port is ignored by ping sockets, the kernel uses the socket's ident
     let dest = SockAddr::inet(dest_ip, 0);
 
     let count = match args.get_str(2) {
         Some(count) => count.parse::<u16>().unwrap_or_else(|_| {
-            exit_with_msg("ping: invalid count");
+            exit_with_msg("invalid count");
         }),
         None => DEFAULT_COUNT,
     };
 
-    let fd = socket(SocketType::Ping, SockAddr::any_inet()).expect("socket open");
-    ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, 10).expect("socket timeout to set");
+    let fd = socket(SocketType::Ping, SockAddr::any_inet()).unwrap_or_else(|e| exit_with_msg(e));
+    ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, 10).unwrap_or_else(|e| exit_with_msg(e));
 
     for seq in 0..count {
         let msg = echo_request(seq, uptime() as u64);
-        send(fd, &msg, dest).expect("socket send");
+        send(fd, &msg, dest).unwrap_or_else(|e| exit_with_msg(e));
 
         // skip stale replies to earlier requests until ours arrives
         let mut buf = [0u8; 64];
@@ -76,7 +76,7 @@ fn main(args: Args) {
                     println!("request timeout for seq={}", seq);
                     break;
                 }
-                Err(e) => panic!("{e}"),
+                Err(e) => exit_with_msg(e),
             };
 
             let SockAddr::Inet { ip, .. } = src;

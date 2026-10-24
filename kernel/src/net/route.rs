@@ -325,7 +325,7 @@ pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry, NetError> {
     {
         Ok(*route)
     } else {
-        err!(NetError::RouteNotFound)
+        err!(NetError::NetworkUnreachable)
     }
 }
 

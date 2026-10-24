@@ -44,6 +44,7 @@ pub enum SysError {
     NotImplemented = 38,
     NotEmpty = 39,
     MessageTooLarge = 90,
+    NetworkUnreachable = 101,
     TimedOut = 110,
 }
 
@@ -81,6 +82,7 @@ impl SysError {
             38 => Self::NotImplemented,
             39 => Self::NotEmpty,
             90 => Self::MessageTooLarge,
+            101 => Self::NetworkUnreachable,
             110 => Self::TimedOut,
             _ => Self::InvalidArgument,
         }
@@ -115,6 +117,7 @@ impl Display for SysError {
             SysError::NotImplemented => write!(f, "function not implemented"),
             SysError::NotEmpty => write!(f, "directory not empty"),
             SysError::MessageTooLarge => write!(f, "message too large"),
+            SysError::NetworkUnreachable => write!(f, "network unreachable"),
             SysError::TimedOut => write!(f, "timed out"),
         }
     }
@@ -150,6 +153,7 @@ impl From<NetError> for SysError {
             NetError::MalformedPacket => SysError::InvalidArgument,
             NetError::TransmitFailed => SysError::IoError,
             NetError::Interrupted => SysError::Interrupted,
+            NetError::NetworkUnreachable => SysError::NetworkUnreachable,
             NetError::RouteNotFound => SysError::NoEntry,
             NetError::PacketTooLarge => SysError::InvalidArgument,
             NetError::ResourceUnavailable => SysError::ResourceUnavailable,
