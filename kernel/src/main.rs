@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+#[global_allocator]
+static GLOBAL: kernel::KernelAllocator = kernel::KernelAllocator;
+
 #[unsafe(export_name = "main")]
 fn main() -> ! {
     kernel::main()

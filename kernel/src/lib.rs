@@ -37,6 +37,7 @@ pub(crate) mod virtio_disk;
 pub(crate) mod vm;
 
 pub mod abi;
+pub use kalloc::KernelAllocator;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

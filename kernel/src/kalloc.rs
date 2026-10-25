@@ -34,7 +34,6 @@ pub fn increment_ref(pa: PA) {
 }
 
 /// Kernel memory allocator
-#[global_allocator]
 static KMEM: Kmem = Kmem(SpinLock::new(None, "kmem"));
 
 struct Kmem(SpinLock<Option<BuddyAlloc>>);
@@ -64,6 +63,23 @@ unsafe impl GlobalAlloc for Kmem {
         // if the last value before decrement was 1, free the page.
         if PAGE_REFS[(ptr as usize - KERNBASE) / PGSIZE].fetch_sub(1, Ordering::Relaxed) == 1 {
             self.0.lock().as_mut().expect("kmem to be init").free(ptr)
+        }
+    }
+}
+
+/// Global allocator for the kernel binary. Forwards to `KMEM`.
+/// Declared here but installed by main.rs, so user binaries that link this crate for `abi`
+/// don't pull it in.
+pub struct KernelAllocator;
+
+unsafe impl GlobalAlloc for KernelAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { KMEM.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            KMEM.dealloc(ptr, layout);
         }
     }
 }
