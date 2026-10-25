@@ -12,6 +12,11 @@ const MAX_FRAME: usize = 1514;
 
 const DHCP_ROUTE_METRIC: u32 = 100;
 
+const INITIAL_INTERVAL: usize = 4 * TICKS_PER_SEC;
+const MAX_INTERVAL: usize = 64 * TICKS_PER_SEC;
+const JITTER: isize = TICKS_PER_SEC as isize; // +/- 1s
+const MAX_REQUESTS: u32 = 4;
+
 /// Vendor Information "Magic Cookie"
 /// https://www.rfc-editor.org/rfc/rfc1497
 const MAGIC_COOKIE: [u8; 4] = [0x63, 0x82, 0x53, 0x63];
@@ -99,10 +104,48 @@ struct Offer {
     router: Option<Ipv4Addr>,
 }
 
+#[derive(Debug, Clone, Copy)]
 enum State {
     Selecting { xid: u32 },
     Requesting(Offer),
     Bound(Offer),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Backoff {
+    interval: usize,
+    deadline: usize,
+    attempts: u32,
+}
+
+impl Backoff {
+    /// Arms the first timeout.
+    fn start(now: usize) -> Self {
+        Self {
+            interval: INITIAL_INTERVAL,
+            deadline: now + jittered(INITIAL_INTERVAL),
+            attempts: 0,
+        }
+    }
+
+    /// Ticks left until the deadline, at least 1 (0 would block forever).
+    fn remaining(&self, now: usize) -> usize {
+        self.deadline.saturating_sub(now).max(1)
+    }
+
+    /// Doubles the interval (capped at MAX_INTERVAL), counts the attempt, re-arms the deadline.
+    fn advance(&mut self, now: usize) {
+        self.interval = (2 * self.interval).min(MAX_INTERVAL);
+        self.deadline = now + jittered(self.interval);
+        self.attempts += 1;
+    }
+}
+
+fn jittered(interval: usize) -> usize {
+    let mut rand = [0u8; 1];
+    random(&mut rand).unwrap_or_else(|e| exit_with_msg(e));
+    let jitter = rand[0] as isize % (2 * JITTER + 1) - 10;
+    (interval as isize + jitter) as usize
 }
 
 /// Appends one option (code, length, data) to `buf` at `offset`.
@@ -344,17 +387,58 @@ fn on_reply(fd: Fd, interface: &Interface, state: State, frame: &[u8]) -> State 
         }
 
         State::Requesting(offer) if msg_type == NAK && header.xid.get() == offer.xid => {
-            exit_with_msg("received nack");
+            println!("dhcpc: received nak, retransmitting discover");
+
+            let xid = new_xid();
+            send_discover(fd, interface, xid);
+            State::Selecting { xid }
         }
 
         _ => state,
     }
 }
 
+fn on_timeout(fd: Fd, interface: &Interface, state: State, attempts: u32) -> State {
+    match state {
+        // we sent out a Discover but did not hear back.
+        // re-use the same xid and try again.
+        State::Selecting { xid } => {
+            println!("dhcpc: timed out, retransmitting discover");
+
+            send_discover(fd, interface, xid);
+            state
+        }
+
+        // we sent out a Request but did not hear back and we exceeded number of attempts.
+        // get a new xid and start again from Discover.
+        State::Requesting(_) if attempts + 1 >= MAX_REQUESTS => {
+            println!("dhcpc: timed out and max attempts reached, restarting");
+
+            let xid = new_xid();
+            send_discover(fd, interface, xid);
+            State::Selecting { xid }
+        }
+
+        // we sent out a Request but did not hear back.
+        // re-use the same offer and try again.
+        State::Requesting(offer) => {
+            println!(
+                "dhcpc: timed out, retransmitting request ({} attempts remaining)",
+                MAX_REQUESTS - attempts
+            );
+
+            send_request(fd, interface, &offer);
+            state
+        }
+
+        State::Bound(_) => unreachable!("we shouldn't be receiving in this state"),
+    }
+}
+
 fn transmit(fd: Fd, interface: &Interface, buf: &[u8]) {
     send(
         fd,
-        &buf[..buf.len()],
+        buf,
         SockAddr::link(Some(interface.id), Some(EtherType::Ipv4 as u16)),
     )
     .unwrap_or_else(|e| exit_with_msg(e));
@@ -394,20 +478,48 @@ fn main(args: Args) {
     )
     .unwrap_or_else(|e| exit_with_msg(e));
 
-    let xid = new_xid();
+    let initial_xid = new_xid();
 
-    send_discover(fd, &interface, xid);
+    send_discover(fd, &interface, initial_xid);
 
-    let mut state = State::Selecting { xid };
+    let mut backoff = Backoff::start(uptime());
+
+    let mut state = State::Selecting { xid: initial_xid };
     let mut buf = [0u8; MAX_FRAME];
 
     loop {
-        let (len, _) = receive(fd, &mut buf).unwrap_or_else(|e| exit_with_msg(e));
-        state = on_reply(fd, &interface, state, &buf[..len]);
+        ioctl(
+            fd,
+            Ioctl::SOCKET_SET_RECV_TIMEOUT,
+            backoff.remaining(uptime()),
+        )
+        .unwrap_or_else(|e| exit_with_msg(e));
+
+        let (next, timed_out) = match receive(fd, &mut buf) {
+            Ok((len, _)) => (on_reply(fd, &interface, state, &buf[..len]), false),
+            Err(SysError::TimedOut) => (on_timeout(fd, &interface, state, backoff.attempts), true),
+            Err(e) => exit_with_msg(e),
+        };
+
+        // if state changed during on_reply or on_timeout, restart backoff timer.
+        // if instead, we timed out, advance the backoff and try again.
+        if core::mem::discriminant(&next) != core::mem::discriminant(&state) {
+            backoff = Backoff::start(uptime());
+        } else if timed_out {
+            backoff.advance(uptime());
+        }
+
+        state = next;
+
         if let State::Bound(offer) = state {
             println!(
                 "dhcpc: {} bound {}/{} via {}",
-                dev, offer.addr, offer.prefix_len, offer.server_id
+                dev,
+                offer.addr,
+                offer.prefix_len,
+                offer
+                    .router
+                    .map_or_else(|| "-".to_string(), |r| r.to_string())
             );
             break;
         }
