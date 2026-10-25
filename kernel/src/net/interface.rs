@@ -5,11 +5,9 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::net::dhcp;
 use crate::net::loopback;
 use crate::net::route;
 use crate::net::{Ipv4Addr, Ipv4Cidr, MacAddr, NetError};
-use crate::proc;
 use crate::proc::Pod;
 use crate::spinlock::SpinLock;
 
@@ -144,17 +142,9 @@ pub fn register_interface(id: InterfaceId, config: InterfaceConfig, device: Arc<
         route::replace_interface_route(id, ipv4);
     };
 
-    let needs_dhcp = device.needs_dhcp();
-    let name = config.name;
-
     INTERFACES
         .lock()
         .push(InterfaceEntry { id, config, device });
-
-    if needs_dhcp {
-        let thread_name = format!("dhcp-{}", name);
-        proc::spawn_kernel_thread(move || dhcp::dhcp_thread(id), &thread_name);
-    }
 }
 
 /// Sets the IPv4 configuration for a network interface, replacing any existing configuration.

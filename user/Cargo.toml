@@ -135,6 +135,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "dhcpc"
+path = "bin/dhcpc.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "demo"
 path = "bin/demo.rs"
 test = false

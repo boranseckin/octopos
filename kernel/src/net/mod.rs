@@ -13,7 +13,6 @@ use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 
 pub(crate) mod arp;
-pub(crate) mod dhcp;
 pub(crate) mod eth;
 pub(crate) mod icmp;
 pub(crate) mod interface;
@@ -112,11 +111,11 @@ impl NetworkInt for u32 {
 pub struct Be<T: Copy>(T);
 
 impl<T: NetworkInt> Be<T> {
-    fn new(value: T) -> Self {
+    pub fn new(value: T) -> Self {
         Self(value.to_be())
     }
 
-    fn get(self) -> T {
+    pub fn get(self) -> T {
         self.0.into_be()
     }
 }
@@ -127,8 +126,8 @@ impl<T: NetworkInt> Be<T> {
 pub struct MacAddr(pub [u8; 6]);
 
 impl MacAddr {
-    const UNSPECIFIED: Self = Self([0x00; 6]);
-    const BROADCAST: Self = Self([0xff; 6]);
+    pub const UNSPECIFIED: Self = Self([0x00; 6]);
+    pub const BROADCAST: Self = Self([0xff; 6]);
 }
 
 impl core::fmt::Display for MacAddr {

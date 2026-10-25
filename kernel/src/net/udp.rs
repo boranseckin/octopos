@@ -293,6 +293,14 @@ impl UdpHeader {
         }
     }
 
+    pub fn src_port(&self) -> u16 {
+        self.src_port.get()
+    }
+
+    pub fn dest_port(&self) -> u16 {
+        self.dest_port.get()
+    }
+
     fn calculate_checksum(&self, src_ip: Ipv4Addr, dest_ip: Ipv4Addr, payload: &[u8]) -> u16 {
         let mut header = *self;
         header.sum = Be::new(0);
