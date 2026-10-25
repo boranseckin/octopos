@@ -11,10 +11,10 @@ const TESTS: &[&str] = &[
     "/_sbrk",
     "/_cow",
     "/_heap",
-    "/_net",
-    "/_ping",
     "/_netconf",
     "/_packet",
+    "/_udp",
+    "/_ping",
 ];
 
 #[unsafe(no_mangle)]

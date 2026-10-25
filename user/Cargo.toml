@@ -205,8 +205,8 @@ doctest = false
 bench = false
 
 [[bin]]
-name = "_net"
-path = "testbin/net.rs"
+name = "_udp"
+path = "testbin/udp.rs"
 test = false
 doctest = false
 bench = false
