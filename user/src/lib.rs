@@ -1,7 +1,13 @@
 #![no_std]
 
 extern crate alloc;
-pub use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
+pub use alloc::{
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 use core::panic::PanicInfo;
 

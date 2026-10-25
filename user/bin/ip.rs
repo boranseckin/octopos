@@ -2,7 +2,7 @@
 #![no_main]
 #![feature(anonymous_lifetime_in_impl_trait)]
 
-use core::{fmt::Display, str::FromStr};
+use core::str::FromStr;
 
 use user::*;
 
@@ -13,7 +13,6 @@ const USAGE: &str = "usage: ip addr
        ip route add <dest>/<prefix> [via <gw>] dev <dev> [metric <n>] [src <addr>] [replace]
        ip route remove <dest>/<prefix> [via <gw>] dev <dev>";
 
-const MAX_INTERFACES: usize = 16;
 const DEFAULT_METRIC: u32 = 100;
 
 #[unsafe(no_mangle)]
@@ -35,22 +34,49 @@ fn next_arg<'a>(rest: &mut impl Iterator<Item = &'a str>) -> &'a str {
     rest.next().unwrap_or_else(|| exit_with_msg(USAGE))
 }
 
-fn interfaces() -> [Option<RawInterface>; MAX_INTERFACES] {
-    let mut ifs = [None; MAX_INTERFACES];
+fn print_table<const N: usize>(header: [&str; N], rows: &[[String; N]]) {
+    let mut widths = header.map(str::len);
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.len());
+        }
+    }
 
-    for (i, interface) in ifs.iter_mut().enumerate() {
+    print_row(header, &widths);
+    for row in rows {
+        print_row(row.each_ref().map(String::as_str), &widths);
+    }
+}
+
+const COLUMN_GAP: usize = 2;
+
+fn print_row<const N: usize>(cells: [&str; N], widths: &[usize; N]) {
+    let Some((last, rest)) = cells.split_last() else {
+        return;
+    };
+
+    for (cell, width) in rest.iter().zip(widths) {
+        print!("{:<w$}", cell, w = width + COLUMN_GAP);
+    }
+    println!("{last}");
+}
+
+fn interfaces() -> Vec<RawInterface> {
+    let mut ifs = Vec::new();
+
+    for i in 0.. {
         match interface_get(i) {
-            Ok(raw) => interface.replace(raw),
+            Ok(raw) => ifs.push(raw),
             Err(SysError::NoEntry) => break,
             Err(e) => exit_with_msg(e),
-        };
+        }
     }
 
     ifs
 }
 
-fn find_interface(id: InterfaceId, ifs: &[Option<RawInterface>]) -> Option<&RawInterface> {
-    ifs.iter().flatten().find(|i| i.id == id.0)
+fn find_interface(id: InterfaceId, ifs: &[RawInterface]) -> Option<&RawInterface> {
+    ifs.iter().find(|i| i.id == id.0)
 }
 
 fn resolve_dev(s: &str) -> InterfaceId {
@@ -58,7 +84,7 @@ fn resolve_dev(s: &str) -> InterfaceId {
         return InterfaceId(n);
     }
 
-    match interfaces().iter().flatten().find(|i| name_str(i) == s) {
+    match interfaces().iter().find(|i| name_str(i) == s) {
         Some(i) => InterfaceId(i.id),
         None => exit_with_msg(format_args!("unknown device: {s}")),
     }
@@ -81,36 +107,33 @@ fn name_str(raw: &RawInterface) -> &str {
 }
 
 fn addr_list_cmd() {
-    println!("{} {} {} {} {}", "ID", "DEVICE", "MAC", "ADDRESS", "STATE");
+    let rows: Vec<_> = interfaces()
+        .iter()
+        .map(|raw| {
+            let addr = cidr(raw).map_or_else(|| "unconfigured".into(), |c| c.to_string());
 
-    for raw in interfaces().iter().flatten() {
-        let cidr = cidr(raw);
-        let addr: &dyn Display = match &cidr {
-            Some(c) => c,
-            None => &"unconfigured",
-        };
+            let up = if raw.flags & InterfaceFlag::UP != 0 {
+                "up"
+            } else {
+                "down"
+            };
+            let state = if raw.flags & InterfaceFlag::LOOPBACK != 0 {
+                format!("{up} loopback")
+            } else {
+                up.into()
+            };
 
-        let up = if raw.flags & InterfaceFlag::UP != 0 {
-            "up"
-        } else {
-            "down"
-        };
-        let loopback = if raw.flags & InterfaceFlag::LOOPBACK != 0 {
-            "loopback"
-        } else {
-            ""
-        };
+            [
+                raw.id.to_string(),
+                name_str(raw).into(),
+                MacAddr(raw.mac).to_string(),
+                addr,
+                state,
+            ]
+        })
+        .collect();
 
-        println!(
-            "{} {} {} {} {} {}",
-            raw.id,
-            name_str(raw),
-            MacAddr(raw.mac),
-            addr,
-            up,
-            loopback
-        );
-    }
+    print_table(["ID", "DEVICE", "MAC", "ADDRESS", "STATE"], &rows);
 }
 
 fn addr_set_cmd(rest: &mut impl Iterator<Item = &str>) {
@@ -135,10 +158,7 @@ fn route_list_cmd() {
     // this might get stale while we are enumerating routes.
     let ifs = interfaces();
 
-    println!(
-        "{} {} {} {} {} {} {}",
-        "DEST", "GATEWAY", "DEVICE", "METRIC", "OWNER", "SCOPE", "SRC"
-    );
+    let mut rows: Vec<_> = Vec::new();
 
     for i in 0.. {
         let route = match route_get(i) {
@@ -152,18 +172,15 @@ fn route_list_cmd() {
             prefix_len: route.prefix_len,
         };
 
-        let gateway: &dyn Display = match &route.gateway {
-            Some(g) => g,
-            None => &"direct",
-        };
+        let gateway = route
+            .gateway
+            .map_or_else(|| "direct".into(), |g| g.to_string());
 
         // route might have an interface that we don't have the record of.
         let interface = find_interface(route.interface_id, &ifs);
 
-        let device: &dyn Display = match interface {
-            Some(i) => &name_str(i),
-            None => &route.interface_id,
-        };
+        let device =
+            interface.map_or_else(|| route.interface_id.to_string(), |i| name_str(i).into());
 
         let scope = if route.kind == RouteKind::Local {
             "host"
@@ -175,17 +192,32 @@ fn route_list_cmd() {
 
         let src = route
             .pref_src
-            .or_else(|| interface.and_then(cidr).map(|c| c.addr));
-        let src: &dyn Display = match &src {
-            Some(s) => s,
-            None => &"-",
-        };
+            .or_else(|| interface.and_then(cidr).map(|c| c.addr))
+            .map_or_else(|| "-".into(), |s| s.to_string());
 
-        println!(
-            "{} {} {} {} {} {} {}",
-            addr, gateway, device, route.metric, route.owner, scope, src
-        );
+        rows.push([
+            addr.to_string(),
+            gateway,
+            device,
+            route.metric.to_string(),
+            route.owner.to_string(),
+            scope.into(),
+            src,
+        ]);
     }
+
+    print_table(
+        [
+            "DESTINATION",
+            "GATEWAY",
+            "DEVICE",
+            "METRIC",
+            "OWNER",
+            "SCOPE",
+            "SRC",
+        ],
+        &rows,
+    );
 }
 
 /// Parses `<dest>/<prefix> [via <gw>] dev <dev> [metric <n>] [src <addr>] [replace]`.
