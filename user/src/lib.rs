@@ -16,6 +16,7 @@ mod io;
 mod args;
 mod heap;
 mod line;
+mod net;
 mod syscall;
 
 pub use kernel::abi::*;
