@@ -24,6 +24,7 @@ pub use kernel::abi::*;
 pub use args::*;
 pub use io::{Read, Stderr, Stdin, Stdout, Write};
 pub use line::LineEditor;
+pub use net::*;
 pub use syscall::*;
 
 unsafe extern "Rust" {

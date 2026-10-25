@@ -19,14 +19,8 @@ const TIMEOUT: usize = 3;
 
 const PAYLOAD: &[u8] = b"octopos packet test";
 
-fn find_interface() -> Option<RawInterface> {
-    (0..)
-        .map_while(|i| interface_get(i).ok())
-        .find(|i| i.flags & InterfaceFlag::LOOPBACK != 0)
-}
-
 fn loopback_id() -> InterfaceId {
-    InterfaceId(find_interface().expect("loopback interface").id)
+    loopback().expect("loopback interface").unwrap().id
 }
 
 fn open_packet(interface: Option<InterfaceId>, ether_type: Option<u16>) -> Result<Fd, SysError> {

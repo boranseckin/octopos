@@ -87,7 +87,7 @@ pub fn interface_iter() -> impl Iterator<Item = Result<Interface, SysError>> {
     })
 }
 
-/// Returns every iterator at once, in kernel order.
+/// Returns every interface at once, in kernel order.
 pub fn interfaces() -> Result<Vec<Interface>, SysError> {
     interface_iter().collect()
 }

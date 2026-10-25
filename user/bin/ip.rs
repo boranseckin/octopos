@@ -30,6 +30,14 @@ fn main(args: Args) {
     }
 }
 
+fn resolve_dev(dev: &str) -> Interface {
+    match resolve_interface(dev) {
+        Ok(Some(interface)) => interface,
+        Ok(None) => exit_with_msg(format_args!("unknown device: {dev}")),
+        Err(e) => exit_with_msg(e),
+    }
+}
+
 fn next_arg<'a>(rest: &mut impl Iterator<Item = &'a str>) -> &'a str {
     rest.next().unwrap_or_else(|| exit_with_msg(USAGE))
 }
@@ -61,72 +69,27 @@ fn print_row<const N: usize>(cells: [&str; N], widths: &[usize; N]) {
     println!("{last}");
 }
 
-fn interfaces() -> Vec<RawInterface> {
-    let mut ifs = Vec::new();
-
-    for i in 0.. {
-        match interface_get(i) {
-            Ok(raw) => ifs.push(raw),
-            Err(SysError::NoEntry) => break,
-            Err(e) => exit_with_msg(e),
-        }
-    }
-
-    ifs
-}
-
-fn find_interface(id: InterfaceId, ifs: &[RawInterface]) -> Option<&RawInterface> {
-    ifs.iter().find(|i| i.id == id.0)
-}
-
-fn resolve_dev(s: &str) -> InterfaceId {
-    if let Ok(n) = s.parse() {
-        return InterfaceId(n);
-    }
-
-    match interfaces().iter().find(|i| name_str(i) == s) {
-        Some(i) => InterfaceId(i.id),
-        None => exit_with_msg(format_args!("unknown device: {s}")),
-    }
-}
-
-fn cidr(raw: &RawInterface) -> Option<Ipv4Cidr> {
-    (raw.flags & InterfaceFlag::CONFIGURED != 0).then(|| Ipv4Cidr {
-        addr: Ipv4Addr::from(raw.addr),
-        prefix_len: raw.prefix_len,
-    })
-}
-
-fn name_str(raw: &RawInterface) -> &str {
-    let len = raw
-        .name
-        .iter()
-        .position(|&c| c == 0)
-        .unwrap_or(raw.name.len());
-    str::from_utf8(&raw.name[..len]).unwrap_or("?")
-}
-
 fn addr_list_cmd() {
     let rows: Vec<_> = interfaces()
+        .unwrap_or_else(|e| exit_with_msg(e))
         .iter()
-        .map(|raw| {
-            let addr = cidr(raw).map_or_else(|| "unconfigured".into(), |c| c.to_string());
+        .map(|i| {
+            let addr = i
+                .ipv4
+                .map_or_else(|| "unconfigured".to_string(), |c| c.to_string());
 
-            let up = if raw.flags & InterfaceFlag::UP != 0 {
-                "up"
-            } else {
-                "down"
-            };
-            let state = if raw.flags & InterfaceFlag::LOOPBACK != 0 {
+            let up = if i.is_up() { "up" } else { "down" };
+
+            let state = if i.is_loopback() {
                 format!("{up} loopback")
             } else {
                 up.into()
             };
 
             [
-                raw.id.to_string(),
-                name_str(raw).into(),
-                MacAddr(raw.mac).to_string(),
+                i.id.to_string(),
+                i.name().to_string(),
+                i.mac.to_string(),
                 addr,
                 state,
             ]
@@ -137,7 +100,7 @@ fn addr_list_cmd() {
 }
 
 fn addr_set_cmd(rest: &mut impl Iterator<Item = &str>) {
-    let id = resolve_dev(next_arg(rest));
+    let interface = resolve_dev(next_arg(rest));
     let Ipv4Cidr { addr, prefix_len } =
         Ipv4Cidr::from_str(next_arg(rest)).unwrap_or_else(|_| exit_with_msg("invalid address"));
 
@@ -145,20 +108,19 @@ fn addr_set_cmd(rest: &mut impl Iterator<Item = &str>) {
         exit_with_msg("use `ip addr clear` to remove an address");
     }
 
-    interface_set_ipv4(id, addr, prefix_len).unwrap_or_else(|e| exit_with_msg(e))
+    interface_set_ipv4(interface.id, addr, prefix_len).unwrap_or_else(|e| exit_with_msg(e))
 }
 
 fn addr_clear_cmd(rest: &mut impl Iterator<Item = &str>) {
-    let id = resolve_dev(next_arg(rest));
-    interface_set_ipv4(id, Ipv4Addr::UNSPECIFIED, 0).unwrap_or_else(|e| exit_with_msg(e))
+    let interface = resolve_dev(next_arg(rest));
+    interface_set_ipv4(interface.id, Ipv4Addr::UNSPECIFIED, 0).unwrap_or_else(|e| exit_with_msg(e))
 }
 
 fn route_list_cmd() {
-    // read interfaces once.
-    // this might get stale while we are enumerating routes.
-    let ifs = interfaces();
-
     let mut rows: Vec<_> = Vec::new();
+
+    // collect interfaces once and search over it
+    let interfaces = interfaces().unwrap_or_else(|e| exit_with_msg(e));
 
     for i in 0.. {
         let route = match route_get(i) {
@@ -176,11 +138,11 @@ fn route_list_cmd() {
             .gateway
             .map_or_else(|| "direct".into(), |g| g.to_string());
 
-        // route might have an interface that we don't have the record of.
-        let interface = find_interface(route.interface_id, &ifs);
+        let interface = interfaces.iter().find(|&i| i.id == route.interface_id);
 
+        // interface might not exist, since it might change from when we called interfaces() to route_get()
         let device =
-            interface.map_or_else(|| route.interface_id.to_string(), |i| name_str(i).into());
+            interface.map_or_else(|| route.interface_id.to_string(), |i| i.name().to_string());
 
         let scope = if route.kind == RouteKind::Local {
             "host"
@@ -192,7 +154,7 @@ fn route_list_cmd() {
 
         let src = route
             .pref_src
-            .or_else(|| interface.and_then(cidr).map(|c| c.addr))
+            .or_else(|| interface.and_then(|i| i.ipv4.map(|c| c.addr)))
             .map_or_else(|| "-".into(), |s| s.to_string());
 
         rows.push([
@@ -227,7 +189,7 @@ fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEn
         .unwrap_or_else(|_| exit_with_msg("invalid destination address"));
 
     let mut gateway = None;
-    let mut interface_id = None;
+    let mut interface = None;
     let mut metric = DEFAULT_METRIC;
     let mut pref_src = None;
     let mut replace = false;
@@ -240,7 +202,7 @@ fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEn
                         .unwrap_or_else(|_| exit_with_msg("invalid gateway address")),
                 )
             }
-            "dev" => interface_id = Some(resolve_dev(next_arg(rest))),
+            "dev" => interface = Some(resolve_dev(next_arg(rest))),
             "metric" if !minimum => {
                 metric = next_arg(rest)
                     .parse()
@@ -257,7 +219,7 @@ fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEn
         }
     }
 
-    let Some(interface_id) = interface_id else {
+    let Some(interface) = interface else {
         exit_with_msg("dev is required");
     };
 
@@ -265,7 +227,7 @@ fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEn
         dest_ip: addr,
         prefix_len,
         gateway,
-        interface_id,
+        interface_id: interface.id,
         metric,
         owner: RouteOwner::Static,
         kind: RouteKind::Unicast,

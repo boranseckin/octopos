@@ -7,7 +7,7 @@ use user::*;
 // Tests that change lo's address restore 127.0.0.1/8 before returning.
 
 const MAX_ROUTES: usize = 32;
-const MAX_IF: usize = 16;
+const MAX_IF: usize = 32;
 
 const LO_ADDR: Ipv4Addr = Ipv4Addr([127, 0, 0, 1]);
 const LO_PREFIX: u8 = 8;
@@ -18,20 +18,6 @@ const LO_GATEWAY: Ipv4Addr = Ipv4Addr([127, 0, 0, 2]);
 /// Destination used by the tests. Outside every kernel route, so it never shadows real traffic.
 const TEST_DEST: Ipv4Addr = Ipv4Addr([10, 99, 0, 0]);
 const TEST_PREFIX: u8 = 16;
-
-fn interfaces() -> [Option<RawInterface>; MAX_IF] {
-    let mut ifs = [None; MAX_IF];
-
-    for (i, interface) in ifs.iter_mut().enumerate() {
-        match interface_get(i) {
-            Ok(raw) => *interface = Some(raw),
-            Err(SysError::NoEntry) => break,
-            Err(e) => panic!("interface_get({i}): {e:?}"),
-        }
-    }
-
-    ifs
-}
 
 fn routes() -> [Option<RouteEntry>; MAX_ROUTES] {
     let mut routes = [None; MAX_ROUTES];
@@ -47,30 +33,34 @@ fn routes() -> [Option<RouteEntry>; MAX_ROUTES] {
     routes
 }
 
-fn name_str(raw: &RawInterface) -> &str {
-    let len = raw.name.iter().position(|&b| b == 0).unwrap_or(raw.name.len());
-    str::from_utf8(&raw.name[..len]).expect("interface name must be utf8")
+fn interfaces_raw() -> [Option<RawInterface>; MAX_IF] {
+    let mut ifs = [None; MAX_IF];
+
+    for (i, interface) in ifs.iter_mut().enumerate() {
+        match interface_get(i) {
+            Ok(raw) => *interface = Some(raw),
+            Err(SysError::NoEntry) => break,
+            Err(e) => panic!("interface_get({i}): {e:?}"),
+        }
+    }
+
+    ifs
 }
 
-fn lo() -> RawInterface {
-    interfaces()
-        .into_iter()
-        .flatten()
-        .find(|raw| raw.flags & InterfaceFlag::LOOPBACK != 0)
-        .expect("loopback interface must exist")
+fn lo() -> Interface {
+    loopback().expect("loopback interface").unwrap()
 }
 
 fn lo_id() -> InterfaceId {
-    InterfaceId(lo().id)
+    lo().id
 }
 
 /// A non-loopback interface, if the kernel has one (e1000 under QEMU).
 fn other_id() -> Option<InterfaceId> {
-    interfaces()
-        .into_iter()
+    interface_iter()
         .flatten()
-        .find(|raw| raw.flags & InterfaceFlag::LOOPBACK == 0)
-        .map(|raw| InterfaceId(raw.id))
+        .find(|&i| !i.is_loopback())
+        .map(|i| i.id)
 }
 
 /// Finds a route by its key: destination, prefix, gateway and interface.
@@ -105,8 +95,7 @@ fn same_routes(a: &[Option<RouteEntry>], b: &[Option<RouteEntry>]) -> bool {
     let count = |t: &[Option<RouteEntry>]| t.iter().flatten().count();
 
     count(a) == count(b)
-        && a
-            .iter()
+        && a.iter()
             .flatten()
             .all(|ra| b.iter().flatten().any(|rb| same_route(ra, rb)))
 }
@@ -131,19 +120,19 @@ fn restore_lo() {
 
 /// lo is listed with its fixed address and flags, and listing stops with NoEntry.
 fn test_interface_list() {
-    let ifs = interfaces();
+    let ifs = interfaces_raw();
     let count = ifs.iter().flatten().count();
     assert!(count >= 1, "at least lo must be listed");
 
     let lo = lo();
-    assert_eq!(name_str(&lo), "lo", "loopback must be named lo");
-    assert_eq!(
-        lo.flags & (InterfaceFlag::UP | InterfaceFlag::LOOPBACK | InterfaceFlag::CONFIGURED),
-        InterfaceFlag::UP | InterfaceFlag::LOOPBACK | InterfaceFlag::CONFIGURED,
+    let cidr = lo.ipv4.expect("lo must have an address");
+    assert_eq!(lo.name(), "lo", "loopback must be named lo");
+    assert!(
+        lo.is_up() && lo.is_configured() && lo.is_loopback(),
         "lo must be up, loopback and configured"
     );
-    assert_eq!(Ipv4Addr::from(lo.addr), LO_ADDR, "lo address mismatch");
-    assert_eq!(lo.prefix_len, LO_PREFIX, "lo prefix mismatch");
+    assert_eq!(cidr.addr, LO_ADDR, "lo address mismatch");
+    assert_eq!(cidr.prefix_len, LO_PREFIX, "lo prefix mismatch");
 
     // ids are unique
     for (i, a) in ifs.iter().flatten().enumerate() {
@@ -188,7 +177,10 @@ fn test_route_add_replace_remove() {
     route_add(&route, 0).expect("route_add");
     let added = find_route(TEST_DEST, TEST_PREFIX, Some(LO_GATEWAY), lo_id())
         .expect("added route must be listed");
-    assert!(same_route(&added, &route), "listed route must match what was added");
+    assert!(
+        same_route(&added, &route),
+        "listed route must match what was added"
+    );
 
     assert_eq!(
         route_add(&route, 0),
@@ -260,45 +252,87 @@ fn test_route_add_rejects() {
     let route = test_route();
 
     assert_eq!(
-        route_add(&RouteEntry { prefix_len: 33, ..route }, 0),
+        route_add(
+            &RouteEntry {
+                prefix_len: 33,
+                ..route
+            },
+            0
+        ),
         Err(SysError::InvalidArgument),
         "prefix over 32 must be rejected"
     );
 
     assert_eq!(
-        route_add(&RouteEntry { dest_ip: Ipv4Addr([10, 99, 0, 5]), ..route }, 0),
+        route_add(
+            &RouteEntry {
+                dest_ip: Ipv4Addr([10, 99, 0, 5]),
+                ..route
+            },
+            0
+        ),
         Err(SysError::InvalidArgument),
         "host bits outside the prefix must be rejected"
     );
 
     assert_eq!(
-        route_add(&RouteEntry { interface_id: InterfaceId(999), ..route }, 0),
+        route_add(
+            &RouteEntry {
+                interface_id: InterfaceId(999),
+                ..route
+            },
+            0
+        ),
         Err(SysError::NoEntry),
         "unknown interface must be rejected"
     );
 
     assert_eq!(
-        route_add(&RouteEntry { gateway: Some(Ipv4Addr([10, 1, 1, 1])), ..route }, 0),
+        route_add(
+            &RouteEntry {
+                gateway: Some(Ipv4Addr([10, 1, 1, 1])),
+                ..route
+            },
+            0
+        ),
         Err(SysError::InvalidArgument),
         "gateway not on any direct route must be rejected"
     );
 
     if let Some(other) = other_id() {
         assert_eq!(
-            route_add(&RouteEntry { interface_id: other, ..route }, 0),
+            route_add(
+                &RouteEntry {
+                    interface_id: other,
+                    ..route
+                },
+                0
+            ),
             Err(SysError::InvalidArgument),
             "gateway on-link on a different interface must be rejected"
         );
     }
 
     assert_eq!(
-        route_add(&RouteEntry { owner: RouteOwner::Kernel, ..route }, 0),
+        route_add(
+            &RouteEntry {
+                owner: RouteOwner::Kernel,
+                ..route
+            },
+            0
+        ),
         Err(SysError::NotPermitted),
         "kernel-owned routes cannot be added"
     );
 
     assert_eq!(
-        route_add(&RouteEntry { kind: RouteKind::Local, ..route }, 0),
+        route_add(
+            &RouteEntry {
+                kind: RouteKind::Local,
+                ..route
+            },
+            0
+        ),
         Err(SysError::NotPermitted),
         "local routes cannot be added"
     );
@@ -317,7 +351,10 @@ fn test_route_add_rejects() {
     );
     route_remove(&route).expect("route_remove");
 
-    assert!(same_routes(&before, &routes()), "rejected routes must not change the table");
+    assert!(
+        same_routes(&before, &routes()),
+        "rejected routes must not change the table"
+    );
 }
 
 /// Kernel routes cannot be removed or replaced, whatever owner the request claims.
@@ -353,7 +390,10 @@ fn test_kernel_routes_protected() {
         "replacing a kernel route must fail"
     );
 
-    assert!(same_routes(&before, &routes()), "kernel routes must be unchanged");
+    assert!(
+        same_routes(&before, &routes()),
+        "kernel routes must be unchanged"
+    );
 }
 
 /// Invalid addresses are rejected and leave lo untouched.
@@ -379,8 +419,9 @@ fn test_set_ipv4_rejects() {
     );
 
     let lo = lo();
-    assert_eq!(Ipv4Addr::from(lo.addr), LO_ADDR, "lo address must be unchanged");
-    assert_eq!(lo.prefix_len, LO_PREFIX, "lo prefix must be unchanged");
+    let cidr = lo.ipv4.expect("lo must have an address");
+    assert_eq!(cidr.addr, LO_ADDR, "lo address must be unchanged");
+    assert_eq!(cidr.prefix_len, LO_PREFIX, "lo prefix must be unchanged");
     assert!(same_routes(&before, &routes()), "routes must be unchanged");
 }
 
@@ -408,7 +449,7 @@ fn test_clear_and_restore() {
     interface_set_ipv4(lo_id(), Ipv4Addr::UNSPECIFIED, 0).expect("clear lo");
 
     let cleared = lo();
-    let unconfigured = cleared.flags & InterfaceFlag::CONFIGURED == 0;
+    let unconfigured = !cleared.is_configured();
     let no_routes = routes().iter().flatten().all(|r| r.interface_id != lo_id());
 
     // restore before asserting, so a failure here does not leave lo broken
