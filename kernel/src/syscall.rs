@@ -155,7 +155,7 @@ impl From<NetError> for SysError {
             NetError::Interrupted => SysError::Interrupted,
             NetError::NetworkUnreachable => SysError::NetworkUnreachable,
             NetError::RouteNotFound => SysError::NoEntry,
-            NetError::PacketTooLarge => SysError::InvalidArgument,
+            NetError::PacketTooLarge => SysError::MessageTooLarge,
             NetError::ResourceUnavailable => SysError::ResourceUnavailable,
             NetError::InterfaceNotFound => SysError::NoEntry,
             NetError::ChecksumFailed => SysError::InvalidArgument,

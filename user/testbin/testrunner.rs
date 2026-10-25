@@ -14,6 +14,7 @@ const TESTS: &[&str] = &[
     "/_net",
     "/_ping",
     "/_netconf",
+    "/_packet",
 ];
 
 #[unsafe(no_mangle)]

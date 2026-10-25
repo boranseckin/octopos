@@ -51,7 +51,7 @@ impl PacketSocket {
             err!(NetError::MalformedPacket);
         }
 
-        if frame.len() >= 1514 {
+        if frame.len() > 1514 {
             err!(NetError::PacketTooLarge);
         }
 

@@ -71,6 +71,22 @@ impl SockAddr {
             port,
         }
     }
+
+    pub const fn link(interface: Option<InterfaceId>, ether_type: Option<u16>) -> SockAddr {
+        Self::Link {
+            interface,
+            ether_type,
+            mac: MacAddr::UNSPECIFIED,
+        }
+    }
+
+    pub const fn any_link() -> Self {
+        Self::Link {
+            interface: None,
+            ether_type: None,
+            mac: MacAddr::UNSPECIFIED,
+        }
+    }
 }
 
 /// Wire format of a socket address shared with user space.
