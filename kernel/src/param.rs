@@ -45,3 +45,9 @@ pub const NKSTACK_PAGES: usize = 1;
 
 /// user stack pages
 pub const USERSTACK: usize = 4;
+
+/// timebase for qemu
+pub const TIMEBASE_HZ: usize = 10_000_000;
+
+/// ticks per second
+pub const TICKS_PER_SEC: usize = 10;

@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::param::NCPU;
+use crate::param::{NCPU, TICKS_PER_SEC, TIMEBASE_HZ};
 use crate::riscv::registers::*;
 
 #[repr(C, align(16))]
@@ -26,7 +26,7 @@ unsafe fn timer_init() {
         mcounteren::write(mcounteren::read() | 2);
 
         // ask for the very first timer interrupt.
-        stimecmp::write(time::read() + 1000000);
+        stimecmp::write(time::read() + TIMEBASE_HZ / TICKS_PER_SEC);
     }
 }
 

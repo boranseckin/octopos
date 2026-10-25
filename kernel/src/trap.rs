@@ -2,7 +2,7 @@ use core::mem;
 
 use crate::kernelvec::kernelvec;
 use crate::memlayout::{E1000_IRQ, TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
-use crate::param::NKSTACK_PAGES;
+use crate::param::{NKSTACK_PAGES, TICKS_PER_SEC, TIMEBASE_HZ};
 use crate::proc;
 use crate::riscv::{
     PGSIZE, interrupts,
@@ -237,8 +237,7 @@ pub fn clock_intr() {
 
     // Ask for the next timer interrupt.
     // This also clears the interrupt request.
-    // 1_000_000 is about a tenth of a second.
-    unsafe { stimecmp::write(time::read() + 1_000_000) };
+    unsafe { stimecmp::write(time::read() + TIMEBASE_HZ / TICKS_PER_SEC) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

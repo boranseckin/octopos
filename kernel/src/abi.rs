@@ -8,6 +8,6 @@ pub use crate::net::route::{RawRoute, RouteEntry, RouteKind, RouteOwner};
 pub use crate::net::socket::{RawSockAddr, SockAddr, SocketType};
 pub use crate::net::udp::UdpHeader;
 pub use crate::net::{Be, Ipv4Addr, Ipv4Cidr, MacAddr, NetworkHeader};
-pub use crate::param::MAXPATH;
+pub use crate::param::{MAXPATH, TICKS_PER_SEC};
 pub use crate::syscall::{SysError, Syscall};
 pub use crate::sysnet::{InterfaceOp, RouteFlag, RouteOp};
