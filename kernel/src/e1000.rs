@@ -320,10 +320,11 @@ pub unsafe fn init() {
     state.write_reg(E1000_MMIO_RDH, 0);
     state.write_reg(E1000_MMIO_RDT, RX_RING_SIZE as u32 - 1);
 
-    // set RCTL: EN=bit1, SBP=bit2, UPE=bit3, MPE=bit4, LBM=0, RDMTS=0, BAM=bit15, BSIZE=2048
+    // set RCTL: EN=bit1, SBP=bit2, UPE=bit3, MPE=bit4, LBM=0, RDMTS=0, BAM=bit15, BSIZE=2048,
+    // SECRC=1
     state.set_mask(
         E1000_MMIO_RCTL,
-        (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 15),
+        (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 15) | (1 << 26),
     );
 
     // allocate transmit buffers
