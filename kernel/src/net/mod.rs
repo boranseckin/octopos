@@ -408,7 +408,7 @@ pub fn enqueue_incoming(interface_id: InterfaceId, packet: Box<[u8]>) -> Result<
 /// Implementors must ensure that the struct is `repr(C, packed)` and contains only plain data
 /// fields, so that it can be safely transmuted to/from a byte slice without violating Rust's
 /// aliasing or alignment rules.
-unsafe trait NetworkHeader: Sized {
+pub unsafe trait NetworkHeader: Sized {
     /// Parses a header from the start of the given byte slice, returning `None` if the data is too
     /// short.
     fn from_bytes(data: &[u8]) -> Option<&Self> {
