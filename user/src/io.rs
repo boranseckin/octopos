@@ -92,7 +92,7 @@ macro_rules! print {
         <$crate::Stdout as core::fmt::Write>::write_fmt(
             &mut $crate::Stdout,
             format_args!($($arg)*),
-        ).unwrap();
+        ).unwrap()
     };
 }
 
@@ -113,7 +113,7 @@ macro_rules! eprint {
         <$crate::Stderr as core::fmt::Write>::write_fmt(
             &mut $crate::Stderr,
             format_args!($($arg)*),
-        ).unwrap();
+        ).unwrap()
     };
 }
 
