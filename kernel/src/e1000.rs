@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
-use crate::net::{self, Ipv4Addr, Ipv4Cidr, MacAddr, NetError};
+use crate::net::{self, MacAddr, NetError};
 use crate::spinlock::SpinLock;
 
 const TX_RING_SIZE: usize = 16;
@@ -369,10 +369,7 @@ pub unsafe fn init() {
         InterfaceConfig {
             name: "e1000",
             mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
-            ipv4: Some(Ipv4Cidr {
-                addr: Ipv4Addr([192, 168, 10, 2]),
-                prefix_len: 24,
-            }),
+            ipv4: None,
             is_up: true,
         },
         Arc::new(E1000Interface),
