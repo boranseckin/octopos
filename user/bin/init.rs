@@ -15,6 +15,17 @@ fn main(_args: Args) {
 
     let test_mode = open("testmode", OpenFlag::READ_ONLY).map(close).is_ok();
 
+    if !test_mode {
+        match mkdir("/log") {
+            Ok(_) | Err(SysError::AlreadyExists) => {
+                if let Err(e) = init_dhcpc() {
+                    eprintln!("init: dhcpc failed: {e}");
+                }
+            }
+            _ => eprintln!("init: mkdir /log failed"),
+        }
+    }
+
     loop {
         let Ok(pid) = fork() else {
             exit_with_msg("init: fork failed");
@@ -43,4 +54,25 @@ fn main(_args: Args) {
             }
         }
     }
+}
+
+fn init_dhcpc() -> Result<(), SysError> {
+    for interface in interfaces()? {
+        if interface.is_loopback() {
+            continue;
+        }
+
+        if fork()? == 0 {
+            close(Fd::STDOUT).unwrap_or_else(|e| exit_with_msg(e));
+            open(
+                &format!("/log/dhcpc.{}", interface.id),
+                OpenFlag::CREATE | OpenFlag::WRITE_ONLY | OpenFlag::TRUNCATE,
+            )
+            .unwrap_or_else(|e| exit_with_msg(e));
+            exec("/dhcpc", &["dhcpc", interface.name()]);
+            exit_with_msg("init: exec dhcpc failed");
+        }
+    }
+
+    Ok(())
 }
