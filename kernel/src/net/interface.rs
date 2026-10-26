@@ -17,9 +17,6 @@ pub trait NetDevice: Send + Sync {
     fn needs_arp(&self) -> bool {
         true
     }
-    fn needs_dhcp(&self) -> bool {
-        true
-    }
 }
 
 /// Identifier for a network interface, used in routing table entries to specify which interface to
