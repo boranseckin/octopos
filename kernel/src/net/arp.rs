@@ -1,6 +1,6 @@
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{self, InterfaceId};
-use crate::net::{Be, Ipv4Addr, MacAddr, NetError, NetworkHeader, OutgoingQueue};
+use crate::net::{Be, Ipv4Addr, MacAddr, NetError, NetworkHeader, OutgoingQueue, Result};
 use crate::spinlock::SpinLock;
 
 const ARP_CACHE_SIZE: usize = 64;
@@ -171,7 +171,7 @@ pub fn handle_arp(
     interface_id: InterfaceId,
     req_eth: &EthernetHeader,
     req_data: &[u8],
-) -> Result<(), NetError> {
+) -> Result<()> {
     let Some(req_arp) = ArpPacket::from_bytes(req_data) else {
         err!(NetError::MalformedPacket);
     };
@@ -192,7 +192,7 @@ pub fn handle_arp(
 
     match req_arp.op() {
         ArpOp::Request => {
-            try_log!(reply(interface_id, req_eth, req_arp));
+            reply(interface_id, req_eth, req_arp)?;
         }
         ArpOp::Response => {
             ArpCache::insert(req_arp.spa, req_arp.sha);
@@ -206,11 +206,7 @@ pub fn handle_arp(
 
 /// Sends an ARP Reply in response to the given ARP Request.
 /// It constructs both the Ethernet and ARP headers for the reply.
-fn reply(
-    interface_id: InterfaceId,
-    req_eth: &EthernetHeader,
-    req_arp: &ArpPacket,
-) -> Result<(), NetError> {
+fn reply(interface_id: InterfaceId, req_eth: &EthernetHeader, req_arp: &ArpPacket) -> Result<()> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
@@ -226,7 +222,7 @@ fn reply(
     EthernetHeader::new_reply(req_eth, mac).append_to(&mut packet, &mut offset);
     ArpPacket::new_reply(req_arp, mac, ipv4.addr).append_to(&mut packet, &mut offset);
 
-    log!(interface.device.transmit(&packet))
+    interface.device.transmit(&packet)
 }
 
 /// Sends an ARP Request for the given destination IP address.
@@ -234,7 +230,7 @@ fn reply(
 ///
 /// The reply will be handled asynchronously by `handle_arp` and the result will be stored in the
 /// ARP cache for future lookups.
-pub fn request(interface_id: InterfaceId, dest_ip: Ipv4Addr) -> Result<(), NetError> {
+pub fn request(interface_id: InterfaceId, dest_ip: Ipv4Addr) -> Result<()> {
     let mut packet = [0u8; EthernetHeader::SIZE + ArpPacket::SIZE];
     let mut offset = 0;
 
@@ -251,5 +247,5 @@ pub fn request(interface_id: InterfaceId, dest_ip: Ipv4Addr) -> Result<(), NetEr
         .append_to(&mut packet, &mut offset);
     ArpPacket::new_request(dest_ip, mac, ipv4.addr).append_to(&mut packet, &mut offset);
 
-    log!(interface.device.transmit(&packet))
+    interface.device.transmit(&packet)
 }

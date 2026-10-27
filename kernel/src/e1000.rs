@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
-use crate::net::{self, MacAddr, NetError};
+use crate::net::{self, MacAddr, NetError, Result};
 use crate::spinlock::SpinLock;
 
 const TX_RING_SIZE: usize = 16;
@@ -151,7 +151,7 @@ impl NetDevice for E1000Interface {
     /// Returns an error if the buffer size exceeds the transmit buffer size or if there are no
     /// available transmit descriptors (i.e., the hardware has not yet processed the previous
     /// descriptors).
-    fn transmit(&self, packet: &[u8]) -> Result<(), NetError> {
+    fn transmit(&self, packet: &[u8]) -> Result<()> {
         if packet.len() >= TX_BUF_SIZE {
             err!(NetError::PacketTooLarge);
         }
@@ -250,7 +250,9 @@ pub fn handle_interrupt() {
 
         // enqueue the packet for processing by the network stack
         // ignore the result since if the channel is full, the packet will just be dropped
-        let _ = log!(net::enqueue_incoming(interface_id, data));
+        if let Err(e) = net::enqueue_incoming(interface_id, data) {
+            report!(e, "e1000");
+        }
 
         // re-acquire lock for next iteration of loop
         state = E1000.lock();

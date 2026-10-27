@@ -1,7 +1,7 @@
+use crate::net::icmp;
 use crate::net::interface::InterfaceId;
 use crate::net::udp;
-use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
-use crate::net::{icmp, internet_checksum};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -90,7 +90,7 @@ unsafe impl NetworkHeader for Ipv4Header {}
 
 /// Handles an incoming IPv4 packet by parsing the header and dispatching to the appropriate
 /// protocol handler.
-pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<(), NetError> {
+pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<()> {
     let Some((req_ipv4, req_data)) = Ipv4Header::from_bytes_with_rest(packet) else {
         err!(NetError::MalformedPacket)
     };
@@ -115,7 +115,7 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<(), NetEr
         sum: Be::new(0),
         ..*req_ipv4
     };
-    if internet_checksum(&[header_without_sum.as_bytes()]) != req_ipv4.sum.get() {
+    if net::internet_checksum(&[header_without_sum.as_bytes()]) != req_ipv4.sum.get() {
         err!(NetError::ChecksumFailed);
     }
 
@@ -124,13 +124,8 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<(), NetEr
     let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
 
     match req_ipv4.proto() {
-        Ipv4Proto::Icmp => log!(icmp::handle_icmp(req_ipv4.src, req_data)),
-        Ipv4Proto::Udp => log!(udp::handle_udp(
-            interface_id,
-            req_ipv4.dest,
-            req_ipv4.src,
-            req_data
-        )),
+        Ipv4Proto::Icmp => icmp::handle_icmp(req_ipv4.src, req_data),
+        Ipv4Proto::Udp => udp::handle_udp(interface_id, req_ipv4.dest, req_ipv4.src, req_data),
         Ipv4Proto::Unknown => Ok(()),
     }
 }

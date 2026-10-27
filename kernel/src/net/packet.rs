@@ -2,8 +2,9 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use crate::net::eth::EthernetHeader;
+use crate::net::interface;
 use crate::net::socket::{RecvQueue, SockAddr};
-use crate::net::{InterfaceId, NetError, interface};
+use crate::net::{InterfaceId, NetError, Result};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
 
@@ -16,10 +17,7 @@ pub struct PacketSocket {
 
 impl PacketSocket {
     /// Binds a socket. Interface, if given, must exist.
-    pub fn bind(
-        interface: Option<InterfaceId>,
-        ether_type: Option<u16>,
-    ) -> Result<Arc<Self>, NetError> {
+    pub fn bind(interface: Option<InterfaceId>, ether_type: Option<u16>) -> Result<Arc<Self>> {
         if let Some(id) = interface
             && interface::find_interface_by_id(id).is_none()
         {
@@ -32,7 +30,7 @@ impl PacketSocket {
             ether_type,
             queue: RecvQueue::new(),
         });
-        try_log!(table.add(socket.clone()));
+        table.add(socket.clone())?;
         Ok(socket)
     }
 
@@ -46,7 +44,7 @@ impl PacketSocket {
     }
 
     /// `frame` is a full Ethernet frame. Sent on `interface`, or the bound one if None.
-    pub fn send(&self, interface: Option<InterfaceId>, frame: &[u8]) -> Result<(), NetError> {
+    pub fn send(&self, interface: Option<InterfaceId>, frame: &[u8]) -> Result<()> {
         if frame.len() < 14 {
             err!(NetError::MalformedPacket);
         }
@@ -67,11 +65,11 @@ impl PacketSocket {
             err!(NetError::InterfaceNotFound);
         };
 
-        log!(interface.device.transmit(frame))
+        interface.device.transmit(frame)
     }
 
-    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
-        log!(self.queue.receive())
+    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
+        self.queue.receive()
     }
 
     fn matches(&self, interface: InterfaceId, ether_type: u16) -> bool {
@@ -107,7 +105,7 @@ static PACKET_TABLE: SpinLock<PacketTable> = SpinLock::new(
 );
 
 impl PacketTable {
-    fn add(&mut self, socket: Arc<PacketSocket>) -> Result<(), NetError> {
+    fn add(&mut self, socket: Arc<PacketSocket>) -> Result<()> {
         let Some(id) = self.entries.iter().position(|e| e.is_none()) else {
             err!(NetError::TableFull);
         };

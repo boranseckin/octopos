@@ -3,9 +3,10 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
 use crate::net::icmp::PingSocket;
+use crate::net::interface;
 use crate::net::packet::PacketSocket;
 use crate::net::udp::UdpSocket;
-use crate::net::{InterfaceId, Ipv4Addr, MacAddr, NetError, interface};
+use crate::net::{InterfaceId, Ipv4Addr, MacAddr, NetError, Result};
 use crate::proc::{self, Channel, Pod};
 use crate::spinlock::SpinLock;
 use crate::trap::TICKS;
@@ -26,7 +27,7 @@ pub enum SocketType {
 impl TryFrom<usize> for SocketType {
     type Error = NetError;
 
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
+    fn try_from(value: usize) -> core::result::Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Udp),
             2 => Ok(Self::Ping),
@@ -166,7 +167,7 @@ impl From<SockAddr> for RawSockAddr {
 impl TryFrom<RawSockAddr> for SockAddr {
     type Error = NetError;
 
-    fn try_from(value: RawSockAddr) -> Result<Self, Self::Error> {
+    fn try_from(value: RawSockAddr) -> core::result::Result<Self, Self::Error> {
         // # Safety: Raw address structs consist of only primitive types with no implicit padding.
         match value.family {
             1 => {
@@ -211,21 +212,16 @@ pub enum Socket {
 }
 
 impl Socket {
-    pub fn open_udp(ip: Ipv4Addr, port: u16) -> Result<Self, NetError> {
-        Ok(Self::Udp(try_log!(UdpSocket::bind(ip, port, None))))
+    pub fn open_udp(ip: Ipv4Addr, port: u16) -> Result<Self> {
+        Ok(Self::Udp(UdpSocket::bind(ip, port, None)?))
     }
 
-    pub fn open_ping(ident: u16) -> Result<Self, NetError> {
-        Ok(Self::Ping(try_log!(PingSocket::bind(ident))))
+    pub fn open_ping(ident: u16) -> Result<Self> {
+        Ok(Self::Ping(PingSocket::bind(ident)?))
     }
 
-    pub fn open_packet(
-        interface: Option<InterfaceId>,
-        ether_type: Option<u16>,
-    ) -> Result<Self, NetError> {
-        Ok(Self::Packet(try_log!(PacketSocket::bind(
-            interface, ether_type
-        ))))
+    pub fn open_packet(interface: Option<InterfaceId>, ether_type: Option<u16>) -> Result<Self> {
+        Ok(Self::Packet(PacketSocket::bind(interface, ether_type)?))
     }
 
     pub fn close(&self) {
@@ -267,14 +263,14 @@ impl Socket {
         }
     }
 
-    pub fn send(&self, remote_addr: SockAddr, buf: &[u8]) -> Result<(), NetError> {
+    pub fn send(&self, remote_addr: SockAddr, buf: &[u8]) -> Result<()> {
         match self {
             Socket::Udp(udp_socket) => {
                 let SockAddr::Inet { ip, port } = remote_addr else {
                     err!(NetError::InvalidAddress)
                 };
 
-                log!(udp_socket.send(ip, port, buf))
+                udp_socket.send(ip, port, buf)
             }
 
             Socket::Ping(ping_socket) => {
@@ -282,7 +278,7 @@ impl Socket {
                     err!(NetError::InvalidAddress)
                 };
 
-                log!(ping_socket.send(ip, buf))
+                ping_socket.send(ip, buf)
             }
 
             Socket::Packet(packet_socket) => {
@@ -295,16 +291,16 @@ impl Socket {
                     err!(NetError::InvalidAddress)
                 };
 
-                log!(packet_socket.send(interface, buf))
+                packet_socket.send(interface, buf)
             }
         }
     }
 
-    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
+    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
         match self {
-            Socket::Udp(udp_socket) => log!(udp_socket.receive()),
-            Socket::Ping(ping_socket) => log!(ping_socket.receive()),
-            Socket::Packet(packet_socket) => log!(packet_socket.receive()),
+            Socket::Udp(udp_socket) => udp_socket.receive(),
+            Socket::Ping(ping_socket) => ping_socket.receive(),
+            Socket::Packet(packet_socket) => packet_socket.receive(),
         }
     }
 }
@@ -357,7 +353,7 @@ impl RecvQueue {
 
     /// Receives a packet from the RecvQueue.
     /// Sleeps until a packet arrives, the socket is closed, or the process is killed.
-    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
+    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
         let deadline = match self.inner.lock().timeout {
             0 => None,
             timeout => Some(TICKS.lock().saturating_add(timeout)),

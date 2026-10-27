@@ -7,13 +7,13 @@ use alloc::vec::Vec;
 
 use crate::net::loopback;
 use crate::net::route;
-use crate::net::{Ipv4Addr, Ipv4Cidr, MacAddr, NetError};
+use crate::net::{Ipv4Addr, Ipv4Cidr, MacAddr, NetError, Result};
 use crate::proc::Pod;
 use crate::spinlock::SpinLock;
 
 /// Trait for network interface devices
 pub trait NetDevice: Send + Sync {
-    fn transmit(&self, packet: &[u8]) -> Result<(), NetError>;
+    fn transmit(&self, packet: &[u8]) -> Result<()>;
     fn needs_arp(&self) -> bool {
         true
     }
@@ -125,12 +125,12 @@ impl From<InterfaceEntry> for RawInterface {
 static INTERFACES: SpinLock<Vec<InterfaceEntry>> = SpinLock::new(Vec::new(), "net_interfaces");
 
 /// Returns a copy of the interface entry at a given index.
-pub fn interface_at(index: usize) -> Result<InterfaceEntry, NetError> {
-    INTERFACES
+pub fn interface_at(index: usize) -> Result<InterfaceEntry> {
+    Ok(INTERFACES
         .lock()
         .get(index)
         .ok_or(NetError::InterfaceNotFound)
-        .cloned()
+        .cloned()?)
 }
 
 /// Registers a network interface with the given id and the network stack.
@@ -148,7 +148,7 @@ pub fn register_interface(id: InterfaceId, config: InterfaceConfig, device: Arc<
 ///
 /// If `ipv4` is `None`, the interface is marked as not configured and cannot send or receive IP
 /// packets.
-pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Cidr>) -> Result<(), NetError> {
+pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Cidr>) -> Result<()> {
     // if address is being set, make sure it has a valid prefix len.
     // /0 would make every destination on-link; not allowed.
     if let Some(c) = ipv4

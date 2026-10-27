@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::Ipv4Proto;
 use crate::net::socket::{RecvQueue, SockAddr};
-use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
 use crate::net::{route, source_addr};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
@@ -33,13 +33,9 @@ impl UdpSocket {
     /// - If the `port` argument is `0`, it will assign an ephemeral port automatically.
     /// - If the `interface` argument is `Some`, the socket will only receive datagrams that arrived
     ///   on that interface. If `None`, it will receive datagrams from any interface.
-    pub fn bind(
-        ip: Ipv4Addr,
-        port: u16,
-        interface: Option<InterfaceId>,
-    ) -> Result<Arc<Self>, NetError> {
+    pub fn bind(ip: Ipv4Addr, port: u16, interface: Option<InterfaceId>) -> Result<Arc<Self>> {
         let mut table = UDP_TABLE.lock();
-        log!(table.add(ip, port, interface))
+        table.add(ip, port, interface)
     }
 
     /// Unregisters from the table, marks closed, wakes sleepers.
@@ -52,7 +48,7 @@ impl UdpSocket {
         self.queue.close();
     }
 
-    pub fn send(&self, dest_ip: Ipv4Addr, dest_port: u16, buf: &[u8]) -> Result<(), NetError> {
+    pub fn send(&self, dest_ip: Ipv4Addr, dest_port: u16, buf: &[u8]) -> Result<()> {
         if buf.len() > MAX_UDP_PAYLOAD {
             err!(NetError::PacketTooLarge)
         }
@@ -61,11 +57,11 @@ impl UdpSocket {
             err!(NetError::BadSocket)
         }
 
-        log!(transmit_udp(dest_ip, dest_port, self.bound_port, buf))
+        transmit_udp(dest_ip, dest_port, self.bound_port, buf)
     }
 
-    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
-        log!(self.queue.receive())
+    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
+        self.queue.receive()
     }
 
     fn deliver(&self, ip: Ipv4Addr, port: u16, payload: Box<[u8]>) {
@@ -177,7 +173,7 @@ impl UdpTable {
         ip: Ipv4Addr,
         port: u16,
         interface: Option<InterfaceId>,
-    ) -> Result<u16, NetError> {
+    ) -> Result<u16> {
         // resolve the port to bind
         let bind_port = if port == 0 {
             // scan the ephemeral range for a port not already in use
@@ -219,12 +215,12 @@ impl UdpTable {
         ip: Ipv4Addr,
         port: u16,
         interface: Option<InterfaceId>,
-    ) -> Result<Arc<UdpSocket>, NetError> {
+    ) -> Result<Arc<UdpSocket>> {
         let Some(id) = self.entries.iter().position(|e| e.is_none()) else {
             err!(NetError::TableFull);
         };
 
-        let port = try_log!(self.resolve_port(ip, port, interface));
+        let port = self.resolve_port(ip, port, interface)?;
 
         let Ok(socket) = Arc::try_new(UdpSocket {
             bound_ip: ip,
@@ -325,16 +321,11 @@ impl UdpHeader {
 /// Transmits a UDP datagram to the specified destination IP and port, with the given source port
 /// and payload. This function constructs the UDP header, calculates the checksum, and then sends
 /// the packet using the underlying `net::transmit` function.
-fn transmit_udp(
-    dest_ip: Ipv4Addr,
-    dest_port: u16,
-    src_port: u16,
-    payload: &[u8],
-) -> Result<(), NetError> {
+fn transmit_udp(dest_ip: Ipv4Addr, dest_port: u16, src_port: u16, payload: &[u8]) -> Result<()> {
     // UDP requires L3 routing information in the header for checksum calculation, so we need to do
     // the routing lookup before passing it to net::transmit().
     // To avoid double lookup, we are using net::transmit_with_route().
-    let route = try_log!(route::best_route_for(dest_ip));
+    let route = route::best_route_for(dest_ip)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::NotConfigured);
@@ -347,13 +338,13 @@ fn transmit_udp(
     let header =
         UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(src_ipv4, dest_ip, payload);
 
-    log!(net::transmit_with_route(
+    net::transmit_with_route(
         route,
         interface,
         dest_ip,
         Ipv4Proto::Udp,
-        &[header.as_bytes(), payload]
-    ))
+        &[header.as_bytes(), payload],
+    )
 }
 
 /// Handles an incoming UDP datagram by parsing the header, validating it, and enqueuing the payload
@@ -364,7 +355,7 @@ pub fn handle_udp(
     dest_ip: Ipv4Addr,
     src_ip: Ipv4Addr,
     req_data: &[u8],
-) -> Result<(), NetError> {
+) -> Result<()> {
     let Some((req_udp, req_data)) = UdpHeader::from_bytes_with_rest(req_data) else {
         err!(NetError::MalformedPacket)
     };

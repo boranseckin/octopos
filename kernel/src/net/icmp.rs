@@ -5,7 +5,7 @@ use crate::abi::SockAddr;
 use crate::net::ipv4::Ipv4Proto;
 use crate::net::socket::RecvQueue;
 use crate::net::udp::MAX_UDP_PAYLOAD;
-use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
 
@@ -23,9 +23,9 @@ pub struct PingSocket {
 impl PingSocket {
     /// Bind a new socket and registers in the Ping table.
     /// `ident == 0` picks a free identifier.
-    pub fn bind(ident: u16) -> Result<Arc<Self>, NetError> {
+    pub fn bind(ident: u16) -> Result<Arc<Self>> {
         let mut table = PING_TABLE.lock();
-        log!(table.add(ident))
+        table.add(ident)
     }
 
     pub fn close(self: &Arc<Self>) {
@@ -41,7 +41,7 @@ impl PingSocket {
     /// `buf` is a full ICMP message (header + payload) built by the user.
     ///
     /// The ident is overwritten for security, and the checksum is recalculated.
-    pub fn send(&self, dest_ip: Ipv4Addr, buf: &[u8]) -> Result<(), NetError> {
+    pub fn send(&self, dest_ip: Ipv4Addr, buf: &[u8]) -> Result<()> {
         if buf.len() > MAX_UDP_PAYLOAD {
             err!(NetError::PacketTooLarge)
         }
@@ -62,15 +62,11 @@ impl PingSocket {
         // recalculate checksum, in case it was left as zero.
         let req_icmp = req_icmp.with_echo_ident(self.ident).add_checksum(req_data);
 
-        log!(net::transmit(
-            dest_ip,
-            Ipv4Proto::Icmp,
-            &[req_icmp.as_bytes(), req_data]
-        ))
+        net::transmit(dest_ip, Ipv4Proto::Icmp, &[req_icmp.as_bytes(), req_data])
     }
 
-    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>), NetError> {
-        log!(self.queue.receive())
+    pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
+        self.queue.receive()
     }
 
     fn deliver(&self, from: SockAddr, payload: &[u8]) {
@@ -109,7 +105,7 @@ impl PingTable {
 
     /// Resolves the ident to bind: picks a free ephemeral ident if `ident == 0`, otherwise checks
     /// for a confglicting binding. Caller must hold the table lock.
-    fn resolve_ident(&mut self, ident: u16) -> Result<u16, NetError> {
+    fn resolve_ident(&mut self, ident: u16) -> Result<u16> {
         // resolve the ident to bind
         let bind_ident = if ident == 0 {
             // scan the ephemeral range for a ident not already in use
@@ -156,12 +152,12 @@ impl PingTable {
 
     /// Resovles the ident, creates the socket, and inserts it into a free slot, all under the
     /// caller's table lock so no other bind can claim the same port in between.
-    fn add(&mut self, ident: u16) -> Result<Arc<PingSocket>, NetError> {
+    fn add(&mut self, ident: u16) -> Result<Arc<PingSocket>> {
         let Some(id) = self.entries.iter().position(|e| e.is_none()) else {
             err!(NetError::TableFull);
         };
 
-        let ident = try_log!(self.resolve_ident(ident));
+        let ident = self.resolve_ident(ident)?;
 
         let Ok(socket) = Arc::try_new(PingSocket {
             ident,
@@ -262,7 +258,7 @@ unsafe impl NetworkHeader for IcmpHeader {}
 /// Handles an incoming ICMP packet.
 /// If it's an Echo Request, sends back an Echo Reply.
 /// Otherwise, ignores it.
-pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<(), NetError> {
+pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<()> {
     let Some((header, payload)) = IcmpHeader::from_bytes_with_rest(req_data) else {
         err!(NetError::MalformedPacket)
     };
@@ -275,11 +271,7 @@ pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<(), NetError> {
         IcmpType::EchoRequest => {
             let icmp = IcmpHeader::new_echo_reply(header).add_checksum(payload);
 
-            log!(net::transmit(
-                src_ip,
-                Ipv4Proto::Icmp,
-                &[icmp.as_bytes(), payload]
-            ))
+            net::transmit(src_ip, Ipv4Proto::Icmp, &[icmp.as_bytes(), payload])
         }
         IcmpType::EchoReply => {
             let Some(socket) = PING_TABLE.lock().ingress_lookup(header.echo_ident()) else {

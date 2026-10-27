@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::net::interface::{self, InterfaceId};
 use crate::net::loopback;
-use crate::net::{self, Ipv4Addr, Ipv4Cidr, NetError};
+use crate::net::{self, Ipv4Addr, Ipv4Cidr, NetError, Result};
 use crate::proc::Pod;
 use crate::spinlock::SpinLock;
 
@@ -23,12 +23,12 @@ pub enum RouteOwner {
 impl TryFrom<u8> for RouteOwner {
     type Error = NetError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> core::result::Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Kernel),
             2 => Ok(Self::Dhcp),
             3 => Ok(Self::Static),
-            _ => err!(NetError::NotPermitted),
+            _ => Err(NetError::NotPermitted),
         }
     }
 }
@@ -57,11 +57,11 @@ pub enum RouteKind {
 impl TryFrom<u8> for RouteKind {
     type Error = NetError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> core::result::Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Unicast),
             2 => Ok(Self::Local),
-            _ => err!(NetError::NotPermitted),
+            _ => Err(NetError::NotPermitted),
         }
     }
 }
@@ -139,7 +139,7 @@ impl From<RouteEntry> for RawRoute {
 impl TryFrom<RawRoute> for RouteEntry {
     type Error = NetError;
 
-    fn try_from(value: RawRoute) -> Result<Self, Self::Error> {
+    fn try_from(value: RawRoute) -> core::result::Result<Self, Self::Error> {
         Ok(Self {
             dest_ip: Ipv4Addr::from(value.dest),
             prefix_len: value.prefix_len,
@@ -150,8 +150,8 @@ impl TryFrom<RawRoute> for RouteEntry {
             },
             interface_id: InterfaceId(value.interface_id),
             metric: value.metric,
-            owner: try_log!(RouteOwner::try_from(value.owner)),
-            kind: try_log!(RouteKind::try_from(value.kind)),
+            owner: RouteOwner::try_from(value.owner)?,
+            kind: RouteKind::try_from(value.kind)?,
             pref_src: if value.pref_src == [0; 4] {
                 None
             } else {
@@ -194,7 +194,7 @@ pub fn route_at(index: usize) -> Option<RouteEntry> {
 /// If `replace` is true, when a route with the same dest, prefix, gateway, and interface already
 /// exists, it will be updated with the new information.
 /// Otherwise, a new route entry will be added to the routing table.
-pub fn add_route(route: RouteEntry, replace: bool) -> Result<(), NetError> {
+pub fn add_route(route: RouteEntry, replace: bool) -> Result<()> {
     // must be a valid mask
     let Some(mask) = Ipv4Addr::prefix_len_to_mask(route.prefix_len) else {
         err!(NetError::InvalidAddress)
@@ -249,7 +249,7 @@ pub fn add_route(route: RouteEntry, replace: bool) -> Result<(), NetError> {
 
 /// Removes the route matching dest, prefix, gateway, and interface.
 /// Kernel owned routes cannot be removed this way.
-pub fn remove_route(route: &RouteEntry) -> Result<(), NetError> {
+pub fn remove_route(route: &RouteEntry) -> Result<()> {
     let mut routes = ROUTES.lock();
 
     let Some((i, entry)) = routes.iter().enumerate().find(|(_, r)| route.eq(r)) else {
@@ -309,7 +309,7 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Cidr) {
 /// match and lowest metric.
 ///
 /// Returns `None` if no matching route is found.
-pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry, NetError> {
+pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry> {
     let routes = ROUTES.lock();
 
     // Find all routes that match the destination,

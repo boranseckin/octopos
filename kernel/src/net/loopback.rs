@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use crate::net::interface::{self, InterfaceConfig, InterfaceId, NetDevice};
-use crate::net::{self, Ipv4Addr, Ipv4Cidr, MacAddr, NetError};
+use crate::net::{self, Ipv4Addr, Ipv4Cidr, MacAddr, Result};
 use crate::sync::OnceLock;
 
 static LOOPBACK_ID: OnceLock<InterfaceId> = OnceLock::new();
@@ -16,9 +16,9 @@ pub fn interface_id() -> InterfaceId {
 struct LoopbackInterface {}
 
 impl NetDevice for LoopbackInterface {
-    fn transmit(&self, packet: &[u8]) -> Result<(), NetError> {
+    fn transmit(&self, packet: &[u8]) -> Result<()> {
         // directly enqueue the packet for reception
-        log!(net::enqueue_incoming(interface_id(), Box::from(packet)))
+        net::enqueue_incoming(interface_id(), Box::from(packet))
     }
 
     fn needs_arp(&self) -> bool {

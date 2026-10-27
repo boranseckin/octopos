@@ -4,6 +4,7 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use crate::error::{Expected, Traced};
 use crate::net::arp::ArpCache;
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{InterfaceEntry, InterfaceId, NetDevice};
@@ -75,6 +76,14 @@ impl core::fmt::Display for NetError {
             NetError::TimedOut => write!(f, "timed out"),
             NetError::NotPermitted => write!(f, "not permitted"),
         }
+    }
+}
+
+pub type Result<T> = core::result::Result<T, Traced<NetError>>;
+
+impl Expected for NetError {
+    fn is_expected(&self) -> bool {
+        matches!(self, Self::TimedOut | Self::NetworkUnreachable)
     }
 }
 
@@ -193,13 +202,13 @@ impl core::ops::BitAnd for Ipv4Addr {
 impl core::str::FromStr for Ipv4Addr {
     type Err = NetError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
         let mut octets = [0u8; 4];
         let mut i = 0;
 
         for octet in s.split('.') {
             if i >= 4 {
-                err!(NetError::InvalidAddress);
+                return Err(NetError::InvalidAddress);
             }
 
             octets[i] = match octet.parse() {
@@ -226,9 +235,9 @@ impl From<[u8; 4]> for Ipv4Addr {
 impl TryFrom<&[u8]> for Ipv4Addr {
     type Error = NetError;
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+    fn try_from(value: &[u8]) -> core::result::Result<Self, Self::Error> {
         if value.len() != 4 {
-            err!(NetError::InvalidAddress);
+            return Err(NetError::InvalidAddress);
         }
 
         let mut octets = [0u8; 4];
@@ -255,19 +264,19 @@ pub struct Ipv4Cidr {
 impl core::str::FromStr for Ipv4Cidr {
     type Err = NetError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
         let (addr, prefix_len) = s.split_once('/').unwrap_or((s, "32"));
 
         let Ok(prefix_len) = prefix_len.parse() else {
-            err!(NetError::InvalidAddress)
+            return Err(NetError::InvalidAddress);
         };
 
         if prefix_len > 32 {
-            err!(NetError::InvalidAddress)
+            return Err(NetError::InvalidAddress);
         }
 
         Ok(Self {
-            addr: try_log!(Ipv4Addr::from_str(addr)),
+            addr: Ipv4Addr::from_str(addr)?,
             prefix_len,
         })
     }
@@ -308,11 +317,7 @@ impl OutgoingQueue {
     /// address is resolved via ARP.
     ///
     /// Returns an error if the queue is full.
-    fn enqueue(
-        dest_ip: Ipv4Addr,
-        interface: Arc<dyn NetDevice>,
-        packet: Box<[u8]>,
-    ) -> Result<(), NetError> {
+    fn enqueue(dest_ip: Ipv4Addr, interface: Arc<dyn NetDevice>, packet: Box<[u8]>) -> Result<()> {
         let mut queue = OUTGOING_QUEUE.lock();
 
         if let Some(slot) = queue.slots.iter_mut().find(|slot| slot.is_none()) {
@@ -337,7 +342,9 @@ impl OutgoingQueue {
                 // patch destination mac address
                 // always the first 6 bytes of an ethernet frame
                 entry.packet[..6].copy_from_slice(&mac.0);
-                let _ = log!(entry.interface.transmit(&entry.packet));
+                if let Err(e) = entry.interface.transmit(&entry.packet) {
+                    report!(e, "net");
+                }
 
                 *slot = None;
             }
@@ -368,7 +375,7 @@ static INCOMING_QUEUE: SpinLock<IncomingQueue> = SpinLock::new(
 
 impl IncomingQueue {
     /// Enqueues a received packet to be processed by the network thread.
-    fn enqueue(packet: IncomingPacket) -> Result<(), NetError> {
+    fn enqueue(packet: IncomingPacket) -> Result<()> {
         let mut queue = INCOMING_QUEUE.lock();
 
         if let Some(slot) = queue.slots.iter_mut().find(|slot| slot.is_none()) {
@@ -392,11 +399,11 @@ impl IncomingQueue {
 /// Enqueues an incoming packet to be processed by the network thread.
 /// It wakes up the thread regardless of the enqueue result, since if the queue is full, the thread
 /// should be awoken to drain it.
-pub fn enqueue_incoming(interface_id: InterfaceId, packet: Box<[u8]>) -> Result<(), NetError> {
-    let result = log!(IncomingQueue::enqueue(IncomingPacket {
+pub fn enqueue_incoming(interface_id: InterfaceId, packet: Box<[u8]>) -> Result<()> {
+    let result = IncomingQueue::enqueue(IncomingPacket {
         interface_id,
         data: packet,
-    }));
+    });
     proc::wakeup(Channel::Network);
     result
 }
@@ -505,16 +512,14 @@ pub fn source_addr(route: &RouteEntry, interface: &InterfaceEntry) -> Option<Ipv
 /// Packets are passed as a list of segments that will be concatenated together.
 ///
 /// Currently only support IPv4 packets.
-pub fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<(), NetError> {
-    let route = try_log!(route::best_route_for(dest_ip));
+pub fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<()> {
+    let route = route::best_route_for(dest_ip)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::InterfaceNotFound);
     };
 
-    log!(transmit_with_route(
-        route, interface, dest_ip, proto, segments
-    ))
+    transmit_with_route(route, interface, dest_ip, proto, segments)
 }
 
 /// Transmits a packet on the given interface with the specified route.
@@ -527,7 +532,7 @@ pub fn transmit_with_route(
     dest_ip: Ipv4Addr,
     proto: Ipv4Proto,
     segments: &[&[u8]],
-) -> Result<(), NetError> {
+) -> Result<()> {
     let src_mac = interface.config.mac;
     let Some(src_ipv4) = source_addr(&route, &interface) else {
         err!(NetError::NotConfigured);
@@ -551,7 +556,7 @@ pub fn transmit_with_route(
 
     if !interface.device.needs_arp() {
         // packet does not require address resolution, send it.
-        log!(interface.device.transmit(&packet))
+        interface.device.transmit(&packet)
     } else {
         // if gateway is specified, ARP for the gateway IP instead of the destination IP, since
         // that's the next hop we need to send the packet to.
@@ -560,19 +565,19 @@ pub fn transmit_with_route(
         if let Some(dest_mac) = ArpCache::lookup(arp_target) {
             // packet requires MAC address but we have it cached, fill it and send it.
             packet[..6].copy_from_slice(&dest_mac.0);
-            log!(interface.device.transmit(&packet))
+            interface.device.transmit(&packet)
         } else {
             // packet requires MAC address and we don't have it, queue the packet and send an ARP
             // request. once the reply is received, the packet will be sent.
-            try_log!(OutgoingQueue::enqueue(arp_target, interface.device, packet));
-            log!(arp::request(interface.id, arp_target))
+            OutgoingQueue::enqueue(arp_target, interface.device, packet)?;
+            arp::request(interface.id, arp_target)
         }
     }
 }
 
 /// Receives a packet, parses the Ethernet header, and dispatches to the appropriate handler based
 /// on the EtherType.
-fn receive(id: InterfaceId, frame: Box<[u8]>) -> Result<(), NetError> {
+fn receive(id: InterfaceId, frame: Box<[u8]>) -> Result<()> {
     let Some((eth, data)) = EthernetHeader::from_bytes_with_rest(&frame) else {
         err!(NetError::MalformedPacket);
     };
@@ -580,8 +585,8 @@ fn receive(id: InterfaceId, frame: Box<[u8]>) -> Result<(), NetError> {
     packet::deliver_all(id, eth, &frame);
 
     match eth.ether_type() {
-        EtherType::Arp => log!(arp::handle_arp(id, eth, data)),
-        EtherType::Ipv4 => log!(ipv4::handle_ipv4(id, data)),
+        EtherType::Arp => arp::handle_arp(id, eth, data),
+        EtherType::Ipv4 => ipv4::handle_ipv4(id, data),
         EtherType::Unknown => Ok(()),
     }
 }
@@ -597,7 +602,9 @@ fn net_thread() {
 
         if let Some(packet) = queue.dequeue() {
             drop(queue);
-            let _ = log!(receive(packet.interface_id, packet.data));
+            if let Err(e) = receive(packet.interface_id, packet.data) {
+                report!(e, "net");
+            }
         } else {
             queue = proc::sleep(Channel::Network, queue);
         }
