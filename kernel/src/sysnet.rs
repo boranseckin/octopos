@@ -319,7 +319,9 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize, SysError> {
         RouteOp::Get => {
             let index = args.get_int(2) as usize;
 
-            let route = try_log!(route::route_at(index));
+            let Some(route) = route::route_at(index) else {
+                err!(SysError::NoEntry)
+            };
             let raw_route = RawRoute::from(route);
 
             try_log!(

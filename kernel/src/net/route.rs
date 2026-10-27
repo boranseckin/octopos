@@ -186,12 +186,8 @@ pub fn route_sort_key(route: &RouteEntry) -> (u8, core::cmp::Reverse<u32>) {
 }
 
 /// Returns a copy of the route entry at a given index.
-pub fn route_at(index: usize) -> Result<RouteEntry, NetError> {
-    if let Some(route) = ROUTES.lock().get(index) {
-        Ok(*route)
-    } else {
-        err!(NetError::RouteNotFound)
-    }
+pub fn route_at(index: usize) -> Option<RouteEntry> {
+    ROUTES.lock().get(index).copied()
 }
 
 /// Adds a new route after validating it.
