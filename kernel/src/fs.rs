@@ -46,6 +46,7 @@ pub enum FsError {
     Resolve,
     Type,
     Copy,
+    Exists,
 }
 
 impl Display for FsError {
@@ -63,6 +64,7 @@ impl Display for FsError {
             FsError::Resolve => write!(f, "resolve error"),
             FsError::Type => write!(f, "type error"),
             FsError::Copy => write!(f, "copy error"),
+            FsError::Exists => write!(f, "already exists"),
         }
     }
 }
@@ -734,7 +736,7 @@ impl Inode {
 
             // type mismatch
             inode.unlock_put(inode_inner);
-            err!(FsError::Create);
+            err!(FsError::Exists);
         }
 
         let inode = match log!(Self::alloc(parent.dev, r#type)) {

@@ -124,6 +124,7 @@ impl From<FsError> for SysError {
             FsError::Resolve => SysError::NoEntry,
             FsError::Type => SysError::InvalidArgument,
             FsError::Copy => SysError::BadAddress,
+            FsError::Exists => SysError::AlreadyExists,
         }
     }
 }
