@@ -1030,11 +1030,11 @@ impl<'a> Path<'a> {
 
     /// Resolves the full path to an inode.
     pub fn resolve(&self) -> Result<Inode, FsError> {
-        log!(self.resolve_inner(false).map(|(inode, _)| inode))
+        self.resolve_inner(false).map(|(inode, _)| inode)
     }
 
     /// Resolves to the parent directory, returning (parent, final_name).
     pub fn resolve_parent(&self) -> Result<(Inode, &'a str), FsError> {
-        log!(self.resolve_inner(true))
+        self.resolve_inner(true)
     }
 }

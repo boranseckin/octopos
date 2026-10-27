@@ -6,12 +6,12 @@ use crate::net::route::{self, RawRoute, RouteEntry};
 use crate::net::socket::{RawSockAddr, SockAddr, Socket, SocketType};
 use crate::net::{Ipv4Addr, Ipv4Cidr};
 use crate::proc::{self, copy_from_user, copy_struct_from_user, copy_struct_to_user};
-use crate::syscall::{SysError, SyscallArgs};
+use crate::syscall::{Result, SysError, SyscallArgs};
 use crate::sysfile::fd_alloc;
 
 /// Returns the socket behind `file`, or `InvalidArgument` if it is not a socket.
 /// The file lock is released on return, so callers may block on the socket.
-fn file_socket(file: &File) -> Result<Socket, SysError> {
+fn file_socket(file: &File) -> Result<Socket> {
     let inner = FILE_TABLE.inner[file.id].lock();
     let FileType::Socket { socket } = &inner.r#type else {
         err!(SysError::InvalidArgument)
@@ -37,7 +37,7 @@ fn file_socket(file: &File) -> Result<Socket, SysError> {
 /// - `ResourceUnavailable`: no free ephemeral ports (only when `a1 == null`).
 /// - `FileTableFull`: the system-wide file or socket table is full.
 /// - `TooManyFiles`: the calling process has no free file descriptor slots.
-pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_socket(args: &SyscallArgs) -> Result<usize> {
     let Ok(socket_type) = usize::try_from(args.get_int(0)) else {
         err!(SysError::InvalidArgument)
     };
@@ -48,22 +48,22 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
 
     let raw_addr_va = args.get_addr(1);
     let raw_addr: RawSockAddr =
-        try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
-    let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
+        copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress)?;
+    let addr = SockAddr::try_from(raw_addr)?;
 
     let socket = match socket_type {
         SocketType::Udp => {
             let SockAddr::Inet { ip, port } = addr else {
                 err!(SysError::InvalidArgument);
             };
-            try_log!(Socket::open_udp(ip, port).map_err(SysError::from))
+            Socket::open_udp(ip, port)?
         }
 
         SocketType::Ping => {
             let SockAddr::Inet { ip: _, port } = addr else {
                 err!(SysError::InvalidArgument);
             };
-            try_log!(Socket::open_ping(port).map_err(SysError::from))
+            Socket::open_ping(port)?
         }
 
         SocketType::Packet => {
@@ -75,23 +75,23 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
             else {
                 err!(SysError::InvalidArgument)
             };
-            try_log!(Socket::open_packet(interface, ether_type).map_err(SysError::from))
+            Socket::open_packet(interface, ether_type)?
         }
     };
 
     // allocate a file structure and a file descriptor
-    let (fd, file) = match log!(File::alloc()) {
-        Ok(mut file) => match log!(fd_alloc(file.clone())) {
+    let (fd, file) = match File::alloc() {
+        Ok(mut file) => match fd_alloc(file.clone()) {
             Ok(fd) => (fd, file),
             Err(e) => {
                 file.close();
                 socket.close();
-                return Err(e);
+                Err(e)?
             }
         },
         Err(e) => {
             socket.close();
-            return Err(SysError::from(e));
+            Err(SysError::from(e))?
         }
     };
 
@@ -125,24 +125,24 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize, SysError> {
 /// - `NoEntry`: no route to the destination address.
 /// - `ResourceUnavailable`: the outgoing packet queue or the transmit ring is full.
 /// - `IoError`: the network interface failed to transmit the packet.
-pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
-    let (_, file) = try_log!(args.get_file(0));
+pub fn sys_send(args: &SyscallArgs) -> Result<usize> {
+    let (_, file) = args.get_file(0)?;
     let buf_addr = args.get_addr(1);
     let buf_len = args.get_int(2) as usize;
 
-    let socket = try_log!(file_socket(&file));
+    let socket = file_socket(&file)?;
 
     let raw_addr_va = args.get_addr(3);
     let raw_addr: RawSockAddr =
-        try_log!(copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress));
-    let addr = try_log!(SockAddr::try_from(raw_addr).map_err(SysError::from));
+        copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress)?;
+    let addr = SockAddr::try_from(raw_addr)?;
 
     let mut payload = vec![0u8; buf_len];
-    if log!(copy_from_user(buf_addr, &mut payload)).is_err() {
+    if copy_from_user(buf_addr, &mut payload).is_err() {
         err!(SysError::BadAddress)
     }
 
-    try_log!(socket.send(addr, &payload));
+    socket.send(addr, &payload)?;
 
     Ok(buf_len)
 }
@@ -169,20 +169,20 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize, SysError> {
 /// - `BadAddress`: one of the output pointers (`a1`, `a3`, `a4`) is not a valid user-space
 ///   pointer.
 /// - `Interrupted`: the calling process was killed while waiting for a datagram.
-pub fn sys_receive(args: &SyscallArgs) -> Result<usize, SysError> {
-    let (_, file) = try_log!(args.get_file(0));
+pub fn sys_receive(args: &SyscallArgs) -> Result<usize> {
+    let (_, file) = args.get_file(0)?;
     let buf_addr = args.get_addr(1);
     let buf_len = args.get_int(2) as usize;
     let src_addr_ptr = args.get_addr(3);
 
-    let socket = try_log!(file_socket(&file));
+    let socket = file_socket(&file)?;
 
-    let (addr, received) = try_log!(socket.receive());
+    let (addr, received) = socket.receive()?;
     let copy_len = received.len().min(buf_len);
     let raw_addr = RawSockAddr::from(addr);
 
-    if log!(proc::copy_struct_to_user(&raw_addr, src_addr_ptr)).is_err()
-        || log!(proc::copy_to_user(&received[..copy_len], buf_addr)).is_err()
+    if proc::copy_struct_to_user(&raw_addr, src_addr_ptr).is_err()
+        || proc::copy_to_user(&received[..copy_len], buf_addr).is_err()
     {
         err!(SysError::BadAddress)
     }
@@ -199,11 +199,11 @@ pub enum InterfaceOp {
 impl TryFrom<usize> for InterfaceOp {
     type Error = SysError;
 
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
+    fn try_from(value: usize) -> core::result::Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Get),
             2 => Ok(Self::SetIpv4),
-            _ => err!(SysError::InvalidArgument),
+            _ => Err(SysError::InvalidArgument),
         }
     }
 }
@@ -225,26 +225,24 @@ impl TryFrom<usize> for InterfaceOp {
 /// - `SetIpv4`: reads `id`, `addr` and `prefix_len` from `a1` and sets that interface's address.
 ///   The kernel replaces its own routes for the interface. An `addr` of 0.0.0.0 clears the address
 ///   and removes every route on the interface. The other fields of `a1` are ignored, as is `a2`.
-pub fn sys_interface(args: &SyscallArgs) -> Result<usize, SysError> {
-    let op = try_log!(InterfaceOp::try_from(args.get_int(0) as usize));
+pub fn sys_interface(args: &SyscallArgs) -> Result<usize> {
+    let op = InterfaceOp::try_from(args.get_int(0) as usize)?;
     let raw_interface_va = args.get_addr(1);
 
     match op {
         InterfaceOp::Get => {
             let index = args.get_int(2) as usize;
 
-            let interface = try_log!(interface::interface_at(index));
+            let interface = interface::interface_at(index)?;
             let raw_interface = RawInterface::from(interface);
 
-            try_log!(
-                copy_struct_to_user(&raw_interface, raw_interface_va)
-                    .map_err(|_| SysError::BadAddress)
-            );
+            copy_struct_to_user(&raw_interface, raw_interface_va)
+                .map_err(|_| SysError::BadAddress)?;
         }
 
         InterfaceOp::SetIpv4 => {
             let raw_interface: RawInterface =
-                try_log!(copy_struct_from_user(raw_interface_va).map_err(|_| SysError::BadAddress));
+                copy_struct_from_user(raw_interface_va).map_err(|_| SysError::BadAddress)?;
 
             let addr = Ipv4Addr::from(raw_interface.addr);
             let ipv4 = (addr != Ipv4Addr::UNSPECIFIED).then_some(Ipv4Cidr {
@@ -252,10 +250,7 @@ pub fn sys_interface(args: &SyscallArgs) -> Result<usize, SysError> {
                 prefix_len: raw_interface.prefix_len,
             });
 
-            try_log!(interface::set_interface_ipv4(
-                InterfaceId(raw_interface.id),
-                ipv4
-            ))
+            interface::set_interface_ipv4(InterfaceId(raw_interface.id), ipv4)?;
         }
     }
 
@@ -272,12 +267,12 @@ pub enum RouteOp {
 impl TryFrom<usize> for RouteOp {
     type Error = SysError;
 
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
+    fn try_from(value: usize) -> core::result::Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Get),
             2 => Ok(Self::Add),
             3 => Ok(Self::Remove),
-            _ => err!(SysError::InvalidArgument),
+            _ => Err(SysError::InvalidArgument),
         }
     }
 }
@@ -311,8 +306,8 @@ impl RouteFlag {
 ///
 /// Only routes owned by `Dhcp` or `Static` can be added or removed. `Kernel` routes and `Local`
 /// routes are created and removed by the kernel when interface addresses change.
-pub fn sys_route(args: &SyscallArgs) -> Result<usize, SysError> {
-    let op = try_log!(RouteOp::try_from(args.get_int(0) as usize));
+pub fn sys_route(args: &SyscallArgs) -> Result<usize> {
+    let op = RouteOp::try_from(args.get_int(0) as usize)?;
     let raw_route_va = args.get_addr(1);
 
     match op {
@@ -324,9 +319,7 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize, SysError> {
             };
             let raw_route = RawRoute::from(route);
 
-            try_log!(
-                copy_struct_to_user(&raw_route, raw_route_va).map_err(|_| SysError::BadAddress)
-            );
+            copy_struct_to_user(&raw_route, raw_route_va).map_err(|_| SysError::BadAddress)?;
 
             Ok(0)
         }
@@ -336,20 +329,20 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize, SysError> {
             let replace = flags & RouteFlag::ROUTE_REPLACE != 0;
 
             let raw_route: RawRoute =
-                try_log!(copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress));
-            let route = try_log!(RouteEntry::try_from(raw_route));
+                copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress)?;
+            let route = RouteEntry::try_from(raw_route)?;
 
-            try_log!(route::add_route(route, replace));
+            route::add_route(route, replace)?;
 
             Ok(0)
         }
 
         RouteOp::Remove => {
             let raw_route: RawRoute =
-                try_log!(copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress));
-            let route = try_log!(RouteEntry::try_from(raw_route));
+                copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress)?;
+            let route = RouteEntry::try_from(raw_route)?;
 
-            try_log!(route::remove_route(&route));
+            route::remove_route(&route)?;
 
             Ok(0)
         }

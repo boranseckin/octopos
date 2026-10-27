@@ -2,6 +2,8 @@ use core::fmt::Display;
 
 use alloc::string::String;
 
+use crate::error::{Expected, Traced};
+use crate::exec::ExecError;
 use crate::file::File;
 use crate::fs::FsError;
 use crate::net::NetError;
@@ -46,6 +48,21 @@ pub enum SysError {
     MessageTooLarge = 90,
     NetworkUnreachable = 101,
     TimedOut = 110,
+}
+
+pub type Result<T> = core::result::Result<T, Traced<SysError>>;
+
+impl Expected for SysError {
+    fn is_expected(&self) -> bool {
+        matches!(
+            self,
+            Self::TimedOut
+                | Self::Interrupted
+                | Self::NoEntry
+                | Self::AlreadyExists
+                | Self::NetworkUnreachable
+        )
+    }
 }
 
 impl SysError {
@@ -140,6 +157,8 @@ impl From<FsError> for SysError {
     }
 }
 
+traced_from!(FsError => SysError);
+
 impl From<NetError> for SysError {
     fn from(value: NetError) -> Self {
         match value {
@@ -166,6 +185,16 @@ impl From<NetError> for SysError {
         }
     }
 }
+
+traced_from!(NetError => SysError);
+
+impl From<ExecError> for SysError {
+    fn from(_value: ExecError) -> Self {
+        SysError::InvalidExecutable
+    }
+}
+
+traced_from!(ExecError => SysError);
 
 /// Wrapper for extracting typed syscall arguments from trapframe.
 pub struct SyscallArgs<'a> {
@@ -210,12 +239,11 @@ impl<'a> SyscallArgs<'a> {
 
     /// Fetch the nth word-sized system call argument as a file descriptor and return both the
     /// descriptor and the corresponding `File`.
-    pub fn get_file(&self, index: usize) -> Result<(usize, File), SysError> {
-        let fd: usize = try_log!(
-            self.get_int(index)
-                .try_into()
-                .or(Err(SysError::BadDescriptor))
-        );
+    pub fn get_file(&self, index: usize) -> Result<(usize, File)> {
+        let fd: usize = self
+            .get_int(index)
+            .try_into()
+            .or(Err(SysError::BadDescriptor))?;
 
         if fd >= NOFILE {
             err!(SysError::BadDescriptor);
@@ -229,18 +257,16 @@ impl<'a> SyscallArgs<'a> {
     }
 
     /// Fetches a null-terminated string from user space.
-    pub fn fetch_string(&self, addr: VA, max: usize) -> Result<String, SysError> {
+    pub fn fetch_string(&self, addr: VA, max: usize) -> Result<String> {
         let (_proc, data) = current_proc_and_data_mut();
 
         let mut result = String::with_capacity(max);
 
         let mut buf = [0u8; 1];
         for i in 0..max {
-            try_log!(
-                data.pagetable_mut()
-                    .copy_from(VA::from(addr.as_usize() + i), &mut buf)
-                    .map_err(|_| SysError::BadAddress)
-            );
+            data.pagetable_mut()
+                .copy_from(VA::from(addr.as_usize() + i), &mut buf)
+                .map_err(|_| SysError::BadAddress)?;
 
             if buf[0] == 0 {
                 return Ok(result);
@@ -291,7 +317,7 @@ pub enum Syscall {
 impl TryFrom<usize> for Syscall {
     type Error = SysError;
 
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
+    fn try_from(value: usize) -> core::result::Result<Self, Self::Error> {
         match value {
             1 => Ok(Syscall::Fork),
             2 => Ok(Syscall::Exit),
@@ -368,22 +394,20 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Interface => sys_interface(&args),
             Syscall::Route => sys_route(&args),
         },
-        Err(e) => Err(e),
+        Err(e) => Err(Traced::from(e)),
     };
 
-    trapframe.a0 = match log!(result) {
+    trapframe.a0 = match result {
         Ok(v) => v,
         Err(error) => {
-            #[cfg(debug_assertions)]
-            {
-                let pid = *proc.inner.lock().pid;
-                println!(
-                    "! syscall error ({}) from proc {} ({})",
-                    error,
-                    pid,
-                    proc.data().name,
-                );
-            }
+            let pid = *proc.inner.lock().pid;
+            report!(
+                error,
+                "syscall {:?} from proc {} ({})",
+                trapframe.a7,
+                pid,
+                proc.data().name
+            );
             (-(error.as_code() as isize)) as usize
         }
     };

@@ -13,12 +13,12 @@ use crate::param::{MAXARG, MAXPATH, NDEV};
 use crate::pipe::Pipe;
 use crate::proc::current_proc_and_data_mut;
 use crate::riscv::PGSIZE;
-use crate::syscall::{SysError, SyscallArgs};
+use crate::syscall::{Result, SysError, SyscallArgs};
 use crate::vm::VA;
 
 /// Allocates a file descriptor for the give file.
 /// Takes over file reference from caller on success.
-pub fn fd_alloc(file: File) -> Result<usize, SysError> {
+pub fn fd_alloc(file: File) -> Result<usize> {
     let (_proc, data) = current_proc_and_data_mut();
 
     for (fd, open_file) in data.open_files.iter_mut().enumerate() {
@@ -31,29 +31,29 @@ pub fn fd_alloc(file: File) -> Result<usize, SysError> {
     err!(SysError::TooManyFiles)
 }
 
-pub fn sys_dup(args: &SyscallArgs) -> Result<usize, SysError> {
-    let (_, mut file) = try_log!(args.get_file(0));
-    let fd = try_log!(fd_alloc(file.clone()));
+pub fn sys_dup(args: &SyscallArgs) -> Result<usize> {
+    let (_, mut file) = args.get_file(0)?;
+    let fd = fd_alloc(file.clone())?;
     file.dup();
     Ok(fd)
 }
 
-pub fn sys_read(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_read(args: &SyscallArgs) -> Result<usize> {
     let addr = args.get_addr(1);
     let n = args.get_int(2);
-    let (_, file) = try_log!(args.get_file(0));
-    log!(file.read(addr, n as usize))
+    let (_, file) = args.get_file(0)?;
+    Ok(file.read(addr, n as usize)?)
 }
 
-pub fn sys_write(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_write(args: &SyscallArgs) -> Result<usize> {
     let addr = args.get_addr(1);
     let n = args.get_int(2);
-    let (_, mut file) = try_log!(args.get_file(0));
-    log!(file.write(addr, n as usize))
+    let (_, mut file) = args.get_file(0)?;
+    Ok(file.write(addr, n as usize)?)
 }
 
-pub fn sys_close(args: &SyscallArgs) -> Result<usize, SysError> {
-    let (fd, mut file) = try_log!(args.get_file(0));
+pub fn sys_close(args: &SyscallArgs) -> Result<usize> {
+    let (fd, mut file) = args.get_file(0)?;
 
     let (_proc, data) = current_proc_and_data_mut();
 
@@ -63,21 +63,21 @@ pub fn sys_close(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(0)
 }
 
-pub fn sys_fstat(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_fstat(args: &SyscallArgs) -> Result<usize> {
     let addr = args.get_addr(1);
-    let (_, file) = try_log!(args.get_file(0));
-    try_log!(file.stat(addr));
+    let (_, file) = args.get_file(0)?;
+    file.stat(addr)?;
     Ok(0)
 }
 
-pub fn sys_link(args: &SyscallArgs) -> Result<usize, SysError> {
-    let old = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
-    let new = try_log!(args.fetch_string(args.get_addr(1), MAXPATH));
+pub fn sys_link(args: &SyscallArgs) -> Result<usize> {
+    let old = args.fetch_string(args.get_addr(0), MAXPATH)?;
+    let new = args.fetch_string(args.get_addr(1), MAXPATH)?;
 
     let _op = Operation::begin();
 
     // get the inode of the old
-    let Ok(old_inode) = log!(Path::new(&old).resolve()) else {
+    let Ok(old_inode) = Path::new(&old).resolve() else {
         err!(SysError::NoEntry)
     };
 
@@ -97,7 +97,7 @@ pub fn sys_link(args: &SyscallArgs) -> Result<usize, SysError> {
     // after incrementing nlink, failures must goto `bad`
     let result = (|| {
         // get the inode of the new's parent
-        let (parent, name) = match log!(Path::new(&new).resolve_parent()) {
+        let (parent, name) = match Path::new(&new).resolve_parent() {
             Ok(v) => v,
             Err(_) => err!(SysError::NoEntry),
         };
@@ -110,12 +110,7 @@ pub fn sys_link(args: &SyscallArgs) -> Result<usize, SysError> {
         let mut parent_inner = parent.lock();
 
         // add the inode to the new's parent
-        if let Err(e) = log!(Directory::link(
-            &parent,
-            &mut parent_inner,
-            name,
-            old_inode.inum as u16
-        )) {
+        if let Err(e) = Directory::link(&parent, &mut parent_inner, name, old_inode.inum as u16) {
             parent.unlock_put(parent_inner);
             err!(SysError::from(e));
         }
@@ -137,13 +132,13 @@ pub fn sys_link(args: &SyscallArgs) -> Result<usize, SysError> {
     result
 }
 
-pub fn sys_unlink(args: &SyscallArgs) -> Result<usize, SysError> {
-    let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
+pub fn sys_unlink(args: &SyscallArgs) -> Result<usize> {
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
     let _op = Operation::begin();
 
     // get the parent inode and name
-    let Ok((parent, name)) = log!(Path::new(&path).resolve_parent()) else {
+    let Ok((parent, name)) = Path::new(&path).resolve_parent() else {
         err!(SysError::NoEntry);
     };
 
@@ -156,8 +151,7 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize, SysError> {
     }
 
     // find the inode in the parent's directory entry
-    let Ok(Some((offset, inode))) = log!(Directory::lookup(&parent, &mut parent_inner, name))
-    else {
+    let Ok(Some((offset, inode))) = Directory::lookup(&parent, &mut parent_inner, name) else {
         parent.unlock_put(parent_inner);
         err!(SysError::NoEntry);
     };
@@ -176,7 +170,7 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize, SysError> {
 
     // replace the directory entry with an empty one
     let dir = Directory::new_empty();
-    match log!(parent.write(&mut parent_inner, offset, dir.as_bytes(), false)) {
+    match parent.write(&mut parent_inner, offset, dir.as_bytes(), false) {
         Ok(write) => {
             assert_eq!(write, Directory::SIZE as u32, "unlink write");
         }
@@ -201,9 +195,9 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(0)
 }
 
-pub fn sys_open(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
     let o_mode = args.get_int(1) as usize;
-    let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
     let path = Path::new(&path);
 
     let _op = Operation::begin();
@@ -212,14 +206,14 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SysError> {
 
     // either create a new file or find the file from the path
     if (o_mode & OpenFlag::CREATE) != 0 {
-        (inode, inode_inner) = match log!(Inode::create(&path, InodeType::File, 0, 0)) {
+        (inode, inode_inner) = match Inode::create(&path, InodeType::File, 0, 0) {
             Ok(i) => i,
             Err(e) => {
                 err!(SysError::from(e))
             }
         };
     } else {
-        inode = match log!(path.resolve()) {
+        inode = match path.resolve() {
             Ok(i) => i,
             Err(_) => {
                 err!(SysError::NoEntry);
@@ -242,8 +236,8 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SysError> {
     }
 
     // allocate a file structure and a file descriptor
-    let (fd, file) = match log!(File::alloc()) {
-        Ok(mut file) => match log!(fd_alloc(file.clone())) {
+    let (fd, file) = match File::alloc() {
+        Ok(mut file) => match fd_alloc(file.clone()) {
             Ok(fd) => (fd, file),
             Err(e) => {
                 // if err here, we must also close the file
@@ -283,35 +277,29 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(fd)
 }
 
-pub fn sys_mkdir(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_mkdir(args: &SyscallArgs) -> Result<usize> {
     let _op = Operation::begin();
 
-    let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
-    let (inode, inode_inner) =
-        match log!(Inode::create(&Path::new(&path), InodeType::Directory, 0, 0)) {
-            Ok(i) => i,
-            Err(e) => err!(SysError::from(e)),
-        };
+    let (inode, inode_inner) = match Inode::create(&Path::new(&path), InodeType::Directory, 0, 0) {
+        Ok(i) => i,
+        Err(e) => err!(SysError::from(e)),
+    };
 
     inode.unlock_put(inode_inner);
 
     Ok(0)
 }
 
-pub fn sys_mknod(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_mknod(args: &SyscallArgs) -> Result<usize> {
     let _op = Operation::begin();
 
     let major = args.get_int(1) as u16;
     let minor = args.get_int(2) as u16;
-    let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
-    let (inode, inner) = match log!(Inode::create(
-        &Path::new(&path),
-        InodeType::Device,
-        major,
-        minor,
-    )) {
+    let (inode, inner) = match Inode::create(&Path::new(&path), InodeType::Device, major, minor) {
         Ok(i) => i,
         Err(e) => err!(SysError::from(e)),
     };
@@ -321,14 +309,14 @@ pub fn sys_mknod(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(0)
 }
 
-pub fn sys_chdir(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_chdir(args: &SyscallArgs) -> Result<usize> {
     let (_proc, data) = current_proc_and_data_mut();
 
     let _op = Operation::begin();
 
-    let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
-    let Ok(inode) = log!(Path::new(&path).resolve()) else {
+    let Ok(inode) = Path::new(&path).resolve() else {
         err!(SysError::NoEntry);
     };
 
@@ -347,10 +335,10 @@ pub fn sys_chdir(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(0)
 }
 
-pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_exec(args: &SyscallArgs) -> Result<usize> {
     let uargv = args.get_addr(1);
 
-    let path = try_log!(args.fetch_string(args.get_addr(0), MAXPATH));
+    let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
     let path = Path::new(&path);
 
     let (_proc, data) = current_proc_and_data_mut();
@@ -363,11 +351,10 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SysError> {
         let dst = unsafe {
             slice::from_raw_parts_mut(&mut uarg as *mut usize as *mut u8, size_of::<usize>())
         };
-        if log!(
-            data.pagetable_mut()
-                .copy_from(uargv + i * size_of::<usize>(), dst)
-        )
-        .is_err()
+        if data
+            .pagetable_mut()
+            .copy_from(uargv + i * size_of::<usize>(), dst)
+            .is_err()
         {
             err!(SysError::BadAddress);
         }
@@ -377,33 +364,33 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize, SysError> {
         }
 
         // fetch string from user space
-        let s = try_log!(args.fetch_string(VA::from(uarg), PGSIZE));
+        let s = args.fetch_string(VA::from(uarg), PGSIZE)?;
         argv_bufs.push(s);
     }
 
     let argv: Vec<&str> = argv_bufs.iter().map(|s| s.as_str()).collect::<Vec<_>>();
 
-    log!(exec(&path, &argv)).map_err(|_| SysError::InvalidExecutable)
+    Ok(exec(&path, &argv)?)
 }
 
-pub fn sys_pipe(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_pipe(args: &SyscallArgs) -> Result<usize> {
     // user pointer to array of two integers
     let fd_array = args.get_addr(0);
 
     let (_proc, data) = current_proc_and_data_mut();
 
-    let (mut read, mut write) = match log!(Pipe::alloc()) {
+    let (mut read, mut write) = match Pipe::alloc() {
         Ok(pair) => pair,
         Err(e) => err!(SysError::from(e)),
     };
 
-    let Ok(fd0) = log!(fd_alloc(read.clone())) else {
+    let Ok(fd0) = fd_alloc(read.clone()) else {
         read.close();
         write.close();
         err!(SysError::TooManyFiles);
     };
 
-    let Ok(fd1) = log!(fd_alloc(write.clone())) else {
+    let Ok(fd1) = fd_alloc(write.clone()) else {
         data.open_files[fd0] = None;
         read.close();
         write.close();
@@ -412,8 +399,10 @@ pub fn sys_pipe(args: &SyscallArgs) -> Result<usize, SysError> {
 
     let pagetable = data.pagetable_mut();
 
-    if log!(pagetable.copy_to(&fd0.to_le_bytes(), fd_array)).is_err()
-        || log!(pagetable.copy_to(&fd1.to_le_bytes(), fd_array + size_of_val(&fd1))).is_err()
+    if pagetable.copy_to(&fd0.to_le_bytes(), fd_array).is_err()
+        || pagetable
+            .copy_to(&fd1.to_le_bytes(), fd_array + size_of_val(&fd1))
+            .is_err()
     {
         data.open_files[fd0] = None;
         data.open_files[fd1] = None;
@@ -425,9 +414,9 @@ pub fn sys_pipe(args: &SyscallArgs) -> Result<usize, SysError> {
     Ok(0)
 }
 
-pub fn sys_ioctl(args: &SyscallArgs) -> Result<usize, SysError> {
+pub fn sys_ioctl(args: &SyscallArgs) -> Result<usize> {
     let ioctl_cmd = args.get_int(1) as usize;
     let ioctl_arg = args.get_int(2) as usize;
-    let (_, file) = try_log!(args.get_file(0));
-    log!(file.ioctl(ioctl_cmd, ioctl_arg))
+    let (_, file) = args.get_file(0)?;
+    Ok(file.ioctl(ioctl_cmd, ioctl_arg)?)
 }
