@@ -148,6 +148,7 @@ pub fn report<E: Display + Expected>(e: &Traced<E>, ctx: fmt::Arguments) {
 
 /// Top-of-stack sink: prints `! hart N <context>: <kind>` and the trail, unless the kind is
 /// expected. No-op in release.
+#[macro_export]
 macro_rules! report {
     ($e:expr, $($ctx:tt)*) => {
         if cfg!(debug_assertions) {
@@ -165,32 +166,12 @@ macro_rules! err {
     ($e:expr) => {{ match Err::<core::convert::Infallible, _>($e)? {} }};
 }
 
-/// Log error.
+/// Returns early with `$e` unless `$cond` holds.
 #[macro_export]
-macro_rules! log {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                #[cfg(debug_assertions)]
-                $crate::println!("  at {}:{}", file!(), line!());
-                Err(e)
-            }
-        }
-    };
-}
-
-/// Propagate error with location logging. Use instead of `?`.
-#[macro_export]
-macro_rules! try_log {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(e) => {
-                #[cfg(debug_assertions)]
-                $crate::println!("  at {}:{}", file!(), line!());
-                return Err(e.into());
-            }
+macro_rules! ensure {
+    ($cond:expr, $e:expr) => {
+        if !$cond {
+            $crate::err!($e)
         }
     };
 }
