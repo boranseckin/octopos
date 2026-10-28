@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 use alloc::slice;
 use alloc::string::String;
 
-use crate::error::KernelError;
+use crate::error::Traced;
 use crate::exec::exec;
 use crate::file::File;
 use crate::fs::{self, Inode, Path};
@@ -20,11 +20,36 @@ use crate::swtch::swtch;
 use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
-use crate::vm::{self, Kvm, PA, PageTable, Uvm, VA};
+use crate::vm::{self, Kvm, PA, PageTable, Uvm, VA, VmError};
 
 pub static CPU_TABLE: CpuTable = CpuTable::new();
 pub static PROC_TABLE: ProcTable = ProcTable::new();
 pub static INIT_PROC: OnceLock<&Proc> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcError {
+    OutOfProc,
+    OutOfMemory,
+    InvalidSize,
+}
+
+pub type Result<T> = core::result::Result<T, Traced<ProcError>>;
+
+impl From<VmError> for ProcError {
+    fn from(_value: VmError) -> Self {
+        Self::OutOfMemory
+    }
+}
+
+traced_from!(VmError => ProcError);
+
+impl From<core::alloc::AllocError> for ProcError {
+    fn from(_value: core::alloc::AllocError) -> Self {
+        Self::OutOfMemory
+    }
+}
+
+traced_from!(core::alloc::AllocError => ProcError);
 
 /// Per-CPU state
 pub struct Cpu {
@@ -471,24 +496,24 @@ impl Proc {
 
         // Map the trampoline code (for system call returns) at the highest user virtual address.
         // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
-        if let Err(e) = log!(uvm.map_pages(
+        if let Err(e) = uvm.map_pages(
             TRAMPOLINE.into(),
             (trampoline as *const () as usize).into(),
             PGSIZE,
             PTE_R | PTE_X,
-        )) {
+        ) {
             uvm.free(0);
             err!(e);
         }
 
         // Map the trapframe page just below the trampoline page, for `trampoline.rs`.
         let data = self.data();
-        if let Err(e) = log!(uvm.map_pages(
+        if let Err(e) = uvm.map_pages(
             TRAPFRAME.into(),
             PA::from(data.trapframe() as *const _ as usize),
             PGSIZE,
             PTE_R | PTE_W,
-        )) {
+        ) {
             uvm.unmap(TRAMPOLINE.into(), 1, false);
             uvm.free(0);
             err!(e);
@@ -525,12 +550,12 @@ impl Proc {
     pub fn setup_user<'a>(
         &self,
         inner: SpinLockGuard<'a, ProcInner>,
-    ) -> Result<SpinLockGuard<'a, ProcInner>, KernelError> {
+    ) -> Result<SpinLockGuard<'a, ProcInner>> {
         // # Safety: the process is not yet runnable, so we are the only one accessing it
         let data = unsafe { self.data_mut() };
 
         // Allocate a trapframe page.
-        match log!(Box::<TrapFrame>::try_new_zeroed()) {
+        match Box::<TrapFrame>::try_new_zeroed() {
             Ok(trapframe) => {
                 data.trapframe.replace(unsafe { trapframe.assume_init() });
             }
@@ -541,7 +566,7 @@ impl Proc {
         }
 
         // Allocate an empty user page table.
-        match log!(self.create_pagetable()) {
+        match self.create_pagetable() {
             Ok(uvm) => {
                 data.pagetable.replace(uvm);
             }
@@ -637,9 +662,7 @@ impl ProcTable {
             for page in 0..NKSTACK_PAGES {
                 // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the
                 // same initializer works for now.
-                let pa = log!(PageTable::try_new())
-                    .expect("proc map stack kalloc")
-                    .as_pa();
+                let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
                 let va = base_va + page * PGSIZE;
                 kvm.map(va, pa, PGSIZE, PTE_R | PTE_W);
             }
@@ -648,7 +671,7 @@ impl ProcTable {
 
     /// Searches the process table for an `ProcState::Unused` proc.
     /// If found, return both proc and its inner mutex guard.
-    pub fn alloc(&self) -> Result<(&Proc, SpinLockGuard<'_, ProcInner>), KernelError> {
+    pub fn alloc(&self) -> Result<(&Proc, SpinLockGuard<'_, ProcInner>)> {
         for proc in self.iter() {
             let mut inner = proc.inner.lock();
 
@@ -664,7 +687,7 @@ impl ProcTable {
             }
         }
 
-        Err(KernelError::OutOfProc)
+        err!(ProcError::OutOfProc)
     }
 
     /// Prints a process listing to the console.
@@ -704,7 +727,7 @@ pub fn user_init() {
     // # Safety: during initialization, we are the only ones with access to this proc
     let data = unsafe { proc.data_mut() };
 
-    data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
+    data.cwd = Path::new("/").resolve().expect("root path to exist");
 
     inner.state = ProcState::Runnable;
 
@@ -747,7 +770,7 @@ where
 
     let data = unsafe { proc.data_mut() };
     data.name.push_str(name);
-    data.cwd = log!(Path::new("/").resolve()).expect("root path to exist");
+    data.cwd = Path::new("/").resolve().expect("root path to exist");
 
     // this is not the best way to handle this, but we need some proc to clean after exitted kernel
     // threads. So init proc does the job for now.
@@ -768,7 +791,7 @@ where
 ///
 /// # Safety
 /// The caller must ensure exclusive access to the process's memory.
-pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize, KernelError> {
+pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize> {
     let (_proc, data) = current_proc_and_data_mut();
 
     let mut size = data.size;
@@ -778,12 +801,14 @@ pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize, KernelError> {
             // TODO: make sure page-aligned
             size += n as usize;
         } else {
-            size = try_log!(data.pagetable_mut().alloc(size, size + (n as usize), PTE_W));
+            size = data
+                .pagetable_mut()
+                .alloc(size, size + (n as usize), PTE_W)?;
         }
     } else if n < 0 {
         let shrink = (-n) as usize;
         if shrink > size {
-            err!(KernelError::InvalidArgument);
+            err!(ProcError::InvalidSize);
         }
 
         size = data.pagetable_mut().dealloc(size, size - shrink);
@@ -795,12 +820,12 @@ pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize, KernelError> {
 
 /// Crates a new process, copying the parent.
 /// Sets up the child kernel stack to return as if from `fork()` system call.
-pub fn fork() -> Result<Pid, KernelError> {
+pub fn fork() -> Result<Pid> {
     let (proc, data) = current_proc_and_data_mut();
 
     // allocate and setup new user process
-    let (new_proc, mut new_inner) = try_log!(PROC_TABLE.alloc());
-    new_inner = try_log!(new_proc.setup_user(new_inner));
+    let (new_proc, mut new_inner) = PROC_TABLE.alloc()?;
+    new_inner = new_proc.setup_user(new_inner)?;
 
     // # Safety: new_proc is not yet runnable, so we are the only ones with access to it
     let new_data = unsafe { new_proc.data_mut() };
@@ -808,9 +833,9 @@ pub fn fork() -> Result<Pid, KernelError> {
     // copy user memory from parent to child
     let new_pagetable = new_data.pagetable_mut();
     let size = data.size;
-    if let Err(err) = log!(data.pagetable_mut().copy(new_pagetable, size)) {
+    if let Err(e) = data.pagetable_mut().copy(new_pagetable, size) {
         new_proc.free(new_inner);
-        return Err(err.into());
+        err!(e);
     };
     new_data.size = data.size;
 
@@ -926,13 +951,12 @@ pub fn wait(addr: VA) -> Option<Pid> {
 
                     if addr != 0 {
                         let xstate_bytes = &inner.xstate.to_le_bytes();
-                        log!(
-                            // # Safety: we are the current proc
-                            unsafe { current_proc.data_mut() }
-                                .pagetable_mut()
-                                .copy_to(xstate_bytes, addr)
-                        )
-                        .expect("wait copy out xstate");
+
+                        // # Safety: we are the current proc
+                        unsafe { current_proc.data_mut() }
+                            .pagetable_mut()
+                            .copy_to(xstate_bytes, addr)
+                            .expect("wait copy out xstate");
                     }
 
                     // clear the parent relationship
@@ -1069,7 +1093,7 @@ pub unsafe fn fork_ret() {
         println!("\nexec init\n");
 
         // we can invoke `exec()` now that file system is initialized.
-        match log!(exec(&Path::new("/init"), &["init"])) {
+        match exec(&Path::new("/init"), &["init"]) {
             Ok(result) => {
                 // # Safety: we are the current proc
                 let trapframe = unsafe { current_proc().data_mut() }.trapframe_mut();

@@ -17,10 +17,7 @@ pub fn sys_getpid(args: &SyscallArgs) -> Result<usize> {
 }
 
 pub fn sys_fork(_args: &SyscallArgs) -> Result<usize> {
-    match proc::fork() {
-        Ok(pid) => Ok(*pid),
-        Err(_) => err!(SysError::ResourceUnavailable),
-    }
+    Ok(*proc::fork()?)
 }
 
 pub fn sys_wait(args: &SyscallArgs) -> Result<usize> {
@@ -35,10 +32,8 @@ pub fn sys_sbrk(args: &SyscallArgs) -> Result<usize> {
     let size = args.get_int(0);
     let addr = args.proc().data().size;
 
-    match unsafe { proc::grow(size, size >= 0) } {
-        Ok(_) => Ok(addr),
-        Err(_) => err!(SysError::OutOfMemory),
-    }
+    unsafe { proc::grow(size, size >= 0)? };
+    Ok(addr)
 }
 
 pub fn sys_sleep(args: &SyscallArgs) -> Result<usize> {
@@ -62,11 +57,11 @@ pub fn sys_kill(args: &SyscallArgs) -> Result<usize> {
     let pid = args.get_int(0);
 
     // Safety: kernel will return an error if the process does not exist.
-    if proc::kill(unsafe { Pid::from_usize(pid as usize) }) {
-        Ok(0)
-    } else {
+    if !proc::kill(unsafe { Pid::from_usize(pid as usize) }) {
         err!(SysError::NoProcess)
     }
+
+    Ok(0)
 }
 
 pub fn sys_uptime(_args: &SyscallArgs) -> Result<usize> {

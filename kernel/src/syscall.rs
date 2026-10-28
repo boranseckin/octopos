@@ -8,7 +8,7 @@ use crate::file::File;
 use crate::fs::FsError;
 use crate::net::NetError;
 use crate::param::NOFILE;
-use crate::proc::{Proc, TrapFrame, current_proc, current_proc_and_data_mut};
+use crate::proc::{Proc, ProcError, TrapFrame, current_proc, current_proc_and_data_mut};
 use crate::sysfile::*;
 use crate::sysnet::*;
 use crate::sysproc::*;
@@ -153,6 +153,18 @@ impl From<VmError> for SysError {
 }
 
 traced_from!(VmError => SysError);
+
+impl From<ProcError> for SysError {
+    fn from(e: ProcError) -> Self {
+        match e {
+            ProcError::OutOfProc => SysError::ResourceUnavailable,
+            ProcError::OutOfMemory => SysError::OutOfMemory,
+            ProcError::InvalidSize => SysError::InvalidArgument,
+        }
+    }
+}
+
+traced_from!(ProcError => SysError);
 
 impl From<FsError> for SysError {
     fn from(value: FsError) -> Self {
