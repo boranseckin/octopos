@@ -3,6 +3,7 @@ use core::ptr;
 use core::slice;
 
 use crate::buf::{BCACHE, Buf};
+use crate::error::Traced;
 use crate::log::{self, Operation};
 use crate::param::{NINODE, ROOTDEV};
 use crate::proc;
@@ -48,6 +49,8 @@ pub enum FsError {
     Copy,
     Exists,
 }
+
+pub type Result<T> = core::result::Result<T, Traced<FsError>>;
 
 impl Display for FsError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -128,7 +131,7 @@ impl Block {
     }
 
     /// Allocates a zeroed disk block.
-    pub fn alloc(dev: u32) -> Result<Self, FsError> {
+    pub fn alloc(dev: u32) -> Result<Self> {
         let sb = SB.get().unwrap();
 
         for b in (0..sb.size).step_by(BPB as usize) {
@@ -319,7 +322,7 @@ impl Inode {
     /// Allocates an inode on device `dev`.
     /// Marks it allocated by giving it type `type`.
     /// Returns an unlocked but allocated and referenced inode or error.
-    pub fn alloc(dev: u32, r#type: InodeType) -> Result<Self, FsError> {
+    pub fn alloc(dev: u32, r#type: InodeType) -> Result<Self> {
         let sb = SB.get().unwrap();
 
         for inum in 1..sb.ninodes {
@@ -330,7 +333,7 @@ impl Inode {
                 dinode.r#type = r#type;
                 log::write(&buf);
                 BCACHE.release(buf);
-                return log!(Self::get(dev, inum));
+                return Self::get(dev, inum);
             }
 
             BCACHE.release(buf);
@@ -341,7 +344,7 @@ impl Inode {
 
     /// Finds the inode with number `inum` on device `dev` and returns the in-memory copy.
     /// Does not lock the inode and does not read it from disk.
-    pub fn get(dev: u32, inum: u32) -> Result<Self, FsError> {
+    pub fn get(dev: u32, inum: u32) -> Result<Self> {
         let mut meta = INODE_TABLE.meta.lock();
 
         let mut empty = None;
@@ -486,7 +489,7 @@ impl Inode {
                 // this is an orphaned inode
                 println!("ireclaim: orphaned inode {}", inum);
 
-                inode.replace(log!(Inode::get(dev, inum)));
+                inode.replace(Inode::get(dev, inum));
             }
 
             BCACHE.release(buf);
@@ -534,18 +537,14 @@ impl Inode {
 
     /// Returns the disk block address of the nth block in `inode`.
     /// If there is no such block, allocates one.
-    pub fn map(
-        &self,
-        inner: &mut SleepLockGuard<'_, InodeInner>,
-        block_no: u32,
-    ) -> Result<u32, FsError> {
+    pub fn map(&self, inner: &mut SleepLockGuard<'_, InodeInner>, block_no: u32) -> Result<u32> {
         let mut block_no = block_no as usize;
 
         if block_no < NDIRECT {
             let addr = &mut inner.addrs[block_no];
 
             if *addr == 0 {
-                let block = try_log!(Block::alloc(self.dev));
+                let block = Block::alloc(self.dev)?;
                 *addr = block.0;
             }
 
@@ -559,7 +558,7 @@ impl Inode {
             let in_block_no = &mut inner.addrs[NDIRECT];
 
             if *in_block_no == 0 {
-                let block = try_log!(Block::alloc(self.dev));
+                let block = Block::alloc(self.dev)?;
                 *in_block_no = block.0;
             }
 
@@ -570,7 +569,7 @@ impl Inode {
 
             let addr = &mut in_block[block_no];
             if *addr == 0 {
-                let block = try_log!(Block::alloc(self.dev));
+                let block = Block::alloc(self.dev)?;
 
                 *addr = block.0;
                 log::write(&buf);
@@ -581,7 +580,7 @@ impl Inode {
             return Ok(*addr);
         }
 
-        Err(FsError::OutOfRange)
+        err!(FsError::OutOfRange)
     }
 
     pub fn stat(&self, inner: &SleepLockGuard<'_, InodeInner>) -> Stat {
@@ -602,7 +601,7 @@ impl Inode {
         offset: u32,
         dst: &mut [u8],
         dst_user: bool,
-    ) -> Result<u32, FsError> {
+    ) -> Result<u32> {
         let mut dst = dst;
         let mut n = dst.len() as u32;
         let mut offset = offset;
@@ -618,7 +617,7 @@ impl Inode {
         let mut total = 0;
 
         while total < n {
-            if let Ok(addr) = log!(self.map(inner, offset / BSIZE as u32)) {
+            if let Ok(addr) = self.map(inner, offset / BSIZE as u32) {
                 let buf = BCACHE.read(self.dev, addr);
 
                 let m = (n - total).min(BSIZE as u32 - offset % BSIZE as u32);
@@ -627,7 +626,7 @@ impl Inode {
 
                 if dst_user {
                     let dst_va = VA::from(dst.as_mut_ptr() as usize);
-                    if log!(proc::copy_to_user(src, dst_va)).is_err() {
+                    if proc::copy_to_user(src, dst_va).is_err() {
                         BCACHE.release(buf);
                         err!(FsError::Read);
                     }
@@ -656,7 +655,7 @@ impl Inode {
         offset: u32,
         src: &[u8],
         src_user: bool,
-    ) -> Result<u32, FsError> {
+    ) -> Result<u32> {
         let mut src = src;
         let n = src.len() as u32;
         let mut offset = offset;
@@ -672,7 +671,7 @@ impl Inode {
         let mut total = 0;
 
         while total < n {
-            if let Ok(addr) = log!(self.map(inner, offset / BSIZE as u32)) {
+            if let Ok(addr) = self.map(inner, offset / BSIZE as u32) {
                 let mut buf = BCACHE.read(self.dev, addr);
                 let m = (n - total).min(BSIZE as u32 - (offset % BSIZE as u32));
 
@@ -680,7 +679,7 @@ impl Inode {
 
                 if src_user {
                     let src_va = VA::from(src.as_ptr() as usize);
-                    if log!(proc::copy_from_user(src_va, dst)).is_err() {
+                    if proc::copy_from_user(src_va, dst).is_err() {
                         BCACHE.release(buf);
                         break;
                     }
@@ -715,13 +714,13 @@ impl Inode {
         r#type: InodeType,
         major: u16,
         minor: u16,
-    ) -> Result<(Self, SleepLockGuard<'static, InodeInner>), FsError> {
-        let (parent, name) = try_log!(path.resolve_parent());
+    ) -> Result<(Self, SleepLockGuard<'static, InodeInner>)> {
+        let (parent, name) = path.resolve_parent()?;
 
         let mut parent_inner = parent.lock();
 
         // check if the file already exists
-        if let Ok(Some((_, inode))) = log!(Directory::lookup(&parent, &mut parent_inner, name)) {
+        if let Ok(Some((_, inode))) = Directory::lookup(&parent, &mut parent_inner, name) {
             parent.unlock_put(parent_inner);
 
             let inode_inner = inode.lock();
@@ -739,7 +738,7 @@ impl Inode {
             err!(FsError::Exists);
         }
 
-        let inode = match log!(Self::alloc(parent.dev, r#type)) {
+        let inode = match Self::alloc(parent.dev, r#type) {
             Ok(i) => i,
             Err(e) => {
                 parent.unlock_put(parent_inner);
@@ -756,20 +755,8 @@ impl Inode {
         // create `.` and `..` entries if it is a directory
         // no inode.nlink += 1 for `.` to avoid cyclic ref count
         if r#type == InodeType::Directory
-            && (log!(Directory::link(
-                &inode,
-                &mut inode_inner,
-                ".",
-                inode.inum as u16
-            ))
-            .is_err()
-                || log!(Directory::link(
-                    &inode,
-                    &mut inode_inner,
-                    "..",
-                    parent.inum as u16
-                ))
-                .is_err())
+            && (Directory::link(&inode, &mut inode_inner, ".", inode.inum as u16).is_err()
+                || Directory::link(&inode, &mut inode_inner, "..", parent.inum as u16).is_err())
         {
             // fail
             inode_inner.nlink = 0;
@@ -779,14 +766,7 @@ impl Inode {
             err!(FsError::Create);
         }
 
-        if log!(Directory::link(
-            &parent,
-            &mut parent_inner,
-            name,
-            inode.inum as u16
-        ))
-        .is_err()
-        {
+        if Directory::link(&parent, &mut parent_inner, name, inode.inum as u16).is_err() {
             // fail
             inode_inner.nlink = 0;
             inode.update(&inode_inner);
@@ -836,9 +816,9 @@ impl Directory {
         inode: &Inode,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         offset: u32,
-    ) -> Result<Self, FsError> {
+    ) -> Result<Self> {
         let mut buf = [0; Self::SIZE];
-        let read = try_log!(inode.read(inner, offset, &mut buf, false));
+        let read = inode.read(inner, offset, &mut buf, false)?;
         assert_eq!(read as usize, Self::SIZE, "dir read from inode");
         Ok(Self::from_bytes(&buf))
     }
@@ -858,7 +838,7 @@ impl Directory {
     /// Checks whether the directory is empty (only contains `.` and `..`).
     pub fn is_empty(inode: &Inode, inner: &mut SleepLockGuard<'_, InodeInner>) -> bool {
         for offset in ((2 * Self::SIZE as u32)..inner.size).step_by(Self::SIZE) {
-            let dir = log!(Self::from_inode(inode, inner, offset)).expect("dir is_empty");
+            let dir = Self::from_inode(inode, inner, offset).expect("dir is_empty");
             if dir.inum != 0 {
                 return false;
             }
@@ -873,11 +853,11 @@ impl Directory {
         inode: &Inode,
         inner: &mut SleepLockGuard<'_, InodeInner>,
         name: &str,
-    ) -> Result<Option<(u32, Inode)>, FsError> {
+    ) -> Result<Option<(u32, Inode)>> {
         assert_eq!(inner.r#type, InodeType::Directory, "dirlookup not DIR");
 
         for offset in (0..inner.size).step_by(Self::SIZE) {
-            let dir = try_log!(Self::from_inode(inode, inner, offset));
+            let dir = Self::from_inode(inode, inner, offset)?;
 
             if dir.inum == 0 {
                 continue;
@@ -885,7 +865,7 @@ impl Directory {
 
             if dir.is_name_equal(name) {
                 // entry matches path element
-                let dir_inode = try_log!(Inode::get(inode.dev, dir.inum as u32));
+                let dir_inode = Inode::get(inode.dev, dir.inum as u32)?;
                 return Ok(Some((offset, dir_inode)));
             }
         }
@@ -899,9 +879,9 @@ impl Directory {
         inner: &mut SleepLockGuard<'_, InodeInner>,
         name: &str,
         inum: u16,
-    ) -> Result<(), FsError> {
+    ) -> Result<()> {
         // check the name is not present
-        if let Ok(Some((_, dir))) = log!(Self::lookup(inode, inner, name)) {
+        if let Ok(Some((_, dir))) = Self::lookup(inode, inner, name) {
             dir.put();
             err!(FsError::Link);
         }
@@ -911,7 +891,7 @@ impl Directory {
         let mut offset = 0;
 
         while offset < inner.size {
-            dir = try_log!(Self::from_inode(inode, inner, offset));
+            dir = Self::from_inode(inode, inner, offset)?;
 
             // if we find an empty slot break and use it.
             // otherwise, the dir will be appended to the end
@@ -925,7 +905,7 @@ impl Directory {
         dir.set_name(name);
         dir.inum = inum;
 
-        let write = try_log!(inode.write(inner, offset, dir.as_bytes(), false));
+        let write = inode.write(inner, offset, dir.as_bytes(), false)?;
         if write as usize != Self::SIZE {
             err!(FsError::Link);
         }
@@ -974,9 +954,9 @@ impl<'a> Path<'a> {
         }
     }
 
-    fn resolve_inner(&self, parent: bool) -> Result<(Inode, &'a str), FsError> {
+    fn resolve_inner(&self, parent: bool) -> Result<(Inode, &'a str)> {
         let mut inode = if self.is_absolute() {
-            try_log!(Inode::get(ROOTDEV, ROOTINO))
+            Inode::get(ROOTDEV, ROOTINO)?
         } else {
             proc::current_proc().data().cwd.dup()
         };
@@ -1000,7 +980,7 @@ impl<'a> Path<'a> {
             }
 
             // get the next inode
-            match log!(Directory::lookup(&inode, &mut inner, component)) {
+            match Directory::lookup(&inode, &mut inner, component) {
                 Ok(Some((_, next))) => {
                     inode.unlock_put(inner);
                     inode = next;
@@ -1029,12 +1009,12 @@ impl<'a> Path<'a> {
     }
 
     /// Resolves the full path to an inode.
-    pub fn resolve(&self) -> Result<Inode, FsError> {
+    pub fn resolve(&self) -> Result<Inode> {
         self.resolve_inner(false).map(|(inode, _)| inode)
     }
 
     /// Resolves to the parent directory, returning (parent, final_name).
-    pub fn resolve_parent(&self) -> Result<(Inode, &'a str), FsError> {
+    pub fn resolve_parent(&self) -> Result<(Inode, &'a str)> {
         self.resolve_inner(true)
     }
 }

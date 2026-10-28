@@ -1,10 +1,10 @@
 use alloc::sync::Arc;
 
 use crate::file::{FILE_TABLE, File, FileType};
-use crate::fs::FsError;
+use crate::fs::{self, FsError};
 use crate::proc::{self, Channel, current_proc_and_data_mut};
 use crate::spinlock::SpinLock;
-use crate::syscall::SysError;
+use crate::syscall::{self, SysError};
 use crate::vm::VA;
 
 const PIPESIZE: usize = 512;
@@ -32,10 +32,10 @@ pub struct Pipe {
 
 impl Pipe {
     /// Allocates a new pipe and returns the read and write file descriptors
-    pub fn alloc() -> Result<(File, File), FsError> {
-        let mut f0 = try_log!(File::alloc());
+    pub fn alloc() -> fs::Result<(File, File)> {
+        let mut f0 = File::alloc()?;
 
-        let mut f1 = match log!(File::alloc()) {
+        let mut f1 = match File::alloc() {
             Ok(file) => file,
             Err(err) => {
                 f0.close();
@@ -44,7 +44,7 @@ impl Pipe {
         };
 
         // arc allocates pipe on the heap
-        let Ok(pipe) = log!(Arc::try_new(Pipe {
+        let Ok(pipe) = Arc::try_new(Pipe {
             inner: SpinLock::new(
                 PipeInner {
                     data: [0; PIPESIZE],
@@ -55,7 +55,7 @@ impl Pipe {
                 },
                 "pipe",
             ),
-        })) else {
+        }) else {
             f0.close();
             f1.close();
             err!(FsError::OutOfPipe)
@@ -104,7 +104,7 @@ impl Pipe {
     }
 
     /// Writes to the pipe from the user space
-    pub fn write(&self, addr: VA, n: usize) -> Result<usize, SysError> {
+    pub fn write(&self, addr: VA, n: usize) -> syscall::Result<usize> {
         let (proc, data) = current_proc_and_data_mut();
 
         let mut inner = self.inner.lock();
@@ -123,7 +123,7 @@ impl Pipe {
                 inner = proc::sleep(Channel::PipeWrite(self.pipe_id()), inner);
             } else {
                 let mut ch = [0u8];
-                if log!(data.pagetable_mut().copy_from(addr + i, &mut ch)).is_err() {
+                if data.pagetable_mut().copy_from(addr + i, &mut ch).is_err() {
                     break;
                 }
 
@@ -140,7 +140,7 @@ impl Pipe {
     }
 
     /// Reads from the pipe into the user space
-    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SysError> {
+    pub fn read(&self, addr: VA, n: usize) -> syscall::Result<usize> {
         let (proc, data) = current_proc_and_data_mut();
 
         let mut inner = self.inner.lock();
@@ -161,7 +161,7 @@ impl Pipe {
             }
 
             let ch = inner.data[inner.num_read % PIPESIZE];
-            if log!(data.pagetable_mut().copy_to(&[ch], addr + i)).is_err() {
+            if data.pagetable_mut().copy_to(&[ch], addr + i).is_err() {
                 err!(SysError::BadAddress);
             }
 

@@ -42,14 +42,14 @@ pub fn sys_read(args: &SyscallArgs) -> Result<usize> {
     let addr = args.get_addr(1);
     let n = args.get_int(2);
     let (_, file) = args.get_file(0)?;
-    Ok(file.read(addr, n as usize)?)
+    file.read(addr, n as usize)
 }
 
 pub fn sys_write(args: &SyscallArgs) -> Result<usize> {
     let addr = args.get_addr(1);
     let n = args.get_int(2);
     let (_, mut file) = args.get_file(0)?;
-    Ok(file.write(addr, n as usize)?)
+    file.write(addr, n as usize)
 }
 
 pub fn sys_close(args: &SyscallArgs) -> Result<usize> {
@@ -112,7 +112,7 @@ pub fn sys_link(args: &SyscallArgs) -> Result<usize> {
         // add the inode to the new's parent
         if let Err(e) = Directory::link(&parent, &mut parent_inner, name, old_inode.inum as u16) {
             parent.unlock_put(parent_inner);
-            err!(SysError::from(e));
+            err!(e);
         }
 
         parent.unlock_put(parent_inner);
@@ -208,9 +208,7 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
     if (o_mode & OpenFlag::CREATE) != 0 {
         (inode, inode_inner) = match Inode::create(&path, InodeType::File, 0, 0) {
             Ok(i) => i,
-            Err(e) => {
-                err!(SysError::from(e))
-            }
+            Err(e) => err!(e),
         };
     } else {
         inode = match path.resolve() {
@@ -243,12 +241,12 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
                 // if err here, we must also close the file
                 file.close();
                 inode.unlock_put(inode_inner);
-                return Err(e);
+                err!(e);
             }
         },
         Err(e) => {
             inode.unlock_put(inode_inner);
-            err!(SysError::from(e));
+            err!(e);
         }
     };
 
@@ -284,7 +282,7 @@ pub fn sys_mkdir(args: &SyscallArgs) -> Result<usize> {
 
     let (inode, inode_inner) = match Inode::create(&Path::new(&path), InodeType::Directory, 0, 0) {
         Ok(i) => i,
-        Err(e) => err!(SysError::from(e)),
+        Err(e) => err!(e),
     };
 
     inode.unlock_put(inode_inner);
@@ -301,7 +299,7 @@ pub fn sys_mknod(args: &SyscallArgs) -> Result<usize> {
 
     let (inode, inner) = match Inode::create(&Path::new(&path), InodeType::Device, major, minor) {
         Ok(i) => i,
-        Err(e) => err!(SysError::from(e)),
+        Err(e) => err!(e),
     };
 
     inode.unlock_put(inner);
@@ -381,7 +379,7 @@ pub fn sys_pipe(args: &SyscallArgs) -> Result<usize> {
 
     let (mut read, mut write) = match Pipe::alloc() {
         Ok(pair) => pair,
-        Err(e) => err!(SysError::from(e)),
+        Err(e) => err!(e),
     };
 
     let Ok(fd0) = fd_alloc(read.clone()) else {
@@ -418,5 +416,5 @@ pub fn sys_ioctl(args: &SyscallArgs) -> Result<usize> {
     let ioctl_cmd = args.get_int(1) as usize;
     let ioctl_arg = args.get_int(2) as usize;
     let (_, file) = args.get_file(0)?;
-    Ok(file.ioctl(ioctl_cmd, ioctl_arg)?)
+    file.ioctl(ioctl_cmd, ioctl_arg)
 }

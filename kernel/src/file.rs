@@ -3,16 +3,16 @@ use core::slice;
 use alloc::sync::Arc;
 
 use crate::console::Console;
-use crate::fs::{BSIZE, FsError, Inode, Stat};
+use crate::fs::{self, BSIZE, FsError, Inode, Stat};
 use crate::log::Operation;
 use crate::net::socket::{SockAddr, Socket};
 use crate::param::{MAXOPBLOCKS, NDEV, NFILE};
 use crate::pipe::Pipe;
-use crate::proc;
 use crate::sleeplock::SleepLock;
 use crate::spinlock::SpinLock;
 use crate::syscall::SysError;
 use crate::vm::VA;
+use crate::{proc, syscall};
 
 #[derive(Debug, Clone)]
 pub enum FileType {
@@ -78,7 +78,7 @@ pub struct File {
 
 impl File {
     /// Allocates a file structure.
-    pub fn alloc() -> Result<Self, FsError> {
+    pub fn alloc() -> fs::Result<Self> {
         let mut meta = FILE_TABLE.meta.lock();
 
         for (i, meta) in meta.iter_mut().enumerate() {
@@ -141,7 +141,7 @@ impl File {
     }
 
     /// Gets metadata about file.
-    pub fn stat(&self, addr: VA) -> Result<(), SysError> {
+    pub fn stat(&self, addr: VA) -> syscall::Result<()> {
         let file_inner = FILE_TABLE.inner[self.id].lock();
 
         match &file_inner.r#type {
@@ -153,18 +153,18 @@ impl File {
                 let src = unsafe {
                     slice::from_raw_parts(&stat as *const _ as *const u8, size_of::<Stat>())
                 };
-                if log!(proc::copy_to_user(src, addr)).is_err() {
+                if proc::copy_to_user(src, addr).is_err() {
                     err!(SysError::BadAddress);
                 }
 
                 Ok(())
             }
-            _ => Err(SysError::BadDescriptor),
+            _ => err!(SysError::BadDescriptor),
         }
     }
 
     /// Reads from file.
-    pub fn read(&self, addr: VA, n: usize) -> Result<usize, SysError> {
+    pub fn read(&self, addr: VA, n: usize) -> syscall::Result<usize> {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.readable {
@@ -181,7 +181,7 @@ impl File {
                 let mut inode_inner = inode.lock();
 
                 let dst = unsafe { slice::from_raw_parts_mut(addr.as_mut_ptr(), n) };
-                let read = log!(inode.read(&mut inode_inner, file_inner.offset, dst, true));
+                let read = inode.read(&mut inode_inner, file_inner.offset, dst, true);
 
                 if let Ok(read) = read {
                     file_inner.offset += read;
@@ -209,7 +209,7 @@ impl File {
     }
 
     /// Writes to a file.
-    pub fn write(&mut self, addr: VA, n: usize) -> Result<usize, SysError> {
+    pub fn write(&mut self, addr: VA, n: usize) -> syscall::Result<usize> {
         let mut file_inner = FILE_TABLE.inner[self.id].lock();
 
         if !file_inner.writeable {
@@ -238,7 +238,7 @@ impl File {
 
                     let src =
                         unsafe { slice::from_raw_parts((addr.as_usize() + i) as *const u8, n1) };
-                    let write = log!(inode.write(&mut inode_inner, file_inner.offset, src, true));
+                    let write = inode.write(&mut inode_inner, file_inner.offset, src, true);
 
                     if let Ok(w) = write {
                         file_inner.offset += w;
@@ -273,7 +273,7 @@ impl File {
         }
     }
 
-    pub fn ioctl(&self, cmd: usize, arg: usize) -> Result<usize, SysError> {
+    pub fn ioctl(&self, cmd: usize, arg: usize) -> syscall::Result<usize> {
         let file_inner = FILE_TABLE.inner[self.id].lock();
 
         match &file_inner.r#type {
@@ -317,8 +317,8 @@ impl OpenFlag {
 /// Device interface
 #[derive(Debug, Clone, Copy)]
 pub struct Device {
-    pub read: fn(addr: VA, n: usize) -> Result<usize, SysError>,
-    pub write: fn(addr: VA, n: usize) -> Result<usize, SysError>,
+    pub read: fn(addr: VA, n: usize) -> syscall::Result<usize>,
+    pub write: fn(addr: VA, n: usize) -> syscall::Result<usize>,
 }
 
 /// Device-specific ioctl commands

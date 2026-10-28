@@ -86,12 +86,12 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize> {
             Err(e) => {
                 file.close();
                 socket.close();
-                Err(e)?
+                err!(e)
             }
         },
         Err(e) => {
             socket.close();
-            Err(SysError::from(e))?
+            err!(e)
         }
     };
 
