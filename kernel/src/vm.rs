@@ -4,6 +4,7 @@ use core::fmt::Display;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 
+use crate::error::Traced;
 use crate::fs::{Inode, InodeInner};
 use crate::kalloc;
 use crate::memlayout::{
@@ -28,6 +29,8 @@ pub enum VmError {
     Fs,
 }
 
+pub type Result<T> = core::result::Result<T, Traced<VmError>>;
+
 impl Display for VmError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -45,6 +48,8 @@ impl From<core::alloc::AllocError> for VmError {
         Self::Alloc
     }
 }
+
+traced_from!(core::alloc::AllocError => VmError);
 
 // kernel.ld sets this to end of kernel code
 unsafe extern "C" {
@@ -270,12 +275,11 @@ struct RawPageTable([PageTableEntry; 512]);
 impl RawPageTable {
     /// Allocates a new zeroed RawPageTable.
     ///
-    /// Returns a NonNull pointer to the allocated RawPageTable on success, or a KernelError if
-    /// allocation fails.
+    /// Returns a NonNull pointer to the allocated RawPageTable on success, or Err if allocation fails.
     ///
     /// The caller is responsible for freeing the allocated memory.
-    fn try_new() -> Result<NonNull<Self>, VmError> {
-        let memory: Box<MaybeUninit<RawPageTable>> = try_log!(Box::try_new_zeroed());
+    fn try_new() -> Result<NonNull<Self>> {
+        let memory: Box<MaybeUninit<RawPageTable>> = Box::try_new_zeroed()?;
         let memory = unsafe { memory.assume_init() };
         Ok(NonNull::new(Box::into_raw(memory)).unwrap())
     }
@@ -315,13 +319,12 @@ pub struct PageTable {
 impl PageTable {
     /// Creates an empty page table.
     ///
-    /// Returns a Result containing the new PageTable on success, or a KernelError if allocation
-    /// fails.
+    /// Returns a Result containing the new PageTable on success, or Err if allocation fails.
     ///
     /// PageTable is not dropped automatically. Call `free_walk` to free page-table pages.
-    pub fn try_new() -> Result<Self, VmError> {
+    pub fn try_new() -> Result<Self> {
         Ok(Self {
-            ptr: try_log!(RawPageTable::try_new()),
+            ptr: RawPageTable::try_new()?,
         })
     }
 
@@ -349,7 +352,7 @@ impl PageTable {
         mut pagetable: NonNull<RawPageTable>,
         va: VA,
         alloc: bool,
-    ) -> Result<*mut PageTableEntry, VmError> {
+    ) -> Result<*mut PageTableEntry> {
         if va >= MAXVA {
             err!(VmError::InvalidAddress);
         }
@@ -368,7 +371,7 @@ impl PageTable {
                         err!(VmError::InvalidPage);
                     }
 
-                    pagetable = try_log!(RawPageTable::try_new());
+                    pagetable = RawPageTable::try_new()?;
                     *pte = PA::from(pagetable.as_ptr() as usize).as_pte() | PTE_V;
                 }
             }
@@ -380,7 +383,7 @@ impl PageTable {
     /// Returns a reference to the PTE in page table that corresponds to virtual address `va`.
     ///
     /// Returns an error if any required page-table page doesn't exist.
-    fn walk(&self, va: VA) -> Result<&PageTableEntry, VmError> {
+    fn walk(&self, va: VA) -> Result<&PageTableEntry> {
         unsafe { Self::walk_raw(self.ptr, va, false).map(|p| &*p) }
     }
 
@@ -389,19 +392,19 @@ impl PageTable {
     ///
     /// Returns an error if any required page-table page doesn't exist and `alloc` is false.
     /// If `alloc` is true, creates any required page-table pages.
-    fn walk_mut(&mut self, va: VA, alloc: bool) -> Result<&mut PageTableEntry, VmError> {
+    fn walk_mut(&mut self, va: VA, alloc: bool) -> Result<&mut PageTableEntry> {
         unsafe { Self::walk_raw(self.ptr, va, alloc).map(|p| &mut *p) }
     }
 
     /// Looks up a virtual address, return the physical address, or Error if not mapped.
     ///
     /// Can only be used to look up user pages.
-    fn walk_addr(&self, va: VA) -> Result<PA, VmError> {
+    fn walk_addr(&self, va: VA) -> Result<PA> {
         if va > MAXVA {
             err!(VmError::InvalidAddress);
         }
 
-        let pte = try_log!(self.walk(va));
+        let pte = self.walk(va)?;
 
         if !pte.is_v() || !pte.is_u() {
             err!(VmError::InvalidPte);
@@ -414,7 +417,7 @@ impl PageTable {
     /// starting at `pa`, applying the permissions given in `perm`.
     ///
     /// `va` and `size` must be page-aligned.
-    pub fn map_pages(&mut self, va: VA, pa: PA, size: usize, perm: usize) -> Result<(), VmError> {
+    pub fn map_pages(&mut self, va: VA, pa: PA, size: usize, perm: usize) -> Result<()> {
         assert_eq!(va % PGSIZE, 0, "map_pages: va not aligned");
         assert_eq!(size % PGSIZE, 0, "map_pages: size not aligned");
         assert_ne!(size, 0, "map_pages: size");
@@ -424,7 +427,7 @@ impl PageTable {
         let mut pa = pa;
 
         loop {
-            let pte = try_log!(self.walk_mut(va, true));
+            let pte = self.walk_mut(va, true)?;
             assert!(!pte.is_v(), "map_pages: remap");
 
             *pte = pa.as_pte() | perm | PTE_V;
@@ -470,10 +473,10 @@ impl PageTable {
         va: VA,
         offset: u32,
         size: usize,
-    ) -> Result<(), VmError> {
+    ) -> Result<()> {
         let mut n: usize;
         for i in (0..size).step_by(PGSIZE) {
-            let pa = try_log!(self.walk_addr(va + i));
+            let pa = self.walk_addr(va + i)?;
 
             if size - i < PGSIZE {
                 n = size - i;
@@ -482,7 +485,7 @@ impl PageTable {
             }
 
             let dst = unsafe { core::slice::from_raw_parts_mut(pa.as_usize() as *mut u8, n) };
-            match log!(inode.read(inner, offset + i as u32, dst, false)) {
+            match inode.read(inner, offset + i as u32, dst, false) {
                 Ok(read) if read as usize == dst.len() => {}
                 _ => err!(VmError::Fs),
             }
@@ -509,8 +512,8 @@ pub struct Kvm(PageTable);
 
 impl Kvm {
     /// Allocates a new uninitialized kernel page table.
-    fn try_new() -> Result<Self, VmError> {
-        Ok(Self(try_log!(PageTable::try_new())))
+    fn try_new() -> Result<Self> {
+        Ok(Self(PageTable::try_new()?))
     }
 
     /// Maps [va, va+size) to [pa, pa+size) in the kernel page table.
@@ -518,7 +521,7 @@ impl Kvm {
     /// Only used when booting.
     /// Does not flush TLB or enable paging.
     pub fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
-        if log!(self.0.map_pages(va, pa, size, perm)).is_err() {
+        if self.0.map_pages(va, pa, size, perm).is_err() {
             panic!("kvmmap");
         }
     }
@@ -593,8 +596,8 @@ pub struct Uvm(pub PageTable);
 
 impl Uvm {
     /// Allocates an empty user page table.
-    pub fn try_new() -> Result<Self, VmError> {
-        Ok(Self(try_log!(PageTable::try_new())))
+    pub fn try_new() -> Result<Self> {
+        Ok(Self(PageTable::try_new()?))
     }
 
     /// Removes `npages` of mappings starting from `va`.
@@ -607,7 +610,7 @@ impl Uvm {
         assert!(va.0.is_multiple_of(PGSIZE), "uvmunmap: not aligned");
 
         for i in (va.0..va.0 + (npages * PGSIZE)).step_by(PGSIZE) {
-            match log!(self.0.walk_mut(VA::from(i), false)) {
+            match self.0.walk_mut(VA::from(i), false) {
                 // An intermediate page-table page is absent; this region was never touched by a
                 // page fault.
                 Err(_) => continue,
@@ -636,12 +639,7 @@ impl Uvm {
     /// which need not be page aligned.
     ///
     /// Returns the new process size or error.
-    pub fn alloc(
-        &mut self,
-        old_size: usize,
-        new_size: usize,
-        xperm: usize,
-    ) -> Result<usize, VmError> {
+    pub fn alloc(&mut self, old_size: usize, new_size: usize, xperm: usize) -> Result<usize> {
         if new_size < old_size {
             return Ok(old_size);
         }
@@ -649,7 +647,7 @@ impl Uvm {
         let old_size = pg_round_up(old_size);
 
         for i in (old_size..new_size).step_by(PGSIZE) {
-            let mem = match log!(Box::<Page>::try_new_zeroed()) {
+            let mem = match Box::<Page>::try_new_zeroed() {
                 Ok(mem) => unsafe { mem.assume_init() },
                 Err(err) => {
                     self.dealloc(i, old_size);
@@ -659,12 +657,12 @@ impl Uvm {
 
             let mem = Box::into_raw(mem);
 
-            if let Err(err) = log!(self.0.map_pages(
+            if let Err(err) = self.0.map_pages(
                 VA::from(i),
                 PA::from(mem as usize),
                 PGSIZE,
                 PTE_R | PTE_U | xperm,
-            )) {
+            ) {
                 let _pg = unsafe { Box::from_raw(mem) };
                 self.dealloc(i, old_size);
                 return Err(err);
@@ -719,7 +717,7 @@ impl Uvm {
     /// Copies this prcoess's (parent's) page table and its memory into a child's page table.
     /// Instead of copying the physical memory, we set up copy-on-write (COW) mappings for both
     /// parent and child.
-    pub fn copy(&mut self, child: &mut Uvm, size: usize) -> Result<(), VmError> {
+    pub fn copy(&mut self, child: &mut Uvm, size: usize) -> Result<()> {
         for i in (0..size).step_by(PGSIZE) {
             let pte = match self.walk_mut(VA::from(i), false) {
                 // intermediate page is absent, lazy allocated
@@ -738,7 +736,7 @@ impl Uvm {
             }
 
             // map child's virtual address to the same physical address as the parent.
-            if let Err(err) = log!(child.map_pages(VA::from(i), pte.as_pa(), PGSIZE, pte.flags())) {
+            if let Err(err) = child.map_pages(VA::from(i), pte.as_pa(), PGSIZE, pte.flags()) {
                 child.unmap(VA::from(0), i / PGSIZE, true);
                 return Err(err);
             }
@@ -756,8 +754,8 @@ impl Uvm {
     /// Marks a PTE invalid for user access.
     ///
     /// Used by `exec()` for the user stack guard page.
-    pub fn clear(&mut self, va: VA) -> Result<(), VmError> {
-        let pte = try_log!(self.walk_mut(va, false));
+    pub fn clear(&mut self, va: VA) -> Result<()> {
+        let pte = self.walk_mut(va, false)?;
         *pte &= !PTE_U;
         Ok(())
     }
@@ -773,7 +771,7 @@ impl Uvm {
     /// 2. pte is valid and cow is unset: write on read-only page, page fault
     /// 3. pte is valid and cow is set: valid copy-on-write page, copy page as writable
     /// 4. pte is invalid: lazily allocated page, allocate & map new page
-    pub fn vmfault(&mut self, va: VA) -> Result<PA, VmError> {
+    pub fn vmfault(&mut self, va: VA) -> Result<PA> {
         let (_proc, data) = proc::current_proc_and_data_mut();
 
         if va.as_usize() >= data.size {
@@ -794,7 +792,7 @@ impl Uvm {
             // case 3: COW page, copy and remap as writable
             let old_pa = pte.as_pa();
             let mem = {
-                let mem = try_log!(Box::<Page>::try_new_zeroed());
+                let mem = Box::<Page>::try_new_zeroed()?;
                 unsafe { mem.assume_init() }
             };
             let new_pa = PA::from(Box::into_raw(mem) as usize);
@@ -821,13 +819,13 @@ impl Uvm {
 
         // case 4: pte absent, lazily allocate a new page
         let mem = {
-            let mem = try_log!(Box::<Page>::try_new_zeroed());
+            let mem = Box::<Page>::try_new_zeroed()?;
             unsafe { mem.assume_init() }
         };
         let mem_ptr = Box::into_raw(mem);
         let pa = PA::from(mem_ptr as usize);
 
-        if let Err(e) = log!(self.map_pages(va, pa, PGSIZE, PTE_W | PTE_U | PTE_R)) {
+        if let Err(e) = self.map_pages(va, pa, PGSIZE, PTE_W | PTE_U | PTE_R) {
             // # Safety: mem_ptr was allocated above and is not mapped in pagetable.
             drop(unsafe { Box::from_raw(mem_ptr) });
             err!(e);
@@ -837,7 +835,7 @@ impl Uvm {
     }
 
     /// Copies bytes from `src` to `dst` virtual address in the current pagetable.
-    pub fn copy_to(&mut self, src: &[u8], dst: VA) -> Result<(), VmError> {
+    pub fn copy_to(&mut self, src: &[u8], dst: VA) -> Result<()> {
         let mut src = src;
         let mut dstva = dst.as_usize();
 
@@ -848,12 +846,12 @@ impl Uvm {
                 err!(VmError::InvalidAddress);
             }
 
-            let pa0 = match log!(self.walk_addr(VA::from(va0))) {
+            let pa0 = match self.walk_addr(VA::from(va0)) {
                 Ok(pa0) => pa0,
-                Err(_) => try_log!(self.vmfault(VA::from(va0))),
+                Err(_) => self.vmfault(VA::from(va0))?,
             };
 
-            let pte = try_log!(self.walk(VA::from(va0)));
+            let pte = self.walk(VA::from(va0))?;
 
             // forbid copy_out over read-only user text pages
             if !pte.is_w() {
@@ -876,15 +874,15 @@ impl Uvm {
     }
 
     /// Copy bytes from `src` virtual address in the current pagetable to `dst`.
-    pub fn copy_from(&mut self, src: VA, dst: &mut [u8]) -> Result<(), VmError> {
+    pub fn copy_from(&mut self, src: VA, dst: &mut [u8]) -> Result<()> {
         let mut srcva = src.as_usize();
         let mut dst = dst;
 
         while !dst.is_empty() {
             let va0 = pg_round_down(srcva);
-            let pa0 = match log!(self.walk_addr(VA::from(va0))) {
+            let pa0 = match self.walk_addr(VA::from(va0)) {
                 Ok(pa0) => pa0,
-                Err(_) => try_log!(self.vmfault(VA::from(va0))),
+                Err(_) => self.vmfault(VA::from(va0))?,
             };
 
             let n = (PGSIZE - (srcva - va0)).min(dst.len());
@@ -926,9 +924,9 @@ impl core::ops::DerefMut for Uvm {
 pub unsafe fn init() {
     unsafe {
         KVM.initialize(|| {
-            let mut kvm = try_log!(Kvm::try_new());
+            let mut kvm = Kvm::try_new()?;
             kvm.make();
-            Ok::<_, VmError>(kvm)
+            Ok::<_, Traced<VmError>>(kvm)
         });
     }
 

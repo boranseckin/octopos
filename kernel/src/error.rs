@@ -147,6 +147,13 @@ impl From<VmError> for KernelError {
     }
 }
 
+// TODO: temporary
+impl From<Traced<VmError>> for KernelError {
+    fn from(value: Traced<VmError>) -> Self {
+        Self::Vm(value.kind)
+    }
+}
+
 impl From<SysError> for KernelError {
     fn from(value: SysError) -> Self {
         Self::Sys(value)

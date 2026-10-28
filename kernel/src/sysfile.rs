@@ -349,13 +349,8 @@ pub fn sys_exec(args: &SyscallArgs) -> Result<usize> {
         let dst = unsafe {
             slice::from_raw_parts_mut(&mut uarg as *mut usize as *mut u8, size_of::<usize>())
         };
-        if data
-            .pagetable_mut()
-            .copy_from(uargv + i * size_of::<usize>(), dst)
-            .is_err()
-        {
-            err!(SysError::BadAddress);
-        }
+        data.pagetable_mut()
+            .copy_from(uargv + i * size_of::<usize>(), dst)?;
 
         if uarg == 0 {
             break; // NULL terminator

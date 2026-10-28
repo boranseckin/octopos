@@ -81,7 +81,7 @@ pub fn sys_random(args: &SyscallArgs) -> Result<usize> {
     let mut src_buf = vec![0u8; len];
     rand_bytes(&mut src_buf);
 
-    proc::copy_to_user(&src_buf, dest_buf).map_err(|_| SysError::BadAddress)?;
+    proc::copy_to_user(&src_buf, dest_buf)?;
 
     Ok(0)
 }

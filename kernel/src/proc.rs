@@ -20,7 +20,7 @@ use crate::swtch::swtch;
 use crate::sync::OnceLock;
 use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
-use crate::vm::{Kvm, PA, PageTable, Uvm, VA};
+use crate::vm::{self, Kvm, PA, PageTable, Uvm, VA};
 
 pub static CPU_TABLE: CpuTable = CpuTable::new();
 pub static PROC_TABLE: ProcTable = ProcTable::new();
@@ -466,24 +466,24 @@ impl Proc {
 
     /// Create a user page table using a given process's trapframe address, with no user memory,
     /// but with trampoline and trapframe pages.
-    pub fn create_pagetable(&self) -> Result<Uvm, KernelError> {
+    pub fn create_pagetable(&self) -> vm::Result<Uvm> {
         let mut uvm = Uvm::try_new()?;
 
         // Map the trampoline code (for system call returns) at the highest user virtual address.
         // Only the supervisor uses it, on the way to/from user space, so not PTE_U.
-        if let Err(err) = log!(uvm.map_pages(
+        if let Err(e) = log!(uvm.map_pages(
             TRAMPOLINE.into(),
             (trampoline as *const () as usize).into(),
             PGSIZE,
             PTE_R | PTE_X,
         )) {
             uvm.free(0);
-            return Err(err.into());
+            err!(e);
         }
 
         // Map the trapframe page just below the trampoline page, for `trampoline.rs`.
         let data = self.data();
-        if let Err(err) = log!(uvm.map_pages(
+        if let Err(e) = log!(uvm.map_pages(
             TRAPFRAME.into(),
             PA::from(data.trapframe() as *const _ as usize),
             PGSIZE,
@@ -491,7 +491,7 @@ impl Proc {
         )) {
             uvm.unmap(TRAMPOLINE.into(), 1, false);
             uvm.free(0);
-            return Err(err.into());
+            err!(e);
         }
 
         Ok(uvm)
@@ -534,9 +534,9 @@ impl Proc {
             Ok(trapframe) => {
                 data.trapframe.replace(unsafe { trapframe.assume_init() });
             }
-            Err(err) => {
+            Err(e) => {
                 self.free(inner);
-                return Err(err.into());
+                err!(e);
             }
         }
 
@@ -545,9 +545,9 @@ impl Proc {
             Ok(uvm) => {
                 data.pagetable.replace(uvm);
             }
-            Err(err) => {
+            Err(e) => {
                 self.free(inner);
-                return Err(err);
+                err!(e);
             }
         }
 
@@ -1201,25 +1201,19 @@ pub fn kill(pid: Pid) -> bool {
 }
 
 /// Copies from kernel to user space.
-pub fn copy_to_user(src: &[u8], dst: VA) -> Result<(), KernelError> {
-    log!(
-        // # Safety: we are the current proc
-        unsafe { current_proc().data_mut() }
-            .pagetable_mut()
-            .copy_to(src, dst)
-    )
-    .map_err(|e| e.into())
+pub fn copy_to_user(src: &[u8], dst: VA) -> vm::Result<()> {
+    // # Safety: we are the current proc
+    unsafe { current_proc().data_mut() }
+        .pagetable_mut()
+        .copy_to(src, dst)
 }
 
 /// Copies from user to kernel space.
-pub fn copy_from_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
-    log!(
-        // # Safety: we are the current proc
-        unsafe { current_proc().data_mut() }
-            .pagetable_mut()
-            .copy_from(src, dst)
-    )
-    .map_err(|e| e.into())
+pub fn copy_from_user(src: VA, dst: &mut [u8]) -> vm::Result<()> {
+    // # Safety: we are the current proc
+    unsafe { current_proc().data_mut() }
+        .pagetable_mut()
+        .copy_from(src, dst)
 }
 
 /// Marker for plain-old-data ABI types.
@@ -1229,18 +1223,18 @@ pub fn copy_from_user(src: VA, dst: &mut [u8]) -> Result<(), KernelError> {
 pub unsafe trait Pod: Copy + Default {}
 
 /// Copies a struct from kernel to user space.
-pub fn copy_struct_to_user<T: Pod>(src: &T, dst: VA) -> Result<(), KernelError> {
+pub fn copy_struct_to_user<T: Pod>(src: &T, dst: VA) -> vm::Result<()> {
     // Safety: Pod implementors are safe to reconstruct.
     let slice = unsafe { slice::from_raw_parts(src as *const T as *const u8, size_of::<T>()) };
-    log!(copy_to_user(slice, dst))
+    copy_to_user(slice, dst)
 }
 
 /// Copies a struct from user to kernel space.
-pub fn copy_struct_from_user<T: Pod>(src: VA) -> Result<T, KernelError> {
+pub fn copy_struct_from_user<T: Pod>(src: VA) -> vm::Result<T> {
     let mut dst = T::default();
     // Safety: Pod implementors are safe to reconstruct.
     let slice = unsafe { slice::from_raw_parts_mut(&mut dst as *mut T as *mut u8, size_of::<T>()) };
-    try_log!(copy_from_user(src, slice));
+    copy_from_user(src, slice)?;
     Ok(dst)
 }
 

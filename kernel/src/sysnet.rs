@@ -47,8 +47,7 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize> {
     };
 
     let raw_addr_va = args.get_addr(1);
-    let raw_addr: RawSockAddr =
-        copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress)?;
+    let raw_addr: RawSockAddr = copy_struct_from_user(raw_addr_va)?;
     let addr = SockAddr::try_from(raw_addr)?;
 
     let socket = match socket_type {
@@ -133,14 +132,11 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize> {
     let socket = file_socket(&file)?;
 
     let raw_addr_va = args.get_addr(3);
-    let raw_addr: RawSockAddr =
-        copy_struct_from_user(raw_addr_va).map_err(|_| SysError::BadAddress)?;
+    let raw_addr: RawSockAddr = copy_struct_from_user(raw_addr_va)?;
     let addr = SockAddr::try_from(raw_addr)?;
 
     let mut payload = vec![0u8; buf_len];
-    if copy_from_user(buf_addr, &mut payload).is_err() {
-        err!(SysError::BadAddress)
-    }
+    copy_from_user(buf_addr, &mut payload)?;
 
     socket.send(addr, &payload)?;
 
@@ -181,11 +177,8 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize> {
     let copy_len = received.len().min(buf_len);
     let raw_addr = RawSockAddr::from(addr);
 
-    if proc::copy_struct_to_user(&raw_addr, src_addr_ptr).is_err()
-        || proc::copy_to_user(&received[..copy_len], buf_addr).is_err()
-    {
-        err!(SysError::BadAddress)
-    }
+    proc::copy_struct_to_user(&raw_addr, src_addr_ptr)?;
+    proc::copy_to_user(&received[..copy_len], buf_addr)?;
 
     Ok(copy_len)
 }
@@ -236,13 +229,11 @@ pub fn sys_interface(args: &SyscallArgs) -> Result<usize> {
             let interface = interface::interface_at(index)?;
             let raw_interface = RawInterface::from(interface);
 
-            copy_struct_to_user(&raw_interface, raw_interface_va)
-                .map_err(|_| SysError::BadAddress)?;
+            copy_struct_to_user(&raw_interface, raw_interface_va)?;
         }
 
         InterfaceOp::SetIpv4 => {
-            let raw_interface: RawInterface =
-                copy_struct_from_user(raw_interface_va).map_err(|_| SysError::BadAddress)?;
+            let raw_interface: RawInterface = copy_struct_from_user(raw_interface_va)?;
 
             let addr = Ipv4Addr::from(raw_interface.addr);
             let ipv4 = (addr != Ipv4Addr::UNSPECIFIED).then_some(Ipv4Cidr {
@@ -319,7 +310,7 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize> {
             };
             let raw_route = RawRoute::from(route);
 
-            copy_struct_to_user(&raw_route, raw_route_va).map_err(|_| SysError::BadAddress)?;
+            copy_struct_to_user(&raw_route, raw_route_va)?;
 
             Ok(0)
         }
@@ -328,8 +319,7 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize> {
             let flags = args.get_int(2) as usize;
             let replace = flags & RouteFlag::ROUTE_REPLACE != 0;
 
-            let raw_route: RawRoute =
-                copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress)?;
+            let raw_route: RawRoute = copy_struct_from_user(raw_route_va)?;
             let route = RouteEntry::try_from(raw_route)?;
 
             route::add_route(route, replace)?;
@@ -338,8 +328,7 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize> {
         }
 
         RouteOp::Remove => {
-            let raw_route: RawRoute =
-                copy_struct_from_user(raw_route_va).map_err(|_| SysError::BadAddress)?;
+            let raw_route: RawRoute = copy_struct_from_user(raw_route_va)?;
             let route = RouteEntry::try_from(raw_route)?;
 
             route::remove_route(&route)?;

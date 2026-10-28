@@ -12,7 +12,7 @@ use crate::proc::{Proc, TrapFrame, current_proc, current_proc_and_data_mut};
 use crate::sysfile::*;
 use crate::sysnet::*;
 use crate::sysproc::*;
-use crate::vm::VA;
+use crate::vm::{VA, VmError};
 
 /// Syscall error codes using POSIX-standard numeric values.
 ///
@@ -140,9 +140,23 @@ impl Display for SysError {
     }
 }
 
+impl From<VmError> for SysError {
+    fn from(value: VmError) -> Self {
+        match value {
+            VmError::InvalidAddress | VmError::InvalidPage | VmError::InvalidPte => {
+                Self::BadAddress
+            }
+            VmError::Alloc => Self::OutOfMemory,
+            VmError::Fs => Self::IoError,
+        }
+    }
+}
+
+traced_from!(VmError => SysError);
+
 impl From<FsError> for SysError {
-    fn from(e: FsError) -> Self {
-        match e {
+    fn from(value: FsError) -> Self {
+        match value {
             FsError::OutOfBlock | FsError::OutOfInode => SysError::NoSpace,
             FsError::OutOfFile | FsError::OutOfPipe => SysError::FileTableFull,
             FsError::OutOfRange => SysError::InvalidArgument,
