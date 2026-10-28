@@ -3,13 +3,6 @@ use core::ops::Deref;
 #[cfg(debug_assertions)]
 use core::panic::Location;
 
-use crate::exec::ExecError;
-use crate::fs::FsError;
-use crate::net::NetError;
-use crate::syscall::SysError;
-use crate::virtio_disk::VirtioError;
-use crate::vm::VmError;
-
 #[cfg(debug_assertions)]
 const TRAIL: usize = 4;
 
@@ -119,85 +112,6 @@ macro_rules! traced_from {
             }
         }
     };
-}
-
-/// Kernel error codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KernelError {
-    Alloc,
-    InvalidArgument,
-    OutOfProc,
-    Vm(VmError),
-    Sys(SysError),
-    Fs(FsError),
-    Exec(ExecError),
-    VirtioError(VirtioError),
-    Net(NetError),
-}
-
-impl From<core::alloc::AllocError> for KernelError {
-    fn from(_value: core::alloc::AllocError) -> Self {
-        Self::Alloc
-    }
-}
-
-impl From<VmError> for KernelError {
-    fn from(value: VmError) -> Self {
-        Self::Vm(value)
-    }
-}
-
-// TODO: temporary
-impl From<Traced<VmError>> for KernelError {
-    fn from(value: Traced<VmError>) -> Self {
-        Self::Vm(value.kind)
-    }
-}
-
-impl From<SysError> for KernelError {
-    fn from(value: SysError) -> Self {
-        Self::Sys(value)
-    }
-}
-
-impl From<FsError> for KernelError {
-    fn from(value: FsError) -> Self {
-        Self::Fs(value)
-    }
-}
-
-impl From<ExecError> for KernelError {
-    fn from(value: ExecError) -> Self {
-        Self::Exec(value)
-    }
-}
-
-impl From<VirtioError> for KernelError {
-    fn from(value: VirtioError) -> Self {
-        Self::VirtioError(value)
-    }
-}
-
-impl From<NetError> for KernelError {
-    fn from(value: NetError) -> Self {
-        Self::Net(value)
-    }
-}
-
-impl Display for KernelError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            KernelError::Alloc => write!(f, "alloc error"),
-            KernelError::InvalidArgument => write!(f, "invalid argument"),
-            KernelError::OutOfProc => write!(f, "out of proc"),
-            KernelError::Sys(e) => write!(f, "syscall error {}", e),
-            KernelError::Vm(e) => write!(f, "vm error {}", e),
-            KernelError::Fs(e) => write!(f, "filesystem error {}", e),
-            KernelError::Exec(e) => write!(f, "exec error {}", e),
-            KernelError::VirtioError(e) => write!(f, "virtio error {}", e),
-            KernelError::Net(e) => write!(f, "net error {e}"),
-        }
-    }
 }
 
 /// Errors that are normal control flow and are not traced.
