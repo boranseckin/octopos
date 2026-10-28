@@ -28,11 +28,11 @@ fn echo_request(buf: &mut [u8], ident: u16, seq: u16, sum: u16, payload: &[u8]) 
 fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
 
-    let mut chunks = data.chunks_exact(2);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = data.as_chunks::<2>();
+    for chunk in chunks {
         sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
     }
-    if let [byte] = chunks.remainder() {
+    if let [byte] = remainder {
         sum += (*byte as u32) << 8;
     }
 

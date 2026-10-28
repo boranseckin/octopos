@@ -69,7 +69,9 @@ fn demo_pipe_ipc() {
     match fork().unwrap_or_else(|_| exit_with_msg("demo: fork failed")) {
         0 => {
             close(read_fd).expect("demo: close failed");
-            write_fd.write_all(b"Hello from child!").expect("demo: write failed");
+            write_fd
+                .write_all(b"Hello from child!")
+                .expect("demo: write failed");
             close(write_fd).expect("demo: close failed");
             exit(0);
         }

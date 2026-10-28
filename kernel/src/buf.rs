@@ -227,9 +227,9 @@ pub unsafe fn init() {
     // create a circular doubly-linked list
     // head -> 0 -> 1 -> ... -> NBUF - 1 -> head
     inner.head = 0;
-    for i in 0..NBUF {
-        inner.meta[i].prev = if i == 0 { NBUF - 1 } else { i - 1 };
-        inner.meta[i].next = if i == NBUF - 1 { 0 } else { i + 1 };
+    for (i, meta) in inner.meta.iter_mut().enumerate().take(NBUF) {
+        meta.prev = if i == 0 { NBUF - 1 } else { i - 1 };
+        meta.next = if i == NBUF - 1 { 0 } else { i + 1 };
     }
 
     println!("buf  init");

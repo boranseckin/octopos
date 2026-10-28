@@ -479,13 +479,13 @@ fn internet_checksum(segments: &[&[u8]]) -> u16 {
         };
 
         // Sum up 16-bit big-endian words in this segment.
-        let mut chunks = data.chunks_exact(2);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = data.as_chunks::<2>();
+        for chunk in chunks {
             sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
         }
 
         // If there is a trailing odd byte, save it for the next segment.
-        carry = chunks.remainder().first().copied();
+        carry = remainder.first().copied();
     }
 
     // There was a trailing odd byte after the last segment, pad by 0x00 and add to the sum.

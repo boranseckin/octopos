@@ -55,6 +55,7 @@ impl Ipv4Header {
         Ipv4Proto::from(self.proto)
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u16 {
         self.len.get()
     }

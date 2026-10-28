@@ -499,11 +499,11 @@ impl Inode {
 
     /// Truncates inode (discard contents).
     pub fn trunc(&mut self, inner: &mut SleepLockGuard<'_, InodeInner>) {
-        for i in 0..NDIRECT {
-            if inner.addrs[i] != 0 {
-                let block = Block(inner.addrs[i]);
+        for addr in inner.addrs.iter_mut().take(NDIRECT) {
+            if *addr != 0 {
+                let block = Block(*addr);
                 block.free(self.dev);
-                inner.addrs[i] = 0;
+                *addr = 0;
             }
         }
 
