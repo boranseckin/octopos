@@ -5,7 +5,6 @@
 // the virtio spec:
 // https://docs.oasis-open.org/virtio/virtio/v1.1/virtio-v1.1.pdf
 
-use core::fmt::Display;
 use core::ptr;
 
 use crate::buf::{BCACHE, Buf};
@@ -56,19 +55,6 @@ const VRING_DESC_F_NEXT: u16 = 1; // chained with another descriptor
 const VRING_DESC_F_WRITE: u16 = 2; // device writes (vs read)
 
 const NUM: usize = 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VirtioError {
-    Alloc,
-}
-
-impl Display for VirtioError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            VirtioError::Alloc => write!(f, "allocation error"),
-        }
-    }
-}
 
 /// A single descriptor from the spec
 #[repr(C)]
@@ -206,15 +192,15 @@ impl Disk {
     }
 
     /// Finds a free descriptor, marks it non-free and returns its index.
-    fn alloc_desc(&mut self) -> Result<usize, VirtioError> {
+    fn alloc_desc(&mut self) -> Option<usize> {
         for (i, free) in self.free.iter_mut().enumerate() {
             if *free {
                 *free = false;
-                return Ok(i);
+                return Some(i);
             }
         }
 
-        err!(VirtioError::Alloc);
+        None
     }
 
     /// Marks a descriptor as free.
@@ -250,26 +236,26 @@ impl Disk {
 
     /// Allocates three descriptors (the need not be contiguous).
     /// Disk transfers always use three descriptors.
-    fn alloc3_desc(&mut self) -> Result<[usize; 3], VirtioError> {
+    fn alloc3_desc(&mut self) -> Option<[usize; 3]> {
         let mut result = [None; 3];
 
         for i in 0..3 {
-            match log!(self.alloc_desc()) {
-                Ok(alloc) => {
+            match self.alloc_desc() {
+                Some(alloc) => {
                     result[i] = Some(alloc);
                 }
-                Err(e) => {
+                None => {
                     result.iter_mut().take(i).for_each(|j| {
                         if let Some(idx) = j {
                             self.free_desc(*idx);
                         }
                     });
-                    return Err(e);
+                    return None;
                 }
             };
         }
 
-        Ok(result.map(|i| i.unwrap()))
+        Some(result.map(|i| i.unwrap()))
     }
 }
 
@@ -289,7 +275,7 @@ pub fn rw(buf: &mut Buf<'_>, write: bool) {
 
     // allocate the three descriptors
     let ids = loop {
-        if let Ok(ids) = log!(disk.alloc3_desc()) {
+        if let Some(ids) = disk.alloc3_desc() {
             break ids;
         }
 
