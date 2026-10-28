@@ -291,8 +291,7 @@ impl<'a> SyscallArgs<'a> {
         let mut buf = [0u8; 1];
         for i in 0..max {
             data.pagetable_mut()
-                .copy_from(VA::from(addr.as_usize() + i), &mut buf)
-                .map_err(|_| SysError::BadAddress)?;
+                .copy_from(VA::from(addr.as_usize() + i), &mut buf)?;
 
             if buf[0] == 0 {
                 return Ok(result);

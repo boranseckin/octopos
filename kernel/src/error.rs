@@ -3,6 +3,8 @@ use core::ops::Deref;
 #[cfg(debug_assertions)]
 use core::panic::Location;
 
+use crate::param::TRACK_EXPECTED_ERRORS;
+
 #[cfg(debug_assertions)]
 const TRAIL: usize = 4;
 
@@ -93,7 +95,7 @@ impl<E: Display> Display for Traced<E> {
 }
 
 /// Crossing between error types.
-/// Requires an existing `From<$a> fro $b`.
+/// Requires an existing `From<$a> from $b`.
 macro_rules! traced_from {
     ($a:ty => $b:ty) => {
         // Traced<A> -> Traced<B>: convert kind, keep trail, push caller.
@@ -114,36 +116,43 @@ macro_rules! traced_from {
     };
 }
 
-/// Errors that are normal control flow and are not traced.
+/// Errors that are normal control flow and are not reported.
 pub trait Expected {
     fn is_expected(&self) -> bool {
         false
     }
 }
 
-#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 pub fn report<E: Display + Expected>(e: &Traced<E>, ctx: fmt::Arguments) {
-    if !e.is_expected() {
-        #[cfg(debug_assertions)]
-        {
-            let _lock = crate::proc::lock_current_cpu();
-            let cpu_id = unsafe { crate::proc::current_id() };
-            crate::println!("! hart {} {}: {}", cpu_id, ctx, e);
+    if !cfg!(debug_assertions) || (e.is_expected() && !TRACK_EXPECTED_ERRORS) {
+        return;
+    }
 
-            for t in e.trail() {
-                println!("  at {}:{}", t.file(), t.line());
-            }
+    let _lock = crate::proc::lock_current_cpu();
+    let cpu_id = unsafe { crate::proc::current_id() };
+    crate::println!("! hart {} {}: {}", cpu_id, ctx, e);
 
-            println!("");
+    #[cfg(debug_assertions)]
+    {
+        for t in e.trail() {
+            crate::println!("  at {}:{}", t.file(), t.line());
+        }
+
+        if e.trail.dropped > 0 {
+            crate::println!("  (+{} more)", e.trail.dropped);
         }
     }
+
+    crate::println!("");
 }
 
 /// Top-of-stack sink: prints `! hart N <context>: <kind>` and the trail, unless the kind is
 /// expected. No-op in release.
 macro_rules! report {
     ($e:expr, $($ctx:tt)*) => {
-        $crate::error::report(&$e, format_args!($($ctx)*))
+        if cfg!(debug_assertions) {
+            $crate::error::report(&$e, format_args!($($ctx)*))
+        }
     };
 }
 

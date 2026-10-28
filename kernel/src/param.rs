@@ -57,3 +57,6 @@ pub const TIMEBASE_HZ: usize = 10_000_000;
 
 /// ticks per second
 pub const TICKS_PER_SEC: usize = 10;
+
+/// print ignored errors
+pub const TRACK_EXPECTED_ERRORS: bool = true;

@@ -66,19 +66,21 @@ pub unsafe fn usertrap() {
             | scause::Trap::Exception(scause::Exception::LoadPageFault) => {
                 // vmfault handles the page fault
                 // if err, either out-of-memory or out-of-bound, kill the process
-                if log!(pagetable.vmfault(VA::from(stval::read()))).is_err() {
-                    #[cfg(debug_assertions)]
-                    {
-                        let pid = proc.inner.lock().pid;
-                        println!(
-                            "! unhandled page fault scause=0x{:X} pid={} sepc=0x{:X} stval=0x{:X}",
-                            scause.bits(),
-                            *pid,
-                            sepc::read(),
-                            stval::read(),
-                        );
-                    }
-                    proc.inner.lock().killed = true;
+                if let Err(e) = pagetable.vmfault(VA::from(stval::read())) {
+                    let pid = {
+                        let mut inner = proc.inner.lock();
+                        inner.killed = true;
+                        inner.pid
+                    };
+
+                    report!(
+                        e,
+                        "page fault scause=0x{:X} pid={} sepc=0x{:X} stval=0x{:X}",
+                        scause.bits(),
+                        *pid,
+                        sepc::read(),
+                        stval::read(),
+                    );
                 }
             }
 

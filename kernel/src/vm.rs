@@ -4,7 +4,7 @@ use core::fmt::Display;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 
-use crate::error::Traced;
+use crate::error::{Expected, Traced};
 use crate::fs::{Inode, InodeInner};
 use crate::kalloc;
 use crate::memlayout::{
@@ -30,6 +30,8 @@ pub enum VmError {
 }
 
 pub type Result<T> = core::result::Result<T, Traced<VmError>>;
+
+impl Expected for VmError {}
 
 impl Display for VmError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
