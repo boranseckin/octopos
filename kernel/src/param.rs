@@ -37,6 +37,12 @@ pub const NBUF: usize = MAXOPBLOCKS * 3;
 /// maximum file path name
 pub const MAXPATH: usize = 128;
 
+/// size of the boot stack (debug needs more stack for error tracing)
+#[cfg(debug_assertions)]
+pub const BOOTSTACK_SIZE: usize = 4 * 4096;
+#[cfg(not(debug_assertions))]
+pub const BOOTSTACK_SIZE: usize = 4096;
+
 /// kernel stack pages per process (debug needs more stack to dump)
 #[cfg(debug_assertions)]
 pub const NKSTACK_PAGES: usize = 8;

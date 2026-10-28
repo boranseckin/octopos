@@ -1,13 +1,13 @@
 use core::arch::asm;
 
-use crate::param::{NCPU, TICKS_PER_SEC, TIMEBASE_HZ};
+use crate::param::{BOOTSTACK_SIZE, NCPU, TICKS_PER_SEC, TIMEBASE_HZ};
 use crate::riscv::registers::*;
 
 #[repr(C, align(16))]
-struct Stack([u8; 4096 * NCPU]);
+struct Stack([u8; BOOTSTACK_SIZE * NCPU]);
 
 #[unsafe(no_mangle)]
-static mut STACK0: Stack = Stack([0; 4096 * NCPU]);
+static mut STACK0: Stack = Stack([0; BOOTSTACK_SIZE * NCPU]);
 
 unsafe extern "Rust" {
     fn main() -> !;

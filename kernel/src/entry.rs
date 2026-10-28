@@ -1,5 +1,6 @@
 use core::arch::asm;
 
+use crate::param::BOOTSTACK_SIZE;
 use crate::start::start;
 
 /// Entry point for the kernel.
@@ -11,14 +12,15 @@ use crate::start::start;
 pub unsafe fn _entry() -> ! {
     unsafe {
         // In RISC-V, the stack grows downwards. Stack pointer of each CPU points
-        // to the top of the stack. Each stack is 4096 bytes.
+        // to the top of the stack. Each stack is BOOTSTACK_SIZE bytes.
         asm!(
             "la sp, STACK0",    // load address of STACK0 to stack pointer
-            "li a0, 4096",      // load immediate value to a0
+            "li a0, {size}",    // load immediate value to a0
             "csrr a1, mhartid", // read hartid from control and status register to a1
             "addi a1, a1, 1",   // add immediate 1 to a1
             "mul a0, a0, a1",   // multiply a0 and a1 into a0
             "add sp, sp, a0",   // add a0 to sp
+            size = const BOOTSTACK_SIZE,
         );
 
         start()
