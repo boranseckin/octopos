@@ -5,7 +5,7 @@ use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 
 use crate::error::{Expected, Traced};
-use crate::fs::{Inode, InodeInner};
+use crate::fs::{FsError, Inode, InodeInner};
 use crate::kalloc;
 use crate::memlayout::{
     KERNBASE, PCI_ECAM, PCI_MMIO, PHYSTOP, PLIC, QEMU_POWER, TRAMPOLINE, TRAPFRAME, UART0, VIRTIO0,
@@ -26,7 +26,7 @@ pub enum VmError {
     InvalidAddress,
     InvalidPage,
     InvalidPte,
-    Fs,
+    Fs(FsError),
 }
 
 pub type Result<T> = core::result::Result<T, Traced<VmError>>;
@@ -40,7 +40,7 @@ impl Display for VmError {
             VmError::InvalidAddress => write!(f, "invalid address"),
             VmError::InvalidPage => write!(f, "invalid page"),
             VmError::InvalidPte => write!(f, "invalid page table entry"),
-            VmError::Fs => write!(f, "filesystem error"),
+            VmError::Fs(fs_error) => write!(f, "filesystem error: {fs_error}"),
         }
     }
 }
@@ -52,6 +52,14 @@ impl From<core::alloc::AllocError> for VmError {
 }
 
 traced_from!(core::alloc::AllocError => VmError);
+
+impl From<FsError> for VmError {
+    fn from(value: FsError) -> Self {
+        Self::Fs(value)
+    }
+}
+
+traced_from!(FsError => VmError);
 
 // kernel.ld sets this to end of kernel code
 unsafe extern "C" {
@@ -489,7 +497,8 @@ impl PageTable {
             let dst = unsafe { core::slice::from_raw_parts_mut(pa.as_usize() as *mut u8, n) };
             match inode.read(inner, offset + i as u32, dst, false) {
                 Ok(read) if read as usize == dst.len() => {}
-                _ => err!(VmError::Fs),
+                Ok(_) => todo!(),
+                Err(e) => err!(e),
             }
         }
 
@@ -523,8 +532,8 @@ impl Kvm {
     /// Only used when booting.
     /// Does not flush TLB or enable paging.
     pub fn map(&mut self, va: VA, pa: PA, size: usize, perm: usize) {
-        if self.0.map_pages(va, pa, size, perm).is_err() {
-            panic!("kvmmap");
+        if let Err(e) = self.0.map_pages(va, pa, size, perm) {
+            panic!("kvmmap: {e}");
         }
     }
 
@@ -653,7 +662,7 @@ impl Uvm {
                 Ok(mem) => unsafe { mem.assume_init() },
                 Err(err) => {
                     self.dealloc(i, old_size);
-                    return Err(err.into());
+                    err!(err);
                 }
             };
 
@@ -667,7 +676,7 @@ impl Uvm {
             ) {
                 let _pg = unsafe { Box::from_raw(mem) };
                 self.dealloc(i, old_size);
-                return Err(err);
+                err!(err);
             }
         }
 
@@ -740,7 +749,7 @@ impl Uvm {
             // map child's virtual address to the same physical address as the parent.
             if let Err(err) = child.map_pages(VA::from(i), pte.as_pa(), PGSIZE, pte.flags()) {
                 child.unmap(VA::from(0), i / PGSIZE, true);
-                return Err(err);
+                err!(err);
             }
 
             // increment the reference count for the page, it's now shared between parent and child.
@@ -783,7 +792,7 @@ impl Uvm {
 
         let va = va.round_down();
 
-        if let Ok(pte) = self.walk_mut(va, false)
+        if let pte = self.walk_mut(va, false)?
             && pte.is_v()
         {
             if !pte.is_cow() {

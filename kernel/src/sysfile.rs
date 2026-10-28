@@ -77,9 +77,7 @@ pub fn sys_link(args: &SyscallArgs) -> Result<usize> {
     let _op = Operation::begin();
 
     // get the inode of the old
-    let Ok(old_inode) = Path::new(&old).resolve() else {
-        err!(SysError::NoEntry)
-    };
+    let old_inode = Path::new(&old).resolve()?;
 
     let mut old_inner = old_inode.lock();
 
@@ -97,10 +95,7 @@ pub fn sys_link(args: &SyscallArgs) -> Result<usize> {
     // after incrementing nlink, failures must goto `bad`
     let result = (|| {
         // get the inode of the new's parent
-        let (parent, name) = match Path::new(&new).resolve_parent() {
-            Ok(v) => v,
-            Err(_) => err!(SysError::NoEntry),
-        };
+        let (parent, name) = Path::new(&new).resolve_parent()?;
 
         // make sure they are in the same device
         if parent.dev != old_inode.dev {
@@ -138,9 +133,7 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize> {
     let _op = Operation::begin();
 
     // get the parent inode and name
-    let Ok((parent, name)) = Path::new(&path).resolve_parent() else {
-        err!(SysError::NoEntry);
-    };
+    let (parent, name) = Path::new(&path).resolve_parent()?;
 
     let mut parent_inner = parent.lock();
 
@@ -151,9 +144,16 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize> {
     }
 
     // find the inode in the parent's directory entry
-    let Ok(Some((offset, inode))) = Directory::lookup(&parent, &mut parent_inner, name) else {
-        parent.unlock_put(parent_inner);
-        err!(SysError::NoEntry);
+    let (offset, inode) = match Directory::lookup(&parent, &mut parent_inner, name) {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            parent.unlock_put(parent_inner);
+            err!(SysError::NoEntry);
+        }
+        Err(e) => {
+            parent.unlock_put(parent_inner);
+            err!(e);
+        }
     };
 
     let mut inode_inner = inode.lock();
@@ -174,9 +174,9 @@ pub fn sys_unlink(args: &SyscallArgs) -> Result<usize> {
         Ok(write) => {
             assert_eq!(write, Directory::SIZE as u32, "unlink write");
         }
-        Err(_) => {
+        Err(e) => {
             parent.unlock_put(parent_inner);
-            err!(SysError::IoError)
+            err!(e)
         }
     }
 
@@ -206,16 +206,9 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
 
     // either create a new file or find the file from the path
     if (o_mode & OpenFlag::CREATE) != 0 {
-        (inode, inode_inner) = match Inode::create(&path, InodeType::File, 0, 0) {
-            Ok(i) => i,
-            Err(e) => err!(e),
-        };
+        (inode, inode_inner) = Inode::create(&path, InodeType::File, 0, 0)?;
     } else {
-        inode = match path.resolve() {
-            Ok(i) => i,
-            Err(e) => err!(e),
-        };
-
+        inode = path.resolve()?;
         inode_inner = inode.lock();
 
         // if it is a directory, cannot open with write mode
@@ -278,10 +271,7 @@ pub fn sys_mkdir(args: &SyscallArgs) -> Result<usize> {
 
     let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
-    let (inode, inode_inner) = match Inode::create(&Path::new(&path), InodeType::Directory, 0, 0) {
-        Ok(i) => i,
-        Err(e) => err!(e),
-    };
+    let (inode, inode_inner) = Inode::create(&Path::new(&path), InodeType::Directory, 0, 0)?;
 
     inode.unlock_put(inode_inner);
 
@@ -295,10 +285,7 @@ pub fn sys_mknod(args: &SyscallArgs) -> Result<usize> {
     let minor = args.get_int(2) as u16;
     let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
-    let (inode, inner) = match Inode::create(&Path::new(&path), InodeType::Device, major, minor) {
-        Ok(i) => i,
-        Err(e) => err!(e),
-    };
+    let (inode, inner) = Inode::create(&Path::new(&path), InodeType::Device, major, minor)?;
 
     inode.unlock_put(inner);
 
@@ -312,10 +299,7 @@ pub fn sys_chdir(args: &SyscallArgs) -> Result<usize> {
 
     let path = args.fetch_string(args.get_addr(0), MAXPATH)?;
 
-    let Ok(inode) = Path::new(&path).resolve() else {
-        err!(SysError::NoEntry);
-    };
-
+    let inode = Path::new(&path).resolve()?;
     let inner = inode.lock();
 
     if inner.r#type != InodeType::Directory {
@@ -370,36 +354,38 @@ pub fn sys_pipe(args: &SyscallArgs) -> Result<usize> {
 
     let (_proc, data) = current_proc_and_data_mut();
 
-    let (mut read, mut write) = match Pipe::alloc() {
-        Ok(pair) => pair,
-        Err(e) => err!(e),
+    let (mut read, mut write) = Pipe::alloc()?;
+
+    let fd0 = match fd_alloc(read.clone()) {
+        Ok(fd) => fd,
+        Err(e) => {
+            read.close();
+            write.close();
+            err!(e);
+        }
     };
 
-    let Ok(fd0) = fd_alloc(read.clone()) else {
-        read.close();
-        write.close();
-        err!(SysError::TooManyFiles);
-    };
-
-    let Ok(fd1) = fd_alloc(write.clone()) else {
-        data.open_files[fd0] = None;
-        read.close();
-        write.close();
-        err!(SysError::TooManyFiles);
+    let fd1 = match fd_alloc(write.clone()) {
+        Ok(fd) => fd,
+        Err(e) => {
+            data.open_files[fd0] = None;
+            read.close();
+            write.close();
+            err!(e);
+        }
     };
 
     let pagetable = data.pagetable_mut();
 
-    if pagetable.copy_to(&fd0.to_le_bytes(), fd_array).is_err()
-        || pagetable
-            .copy_to(&fd1.to_le_bytes(), fd_array + size_of_val(&fd1))
-            .is_err()
+    if let Err(e) = pagetable
+        .copy_to(&fd0.to_le_bytes(), fd_array)
+        .and_then(|_| pagetable.copy_to(&fd1.to_le_bytes(), fd_array + size_of_val(&fd1)))
     {
         data.open_files[fd0] = None;
         data.open_files[fd1] = None;
         read.close();
         write.close();
-        err!(SysError::BadAddress);
+        err!(e);
     }
 
     Ok(0)

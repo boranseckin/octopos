@@ -29,15 +29,15 @@ pub static INIT_PROC: OnceLock<&Proc> = OnceLock::new();
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcError {
     OutOfProc,
-    OutOfMemory,
     InvalidSize,
+    Vm(VmError),
 }
 
 pub type Result<T> = core::result::Result<T, Traced<ProcError>>;
 
 impl From<VmError> for ProcError {
-    fn from(_value: VmError) -> Self {
-        Self::OutOfMemory
+    fn from(value: VmError) -> Self {
+        Self::Vm(value)
     }
 }
 
@@ -45,7 +45,7 @@ traced_from!(VmError => ProcError);
 
 impl From<core::alloc::AllocError> for ProcError {
     fn from(_value: core::alloc::AllocError) -> Self {
-        Self::OutOfMemory
+        Self::Vm(VmError::Alloc)
     }
 }
 
@@ -1099,7 +1099,7 @@ pub unsafe fn fork_ret() {
                 let trapframe = unsafe { current_proc().data_mut() }.trapframe_mut();
                 trapframe.a0 = result;
             }
-            Err(_) => panic!("fork_ret exec"),
+            Err(e) => panic!("fork_ret exec: {e}"),
         }
     }
 

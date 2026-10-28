@@ -147,7 +147,7 @@ impl From<VmError> for SysError {
                 Self::BadAddress
             }
             VmError::Alloc => Self::OutOfMemory,
-            VmError::Fs => Self::IoError,
+            VmError::Fs(e) => e.into(),
         }
     }
 }
@@ -158,8 +158,8 @@ impl From<ProcError> for SysError {
     fn from(e: ProcError) -> Self {
         match e {
             ProcError::OutOfProc => SysError::ResourceUnavailable,
-            ProcError::OutOfMemory => SysError::OutOfMemory,
             ProcError::InvalidSize => SysError::InvalidArgument,
+            ProcError::Vm(e) => e.into(),
         }
     }
 }
@@ -173,10 +173,7 @@ impl From<FsError> for SysError {
             FsError::OutOfFile | FsError::OutOfPipe => SysError::FileTableFull,
             FsError::OutOfRange => SysError::InvalidArgument,
             FsError::Read | FsError::Write => SysError::IoError,
-            FsError::Create => SysError::NoSpace,
-            FsError::Link => SysError::AlreadyExists,
             FsError::Resolve => SysError::NoEntry,
-            FsError::Type => SysError::InvalidArgument,
             FsError::Copy => SysError::BadAddress,
             FsError::Exists => SysError::AlreadyExists,
         }
@@ -215,8 +212,13 @@ impl From<NetError> for SysError {
 traced_from!(NetError => SysError);
 
 impl From<ExecError> for SysError {
-    fn from(_value: ExecError) -> Self {
-        SysError::InvalidExecutable
+    fn from(value: ExecError) -> Self {
+        match value {
+            ExecError::Elf | ExecError::Header => SysError::InvalidExecutable,
+            ExecError::TooManyArgs => SysError::InvalidArgument,
+            ExecError::Fs(e) => e.into(),
+            ExecError::Vm(e) => e.into(),
+        }
     }
 }
 

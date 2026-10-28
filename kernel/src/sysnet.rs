@@ -42,9 +42,7 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize> {
         err!(SysError::InvalidArgument)
     };
 
-    let Ok(socket_type) = SocketType::try_from(socket_type) else {
-        err!(SysError::InvalidArgument)
-    };
+    let socket_type = SocketType::try_from(socket_type)?;
 
     let raw_addr_va = args.get_addr(1);
     let raw_addr: RawSockAddr = copy_struct_from_user(raw_addr_va)?;
@@ -305,9 +303,7 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize> {
         RouteOp::Get => {
             let index = args.get_int(2) as usize;
 
-            let Some(route) = route::route_at(index) else {
-                err!(SysError::NoEntry)
-            };
+            let route = route::route_at(index).ok_or(SysError::NoEntry)?;
             let raw_route = RawRoute::from(route);
 
             copy_struct_to_user(&raw_route, raw_route_va)?;

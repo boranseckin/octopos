@@ -42,10 +42,7 @@ pub enum FsError {
     OutOfPipe,
     Read,
     Write,
-    Create,
-    Link,
     Resolve,
-    Type,
     Copy,
     Exists,
 }
@@ -62,10 +59,7 @@ impl Display for FsError {
             FsError::OutOfPipe => write!(f, "out of pipe"),
             FsError::Read => write!(f, "read error"),
             FsError::Write => write!(f, "write error"),
-            FsError::Create => write!(f, "create error"),
-            FsError::Link => write!(f, "link error"),
             FsError::Resolve => write!(f, "resolve error"),
-            FsError::Type => write!(f, "type error"),
             FsError::Copy => write!(f, "copy error"),
             FsError::Exists => write!(f, "already exists"),
         }
@@ -607,7 +601,7 @@ impl Inode {
         let mut offset = offset;
 
         if offset > inner.size || offset.checked_add(n).is_none() {
-            err!(FsError::Read);
+            err!(FsError::OutOfRange);
         }
 
         if offset + n > inner.size {
@@ -617,31 +611,32 @@ impl Inode {
         let mut total = 0;
 
         while total < n {
-            if let Ok(addr) = self.map(inner, offset / BSIZE as u32) {
-                let buf = BCACHE.read(self.dev, addr);
+            let addr = match self.map(inner, offset / BSIZE as u32) {
+                Ok(addr) => addr,
+                Err(e) => err!(e),
+            };
 
-                let m = (n - total).min(BSIZE as u32 - offset % BSIZE as u32);
+            let buf = BCACHE.read(self.dev, addr);
 
-                let src = &buf.data()[(offset as usize % BSIZE)..][..m as usize];
+            let m = (n - total).min(BSIZE as u32 - offset % BSIZE as u32);
 
-                if dst_user {
-                    let dst_va = VA::from(dst.as_mut_ptr() as usize);
-                    if let Err(e) = proc::copy_to_user(src, dst_va) {
-                        BCACHE.release(buf);
-                        err!(e.map_kind(|_| FsError::Copy));
-                    }
-                } else {
-                    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
+            let src = &buf.data()[(offset as usize % BSIZE)..][..m as usize];
+
+            if dst_user {
+                let dst_va = VA::from(dst.as_mut_ptr() as usize);
+                if let Err(e) = proc::copy_to_user(src, dst_va) {
+                    BCACHE.release(buf);
+                    err!(e.map_kind(|_| FsError::Copy));
                 }
-
-                BCACHE.release(buf);
-
-                total += m;
-                offset += m;
-                dst = &mut dst[m as usize..];
             } else {
-                break;
+                unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
             }
+
+            BCACHE.release(buf);
+
+            total += m;
+            offset += m;
+            dst = &mut dst[m as usize..];
         }
 
         Ok(total)
@@ -661,11 +656,11 @@ impl Inode {
         let mut offset = offset;
 
         if offset > inner.size || offset.checked_add(n).is_none() {
-            err!(FsError::Write);
+            err!(FsError::OutOfRange);
         }
 
         if offset + n > (MAXFILE * BSIZE) as u32 {
-            err!(FsError::Write);
+            err!(FsError::OutOfRange);
         }
 
         let mut failed = None;
@@ -730,7 +725,15 @@ impl Inode {
         let mut parent_inner = parent.lock();
 
         // check if the file already exists
-        if let Ok(Some((_, inode))) = Directory::lookup(&parent, &mut parent_inner, name) {
+        let existing = match Directory::lookup(&parent, &mut parent_inner, name) {
+            Ok(dir) => dir,
+            Err(e) => {
+                parent.unlock_put(parent_inner);
+                err!(e);
+            }
+        };
+
+        if let Some((_, inode)) = existing {
             parent.unlock_put(parent_inner);
 
             let inode_inner = inode.lock();
@@ -762,27 +765,25 @@ impl Inode {
         inode_inner.nlink = 1;
         inode.update(&inode_inner);
 
-        // create `.` and `..` entries if it is a directory
-        // no inode.nlink += 1 for `.` to avoid cyclic ref count
-        if r#type == InodeType::Directory
-            && (Directory::link(&inode, &mut inode_inner, ".", inode.inum as u16).is_err()
-                || Directory::link(&inode, &mut inode_inner, "..", parent.inum as u16).is_err())
-        {
-            // fail
-            inode_inner.nlink = 0;
-            inode.update(&inode_inner);
-            inode.unlock_put(inode_inner);
-            parent.unlock_put(parent_inner);
-            err!(FsError::Create);
-        }
+        let linked = (|| {
+            // create `.` and `..` entries if it is a directory
+            // no inode.nlink += 1 for `.` to avoid cyclic ref count
+            if r#type == InodeType::Directory {
+                Directory::link(&inode, &mut inode_inner, ".", inode.inum as u16)?;
+                Directory::link(&inode, &mut inode_inner, "..", parent.inum as u16)?;
+            }
 
-        if Directory::link(&parent, &mut parent_inner, name, inode.inum as u16).is_err() {
-            // fail
+            // must be last
+            Directory::link(&parent, &mut parent_inner, name, inode.inum as u16)
+        })();
+
+        // fail
+        if let Err(e) = linked {
             inode_inner.nlink = 0;
             inode.update(&inode_inner);
             inode.unlock_put(inode_inner);
             parent.unlock_put(parent_inner);
-            err!(FsError::Create);
+            err!(e);
         }
 
         if r#type == InodeType::Directory {
@@ -891,9 +892,9 @@ impl Directory {
         inum: u16,
     ) -> Result<()> {
         // check the name is not present
-        if let Ok(Some((_, dir))) = Self::lookup(inode, inner, name) {
+        if let Some((_, dir)) = Self::lookup(inode, inner, name)? {
             dir.put();
-            err!(FsError::Link);
+            err!(FsError::Exists);
         }
 
         // look for an empty directory
@@ -916,9 +917,7 @@ impl Directory {
         dir.inum = inum;
 
         let write = inode.write(inner, offset, dir.as_bytes(), false)?;
-        if write as usize != Self::SIZE {
-            err!(FsError::Link);
-        }
+        debug_assert_eq!(write as usize, Self::SIZE);
 
         Ok(())
     }

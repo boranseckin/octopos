@@ -153,9 +153,7 @@ impl File {
                 let src = unsafe {
                     slice::from_raw_parts(&stat as *const _ as *const u8, size_of::<Stat>())
                 };
-                if proc::copy_to_user(src, addr).is_err() {
-                    err!(SysError::BadAddress);
-                }
+                proc::copy_to_user(src, addr)?;
 
                 Ok(())
             }

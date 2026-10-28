@@ -1,23 +1,51 @@
 use core::slice;
 
 use crate::error::Traced;
-use crate::fs::Path;
+use crate::fs::{FsError, Path};
 use crate::log::Operation;
 use crate::param::{MAXARG, USERSTACK};
 use crate::proc::current_proc;
 use crate::riscv::{PGSIZE, PTE_W, PTE_X, pg_round_up};
-use crate::vm::VA;
+use crate::vm::{VA, VmError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecError {
-    Alloc,
     Elf,
     Header,
-    Read,
-    Memory,
+    Fs(FsError),
+    Vm(VmError),
+    TooManyArgs,
 }
 
 pub type Result<T> = core::result::Result<T, Traced<ExecError>>;
+
+impl core::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ExecError::Elf => write!(f, "elf error"),
+            ExecError::Header => write!(f, "header error"),
+            ExecError::Fs(fs_error) => write!(f, "fs error: {fs_error}"),
+            ExecError::Vm(vm_error) => write!(f, "vm error: {vm_error}"),
+            ExecError::TooManyArgs => write!(f, "too many arguments"),
+        }
+    }
+}
+
+impl From<FsError> for ExecError {
+    fn from(value: FsError) -> Self {
+        Self::Fs(value)
+    }
+}
+
+traced_from!(FsError => ExecError);
+
+impl From<VmError> for ExecError {
+    fn from(value: VmError) -> Self {
+        Self::Vm(value)
+    }
+}
+
+traced_from!(VmError => ExecError);
 
 const ELF_MAGIC: u32 = 0x464C457F; // "\x7FELF" in little endian
 
@@ -93,9 +121,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
     let _op = Operation::begin();
 
     // open the executable file
-    let Ok(mut inode) = path.resolve() else {
-        err!(ExecError::Read);
-    };
+    let mut inode = path.resolve()?;
 
     let mut inner = inode.lock();
 
@@ -103,9 +129,13 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
     let mut elf_buf = [0u8; ElfHeader::SIZE];
     match inode.read(&mut inner, 0, &mut elf_buf, false) {
         Ok(read) if read as usize == elf_buf.len() => {}
-        _ => {
+        Ok(_) => {
             inode.unlock_put(inner);
-            err!(ExecError::Read);
+            err!(ExecError::Elf)
+        }
+        Err(e) => {
+            inode.unlock_put(inner);
+            err!(e);
         }
     }
 
@@ -118,9 +148,12 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
     }
 
     // create a new pagetable
-    let Ok(mut pagetable) = proc.create_pagetable() else {
-        inode.unlock_put(inner);
-        err!(ExecError::Alloc);
+    let mut pagetable = match proc.create_pagetable() {
+        Ok(pt) => pt,
+        Err(e) => {
+            inode.unlock_put(inner);
+            err!(e);
+        }
     };
 
     // load program into memory
@@ -130,9 +163,13 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
     for _ in 0..elf.phnum {
         match inode.read(&mut inner, offset as u32, &mut ph_buf, false) {
             Ok(read) if read as usize == ph_buf.len() => {}
-            _ => {
+            Ok(_) => {
                 inode.unlock_put(inner);
-                err!(ExecError::Memory);
+                err!(ExecError::Header);
+            }
+            Err(e) => {
+                inode.unlock_put(inner);
+                err!(e);
             }
         }
 
@@ -154,26 +191,23 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
 
         size = match pagetable.alloc(size, (ph.vaddr + ph.memsz) as usize, ph.get_perms()) {
             Ok(new_size) => new_size,
-            Err(_) => {
+            Err(e) => {
                 pagetable.proc_free(size);
                 inode.unlock_put(inner);
-                err!(ExecError::Alloc);
+                err!(e);
             }
         };
 
-        if pagetable
-            .load_elf_segment(
-                &mut inode,
-                &mut inner,
-                VA::from(ph.vaddr as usize),
-                ph.offset as u32,
-                ph.filesz as usize,
-            )
-            .is_err()
-        {
+        if let Err(e) = pagetable.load_elf_segment(
+            &mut inode,
+            &mut inner,
+            VA::from(ph.vaddr as usize),
+            ph.offset as u32,
+            ph.filesz as usize,
+        ) {
             pagetable.proc_free(size);
             inode.unlock_put(inner);
-            err!(ExecError::Memory);
+            err!(e);
         }
     }
 
@@ -189,18 +223,15 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
 
     size = match pagetable.alloc(size, size + (USERSTACK + 1) * PGSIZE, PTE_W) {
         Ok(new_size) => new_size,
-        Err(_) => {
+        Err(e) => {
             pagetable.proc_free(size);
-            err!(ExecError::Alloc);
+            err!(e);
         }
     };
 
-    if pagetable
-        .clear(VA::from(size - (USERSTACK + 1) * PGSIZE))
-        .is_err()
-    {
+    if let Err(e) = pagetable.clear(VA::from(size - (USERSTACK + 1) * PGSIZE)) {
         pagetable.proc_free(size);
-        err!(ExecError::Memory);
+        err!(e);
     }
 
     let mut sp = size;
@@ -213,7 +244,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
     for &arg in argv.iter() {
         if argc >= MAXARG {
             pagetable.proc_free(size);
-            err!(ExecError::Memory);
+            err!(ExecError::TooManyArgs);
         }
 
         sp -= arg.len() + 1; // +1 for null terminator
@@ -221,14 +252,15 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
 
         if sp < stackbase {
             pagetable.proc_free(size);
-            err!(ExecError::Memory);
+            err!(ExecError::TooManyArgs);
         }
 
-        if pagetable.copy_to(arg.as_bytes(), VA::from(sp)).is_err()
-            || pagetable.copy_to(&[0u8], VA::from(sp + arg.len())).is_err()
+        if let Err(e) = pagetable
+            .copy_to(arg.as_bytes(), VA::from(sp))
+            .and_then(|_| pagetable.copy_to(&[0u8], VA::from(sp + arg.len())))
         {
             pagetable.proc_free(size);
-            err!(ExecError::Memory);
+            err!(e);
         }
 
         // save the address of the current argument
@@ -245,9 +277,14 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
         slice::from_raw_parts(ustack.as_ptr() as *const u8, (argc + 1) * size_of::<u64>())
     };
 
-    if sp < stackbase || pagetable.copy_to(ustack_ptr, VA::from(sp)).is_err() {
+    if sp < stackbase {
         pagetable.proc_free(size);
-        err!(ExecError::Memory);
+        err!(ExecError::TooManyArgs);
+    }
+
+    if let Err(e) = pagetable.copy_to(ustack_ptr, VA::from(sp)) {
+        pagetable.proc_free(size);
+        err!(e);
     }
 
     // # Safety: we are the current proc

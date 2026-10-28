@@ -39,7 +39,7 @@ impl Pipe {
             Ok(file) => file,
             Err(err) => {
                 f0.close();
-                return Err(err);
+                err!(err);
             }
         };
 
@@ -162,7 +162,7 @@ impl Pipe {
 
             let ch = inner.data[inner.num_read % PIPESIZE];
             if data.pagetable_mut().copy_to(&[ch], addr + i).is_err() {
-                err!(SysError::BadAddress);
+                break;
             }
 
             inner.num_read += 1;
