@@ -428,7 +428,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             let pid = *proc.inner.lock().pid;
             report!(
                 error,
-                "syscall {:?} from proc {} ({})",
+                "syscall {} from proc {} ({})",
                 trapframe.a7,
                 pid,
                 proc.data().name

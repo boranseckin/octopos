@@ -189,11 +189,7 @@ impl File {
 
                 inode.unlock(inode_inner);
 
-                if let Ok(read) = read {
-                    Ok(read as usize)
-                } else {
-                    err!(SysError::IoError);
-                }
+                Ok(read? as usize)
             }
 
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {
@@ -247,18 +243,11 @@ impl File {
                     inode.unlock(inode_inner);
                     drop(_op);
 
-                    if write.is_err() {
-                        break;
-                    }
-
-                    i += write.unwrap() as usize;
+                    i += write? as usize;
                 }
 
-                if i == n {
-                    Ok(n)
-                } else {
-                    err!(SysError::IoError);
-                }
+                debug_assert_eq!(i, n);
+                Ok(n)
             }
 
             FileType::Device { inode: _, major } => match &DEVICES[*major as usize] {

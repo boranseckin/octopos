@@ -213,9 +213,7 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
     } else {
         inode = match path.resolve() {
             Ok(i) => i,
-            Err(_) => {
-                err!(SysError::NoEntry);
-            }
+            Err(e) => err!(e),
         };
 
         inode_inner = inode.lock();

@@ -626,9 +626,9 @@ impl Inode {
 
                 if dst_user {
                     let dst_va = VA::from(dst.as_mut_ptr() as usize);
-                    if proc::copy_to_user(src, dst_va).is_err() {
+                    if let Err(e) = proc::copy_to_user(src, dst_va) {
                         BCACHE.release(buf);
-                        err!(FsError::Read);
+                        err!(e.map_kind(|_| FsError::Copy));
                     }
                 } else {
                     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
@@ -668,34 +668,40 @@ impl Inode {
             err!(FsError::Write);
         }
 
+        let mut failed = None;
         let mut total = 0;
 
         while total < n {
-            if let Ok(addr) = self.map(inner, offset / BSIZE as u32) {
-                let mut buf = BCACHE.read(self.dev, addr);
-                let m = (n - total).min(BSIZE as u32 - (offset % BSIZE as u32));
-
-                let dst = &mut buf.data_mut()[(offset as usize % BSIZE)..][..m as usize];
-
-                if src_user {
-                    let src_va = VA::from(src.as_ptr() as usize);
-                    if proc::copy_from_user(src_va, dst).is_err() {
-                        BCACHE.release(buf);
-                        break;
-                    }
-                } else {
-                    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
+            let addr = match self.map(inner, offset / BSIZE as u32) {
+                Ok(a) => a,
+                Err(e) => {
+                    failed = Some(e);
+                    break;
                 }
+            };
 
-                log::write(&buf);
-                BCACHE.release(buf);
+            let mut buf = BCACHE.read(self.dev, addr);
+            let m = (n - total).min(BSIZE as u32 - (offset % BSIZE as u32));
 
-                total += m;
-                offset += m;
-                src = &src[m as usize..];
+            let dst = &mut buf.data_mut()[(offset as usize % BSIZE)..][..m as usize];
+
+            if src_user {
+                let src_va = VA::from(src.as_ptr() as usize);
+                if let Err(e) = proc::copy_from_user(src_va, dst) {
+                    BCACHE.release(buf);
+                    failed = Some(e.map_kind(|_| FsError::Copy));
+                    break;
+                }
             } else {
-                break;
+                unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len()) }
             }
+
+            log::write(&buf);
+            BCACHE.release(buf);
+
+            total += m;
+            offset += m;
+            src = &src[m as usize..];
         }
 
         if offset > inner.size {
@@ -705,6 +711,10 @@ impl Inode {
         // write the inode back to disk even if the size didn't change because the loop above might
         // have called `map()` and added a new block to `addrs[]`.
         self.update(inner);
+
+        if let Some(e) = failed {
+            err!(e);
+        }
 
         Ok(total)
     }
