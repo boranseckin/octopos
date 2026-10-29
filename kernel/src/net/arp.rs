@@ -1,14 +1,18 @@
 use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{self, InterfaceId};
 use crate::net::{Be, Ipv4Addr, MacAddr, NetError, NetworkHeader, OutgoingQueue, Result};
+use crate::param::TICKS_PER_SEC;
 use crate::spinlock::SpinLock;
+use crate::trap::TICKS;
 
 const ARP_CACHE_SIZE: usize = 64;
+const ARP_TTL: usize = 60 * TICKS_PER_SEC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ArpCacheEntry {
     ip: Ipv4Addr,
     mac: MacAddr,
+    expires_at: usize,
 }
 
 /// Simple ARP cache implementation with a fixed-size array and linear search.
@@ -31,16 +35,20 @@ impl ArpCache {
     /// Looks up the given IP address in the ARP cache and returns the corresponding MAC address if
     /// found.
     pub fn lookup(ip: Ipv4Addr) -> Option<MacAddr> {
-        ARP_CACHE
-            .lock()
-            .entries
-            .iter()
-            .find_map(|entry| entry.filter(|e| e.ip == ip).map(|e| e.mac))
+        let time = *TICKS.lock();
+
+        ARP_CACHE.lock().entries.iter().find_map(|entry| {
+            entry
+                .filter(|e| e.ip == ip && e.expires_at > time)
+                .map(|e| e.mac)
+        })
     }
 
     /// Inserts the given IP-MAC mapping into the ARP cache, evicting an existing entry if
     /// necessary.
     fn insert(ip: Ipv4Addr, mac: MacAddr) {
+        let expires_at = *TICKS.lock() + ARP_TTL;
+
         let mut cache = ARP_CACHE.lock();
 
         // check for existing mapping and update.
@@ -51,14 +59,25 @@ impl ArpCache {
             .iter_mut()
             .find(|entry| entry.as_ref().is_some_and(|e| e.ip == ip))
         {
-            matching.as_mut().unwrap().mac = mac;
+            let entry = matching.as_mut().unwrap();
+            entry.mac = mac;
+            entry.expires_at = expires_at;
         } else if let Some(entry) = cache.entries.iter_mut().find(|entry| entry.is_none()) {
-            *entry = Some(ArpCacheEntry { ip, mac });
+            let expires_at = *TICKS.lock() + ARP_TTL;
+            *entry = Some(ArpCacheEntry {
+                ip,
+                mac,
+                expires_at,
+            });
         } else {
             // drop a "random" entry if the cache is full
             // randomness comes from the randomness of network traffic
             let index = cache.eviction_index;
-            cache.entries[index] = Some(ArpCacheEntry { ip, mac });
+            cache.entries[index] = Some(ArpCacheEntry {
+                ip,
+                mac,
+                expires_at,
+            });
             cache.eviction_index = (cache.eviction_index + 1) % ARP_CACHE_SIZE;
         }
     }

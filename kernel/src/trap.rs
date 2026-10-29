@@ -4,10 +4,8 @@ use crate::kernelvec::kernelvec;
 use crate::memlayout::{E1000_IRQ, TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
 use crate::param::{NKSTACK_PAGES, TICKS_PER_SEC, TIMEBASE_HZ};
 use crate::proc;
-use crate::riscv::{
-    PGSIZE, interrupts,
-    registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp},
-};
+use crate::riscv::registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp};
+use crate::riscv::{PGSIZE, interrupts};
 use crate::spinlock::SpinLock;
 use crate::syscall::syscall;
 use crate::trampoline::{trampoline, userret, uservec};
