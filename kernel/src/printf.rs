@@ -79,6 +79,31 @@ macro_rules! println {
     };
 }
 
+/// Taken from std::dbg!.
+#[macro_export]
+macro_rules! dbg {
+    () => {
+        $crate::println!("[{}:{}:{}]", file!(), line!(), column!())
+    };
+    ($val:expr $(,)?) => {
+        match $val {
+            tmp => {
+                $crate::println!("[{}:{}:{}] {} = {:#?}",
+                    core::file!(),
+                    core::line!(),
+                    core::column!(),
+                    core::stringify!($val),
+                    &&tmp as &dyn core::fmt::Debug,
+                );
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg!($val)),+,)
+    };
+}
+
 /// Stack buffer used to pre-format the panic message before writing it to the UART.
 ///
 /// Pre-formatting lets `uart::write_sync()` be called once with the complete message, so
