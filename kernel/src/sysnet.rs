@@ -270,6 +270,8 @@ pub struct RouteFlag;
 
 impl RouteFlag {
     pub const ROUTE_REPLACE: usize = 1;
+
+    const ALL: usize = Self::ROUTE_REPLACE;
 }
 
 /// Reads or modifies the routing table.
@@ -313,6 +315,7 @@ pub fn sys_route(args: &SyscallArgs) -> Result<usize> {
 
         RouteOp::Add => {
             let flags = args.get_int(2) as usize;
+            ensure!(flags & !RouteFlag::ALL == 0, SysError::InvalidArgument);
             let replace = flags & RouteFlag::ROUTE_REPLACE != 0;
 
             let raw_route: RawRoute = copy_struct_from_user(raw_route_va)?;
