@@ -157,18 +157,19 @@ pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Cidr>) -> Result<()>
         err!(NetError::InvalidAddress)
     }
 
-    let mut ifs = INTERFACES.lock();
+    {
+        let mut ifs = INTERFACES.lock();
 
-    let Some(interface) = ifs.iter_mut().find(|i| i.id == id) else {
-        err!(NetError::InterfaceNotFound)
-    };
+        let Some(interface) = ifs.iter_mut().find(|i| i.id == id) else {
+            err!(NetError::InterfaceNotFound)
+        };
 
-    interface.config.ipv4 = ipv4;
+        interface.config.ipv4 = ipv4;
 
-    // drop interfaces lock before add_route
-    drop(ifs);
+        // drop interfaces lock before route call
+    }
 
-    // replace interfaces ipv4 routes or remove all routes.
+    // replace interface's ipv4 routes or remove all routes.
     if let Some(ipv4) = ipv4 {
         route::replace_interface_route(id, ipv4);
     } else {

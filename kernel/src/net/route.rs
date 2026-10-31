@@ -172,11 +172,56 @@ impl PartialEq for RouteEntry {
     }
 }
 
-/// Checks if a given destination IP address matches a route entry, based on the route's destination
-/// and prefix length.
-pub fn route_matches(dest_ip: Ipv4Addr, route: &RouteEntry) -> bool {
-    let mask = Ipv4Addr::prefix_len_to_mask(route.prefix_len).expect("prefix length to be valid");
-    (dest_ip & mask) == (route.dest_ip & mask)
+/// Checks if a given destination IP address matches a route's subnet, based on the route's
+/// destination and prefix length.
+fn route_matches(dest_ip: Ipv4Addr, route_ip: Ipv4Addr, route_prefix_len: u8) -> bool {
+    let mask = Ipv4Addr::prefix_len_to_mask(route_prefix_len).expect("prefix length to be valid");
+    (dest_ip & mask) == (route_ip & mask)
+}
+
+/// Checks if `gateway` is reachable without another gateway, on the same interface.
+fn is_on_link(routes: &[RouteEntry], interface_id: InterfaceId, gateway: Ipv4Addr) -> bool {
+    routes.iter().any(|r| {
+        r.interface_id == interface_id
+            && r.gateway.is_none()
+            && r.kind == RouteKind::Unicast
+            && route_matches(gateway, r.dest_ip, r.prefix_len)
+    })
+}
+
+/// Checks if `interface_id` owns `addr`, i.e. it has a `Local` route for it.
+fn owns_addr(routes: &[RouteEntry], interface_id: InterfaceId, addr: Ipv4Addr) -> bool {
+    routes
+        .iter()
+        .any(|r| r.interface_id == interface_id && r.kind == RouteKind::Local && r.dest_ip == addr)
+}
+
+/// Removes this interface's routes that fail `valid`.
+fn retain_valid(
+    routes: &mut Vec<RouteEntry>,
+    interface_id: InterfaceId,
+    valid: fn(&[RouteEntry], &RouteEntry) -> bool,
+) {
+    let mut i = 0;
+    while i < routes.len() {
+        if routes[i].interface_id == interface_id && !valid(routes, &routes[i]) {
+            routes.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Removes every route on this interface that `add_route` would reject.
+fn prune_interface(routes: &mut Vec<RouteEntry>, interface_id: InterfaceId) {
+    // `pref_src` first since it can remove direct routes that gateway might depend on.
+    retain_valid(routes, interface_id, |t, r| {
+        r.pref_src.is_none_or(|a| owns_addr(t, r.interface_id, a))
+    });
+
+    retain_valid(routes, interface_id, |t, r| {
+        r.gateway.is_none_or(|g| is_on_link(t, r.interface_id, g))
+    });
 }
 
 /// Generates a sort key for a route entry, used to sort routes by their prefix length and metric.
@@ -217,14 +262,16 @@ pub fn add_route(route: RouteEntry, replace: bool) -> Result<()> {
 
     let mut routes = ROUTES.lock();
 
+    if let Some(pref_src) = route.pref_src {
+        // a pref_src addr must be owned by the interface.
+        if !owns_addr(&routes, route.interface_id, pref_src) {
+            err!(NetError::InvalidAddress)
+        }
+    }
+
     if let Some(gateway) = route.gateway {
-        // a gateway must be reachable without another gateway, on the same interface
-        if !routes.iter().any(|r| {
-            r.interface_id == route.interface_id
-                && r.gateway.is_none()
-                && r.kind == RouteKind::Unicast
-                && route_matches(gateway, r)
-        }) {
+        // a gateway must be reachable without another gateway, on the same interface.
+        if !is_on_link(&routes, route.interface_id, gateway) {
             err!(NetError::GatewayUnreachable)
         }
     }
@@ -249,6 +296,7 @@ pub fn add_route(route: RouteEntry, replace: bool) -> Result<()> {
 
 /// Removes the route matching dest, prefix, gateway, and interface.
 /// Kernel owned routes cannot be removed this way.
+/// After successful removal, prunes the other routes on this interface.
 pub fn remove_route(route: &RouteEntry) -> Result<()> {
     let mut routes = ROUTES.lock();
 
@@ -262,6 +310,8 @@ pub fn remove_route(route: &RouteEntry) -> Result<()> {
 
     routes.remove(i);
 
+    prune_interface(&mut routes, route.interface_id);
+
     Ok(())
 }
 
@@ -271,13 +321,13 @@ pub fn remove_interface_routes(interface_id: InterfaceId) {
     ROUTES.lock().retain(|r| r.interface_id != interface_id);
 }
 
-/// Removes all routes owned by the specified interface and adds a new route for the interface's IP
+/// Removes unreachable routes owned by this interface and adds a new route for the interface's IP
 /// address and prefix.
 pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Cidr) {
     let mut routes = ROUTES.lock();
 
-    // Remove any existing kernel owned route for this interface.
-    routes.retain(|r| !matches!(r.owner, RouteOwner::Kernel if r.interface_id == interface_id));
+    // Remove any kernel owned route for this interface.
+    routes.retain(|r| r.interface_id != interface_id || !matches!(r.owner, RouteOwner::Kernel));
 
     // Add a new route for local route for loopback.
     routes.push(RouteEntry {
@@ -303,6 +353,8 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Cidr) {
         kind: RouteKind::Unicast,
         pref_src: None,
     });
+
+    prune_interface(&mut routes, interface_id);
 }
 
 /// Finds the best matching route for a given destination IP address, based on the longest prefix
@@ -316,7 +368,7 @@ pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry> {
     // then sort them by longest prefix and lowest metric.
     if let Some(route) = routes
         .iter()
-        .filter(|r| route_matches(dest_ip, r))
+        .filter(|r| route_matches(dest_ip, r.dest_ip, r.prefix_len))
         .max_by_key(|r| route_sort_key(r))
     {
         Ok(*route)
