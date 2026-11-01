@@ -12,12 +12,19 @@ const MAX_IF: usize = 32;
 const LO_ADDR: Ipv4Addr = Ipv4Addr([127, 0, 0, 1]);
 const LO_PREFIX: u8 = 8;
 
+/// Different subnet from `LO_ADDR`.
+const OTHER_ADDR: Ipv4Addr = Ipv4Addr([128, 0, 0, 1]);
+
 /// Gateway on lo's 127.0.0.0/8, so routes through it pass the on-link check.
 const LO_GATEWAY: Ipv4Addr = Ipv4Addr([127, 0, 0, 2]);
 
 /// Destination used by the tests. Outside every kernel route, so it never shadows real traffic.
 const TEST_DEST: Ipv4Addr = Ipv4Addr([10, 99, 0, 0]);
 const TEST_PREFIX: u8 = 16;
+
+/// Subnet that is on-link only through `direct_route`, not through any kernel route.
+const DIRECT_DEST: Ipv4Addr = Ipv4Addr([10, 98, 0, 0]);
+const DIRECT_GATEWAY: Ipv4Addr = Ipv4Addr([10, 98, 0, 1]);
 
 fn routes() -> [Option<RouteEntry>; MAX_ROUTES] {
     let mut routes = [None; MAX_ROUTES];
@@ -112,6 +119,34 @@ fn test_route() -> RouteEntry {
         kind: RouteKind::Unicast,
         pref_src: None,
     }
+}
+
+/// Static direct route to `DIRECT_DEST` on lo.
+fn direct_route() -> RouteEntry {
+    RouteEntry {
+        dest_ip: DIRECT_DEST,
+        gateway: None,
+        ..test_route()
+    }
+}
+
+/// Static route to `TEST_DEST` whose gateway depends on `direct_route`.
+fn via_direct_route() -> RouteEntry {
+    RouteEntry {
+        gateway: Some(DIRECT_GATEWAY),
+        ..test_route()
+    }
+}
+
+/// True if a route with the same key as `route` is in the table.
+fn has_route(route: &RouteEntry) -> bool {
+    find_route(
+        route.dest_ip,
+        route.prefix_len,
+        route.gateway,
+        route.interface_id,
+    )
+    .is_some()
 }
 
 fn restore_lo() {
@@ -351,6 +386,43 @@ fn test_route_add_rejects() {
     );
     route_remove(&route).expect("route_remove");
 
+    // unknown flag bits
+    assert_eq!(
+        route_add(&route, RouteFlag::ROUTE_REPLACE << 1),
+        Err(SysError::InvalidArgument),
+        "unknown route flags must be rejected"
+    );
+
+    // pref_src must be an address the host owns
+    assert_eq!(
+        route_add(
+            &RouteEntry {
+                pref_src: Some(OTHER_ADDR),
+                ..route
+            },
+            0
+        ),
+        Err(SysError::InvalidArgument),
+        "pref_src the host does not own must be rejected"
+    );
+
+    // and it must be owned by the route's own interface
+    if let Some(other) = other_id() {
+        assert_eq!(
+            route_add(
+                &RouteEntry {
+                    gateway: None,
+                    interface_id: other,
+                    pref_src: Some(LO_ADDR),
+                    ..route
+                },
+                0
+            ),
+            Err(SysError::InvalidArgument),
+            "pref_src owned by another interface must be rejected"
+        );
+    }
+
     assert!(
         same_routes(&before, &routes()),
         "rejected routes must not change the table"
@@ -440,6 +512,200 @@ fn test_set_ipv4_idempotent() {
     route_remove(&route).expect("route_remove");
 }
 
+/// A gateway on-link through a static direct route survives setting the same address.
+fn test_set_ipv4_idempotent_keeps_static_on_link() {
+    route_add(&direct_route(), 0).expect("route_add direct");
+    route_add(&via_direct_route(), 0).expect("route_add via direct");
+
+    let before = routes();
+    restore_lo();
+    assert!(
+        same_routes(&before, &routes()),
+        "setting the same address must keep routes on-link through a static route"
+    );
+
+    route_remove(&via_direct_route()).expect("route_remove via direct");
+    route_remove(&direct_route()).expect("route_remove direct");
+}
+
+/// Setting the address will prune all static routes that disagrees with the new address.
+fn test_set_ipv4_prunes_stale_routes() {
+    let before = routes();
+
+    route_add(&test_route(), 0).expect("route_add");
+    route_add(
+        &RouteEntry {
+            dest_ip: Ipv4Addr([10, 98, 0, 0]),
+            prefix_len: 16,
+            gateway: None,
+            interface_id: lo_id(),
+            metric: 100,
+            owner: RouteOwner::Static,
+            kind: RouteKind::Unicast,
+            pref_src: Some(LO_ADDR),
+        },
+        0,
+    )
+    .expect("route_add");
+    interface_set_ipv4(lo_id(), OTHER_ADDR, 8).expect("change lo address");
+
+    let pruned = routes();
+
+    restore_lo();
+
+    let find_route = |dest_ip: Ipv4Addr,
+                      prefix_len: u8,
+                      gateway: Option<Ipv4Addr>,
+                      interface_id: InterfaceId| {
+        pruned.into_iter().flatten().find(|r| {
+            r.dest_ip == dest_ip
+                && r.prefix_len == prefix_len
+                && r.gateway == gateway
+                && r.interface_id == interface_id
+        })
+    };
+
+    assert!(
+        find_route(TEST_DEST, 16, Some(LO_GATEWAY), lo_id()).is_none(),
+        "static route in different subnet should be pruned"
+    );
+
+    assert!(
+        find_route(Ipv4Addr([10, 98, 0, 0]), 16, None, lo_id()).is_none(),
+        "static route with different pref_src should be pruned"
+    );
+
+    assert!(
+        find_route(LO_ADDR, 32, None, lo_id()).is_none(),
+        "old kernel route should be pruned"
+    );
+
+    let new_kernel =
+        find_route(OTHER_ADDR, 32, None, lo_id()).expect("new kernel route should be added");
+
+    assert_eq!(new_kernel.kind, RouteKind::Local, "new local route kind");
+    assert_eq!(
+        new_kernel.owner,
+        RouteOwner::Kernel,
+        "new local route owner"
+    );
+    assert_eq!(
+        new_kernel.pref_src,
+        Some(OTHER_ADDR),
+        "new local route pref_src"
+    );
+
+    assert!(
+        find_route(Ipv4Addr([128, 0, 0, 0]), 8, None, lo_id()).is_some(),
+        "new kernel route should be added"
+    );
+
+    assert!(
+        same_routes(&before, &routes()),
+        "routes should be restored to before"
+    );
+}
+
+/// On-link is decided by the table, so a new subnet keeps a gateway behind a static direct route.
+fn test_set_ipv4_keeps_static_on_link() {
+    let before = routes();
+
+    route_add(&direct_route(), 0).expect("route_add direct");
+    route_add(&via_direct_route(), 0).expect("route_add via direct");
+    interface_set_ipv4(lo_id(), OTHER_ADDR, 8).expect("change lo address");
+
+    let kept_direct = has_route(&direct_route());
+    let kept_via = has_route(&via_direct_route());
+
+    // restore before asserting, so a failure here does not leave lo broken
+    restore_lo();
+
+    assert!(kept_direct, "direct route must survive an address change");
+    assert!(kept_via, "gateway on a static route must survive");
+
+    route_remove(&direct_route()).expect("route_remove direct");
+    assert!(
+        same_routes(&before, &routes()),
+        "routes should be restored to before"
+    );
+}
+
+/// A direct route pruned for its `pref_src` takes the gateway routes that depended on it along.
+fn test_set_ipv4_prunes_chained_routes() {
+    let before = routes();
+
+    route_add(
+        &RouteEntry {
+            pref_src: Some(LO_ADDR),
+            ..direct_route()
+        },
+        0,
+    )
+    .expect("route_add direct");
+    route_add(&via_direct_route(), 0).expect("route_add via direct");
+    interface_set_ipv4(lo_id(), OTHER_ADDR, 8).expect("change lo address");
+
+    let kept_direct = has_route(&direct_route());
+    let kept_via = has_route(&via_direct_route());
+
+    restore_lo();
+
+    assert!(
+        !kept_direct,
+        "direct route with stale pref_src must be pruned"
+    );
+    assert!(!kept_via, "gateway on a pruned direct route must be pruned");
+    assert!(
+        same_routes(&before, &routes()),
+        "routes should be restored to before"
+    );
+}
+
+/// Removing a direct route prunes every gateway route behind it and nothing else.
+fn test_route_remove_prunes_dependents() {
+    let before = routes();
+
+    // lo's own gateway keeps this one on-link through a kernel route.
+    let unrelated = RouteEntry {
+        dest_ip: Ipv4Addr([10, 97, 0, 0]),
+        ..test_route()
+    };
+    // adjacent in the table, so both have to be seen by one prune.
+    let second_via = RouteEntry {
+        dest_ip: Ipv4Addr([10, 96, 0, 0]),
+        ..via_direct_route()
+    };
+
+    route_add(&direct_route(), 0).expect("route_add direct");
+    route_add(&via_direct_route(), 0).expect("route_add via direct");
+    route_add(&second_via, 0).expect("route_add second via direct");
+    route_add(&unrelated, 0).expect("route_add unrelated");
+
+    route_remove(&direct_route()).expect("route_remove direct");
+
+    assert!(
+        !has_route(&via_direct_route()),
+        "gateway route must be pruned with its direct route"
+    );
+    assert!(
+        !has_route(&second_via),
+        "adjacent gateway route must be pruned too"
+    );
+    assert!(has_route(&unrelated), "unrelated route must survive");
+
+    assert_eq!(
+        route_remove(&via_direct_route()),
+        Err(SysError::NoEntry),
+        "pruned route is already gone"
+    );
+
+    route_remove(&unrelated).expect("route_remove unrelated");
+    assert!(
+        same_routes(&before, &routes()),
+        "routes should be restored to before"
+    );
+}
+
 /// Clearing an address removes every route on the interface; setting it again restores the
 /// kernel routes but not the static ones.
 fn test_clear_and_restore() {
@@ -482,5 +748,10 @@ fn main(_args: Args) {
     test_kernel_routes_protected();
     test_set_ipv4_rejects();
     test_set_ipv4_idempotent();
+    test_set_ipv4_idempotent_keeps_static_on_link();
+    test_set_ipv4_prunes_stale_routes();
+    test_set_ipv4_keeps_static_on_link();
+    test_set_ipv4_prunes_chained_routes();
+    test_route_remove_prunes_dependents();
     test_clear_and_restore();
 }
