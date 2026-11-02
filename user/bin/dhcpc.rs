@@ -674,6 +674,10 @@ fn main(args: Args) {
     )
     .unwrap_or_else(|e| exit_with_msg(e));
 
+    // reserve the port so that kernel does not assume port unreachable
+    let _udp = socket(SocketType::Udp, SockAddr::any_inet_with_port(CLIENT_PORT))
+        .unwrap_or_else(|e| exit_with_msg(e));
+
     let mut client = Client {
         fd,
         interface,
