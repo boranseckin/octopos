@@ -430,9 +430,18 @@ pub fn enqueue_incoming(interface_id: InterfaceId, packet: Box<[u8]>) -> Result<
 /// fields, so that it can be safely transmuted to/from a byte slice without violating Rust's
 /// aliasing or alignment rules.
 pub unsafe trait NetworkHeader: Sized {
+    /// Any struct implementing this trait must have `repr(packed)` to force alignment to 1.
+    /// So that Self can live at any address and still be valid.
+    const ALIGNED: () = assert!(
+        align_of::<Self>() == 1,
+        "network header must be repr(packed)"
+    );
+
     /// Parses a header from the start of the given byte slice, returning `None` if the data is too
     /// short.
     fn from_bytes(data: &[u8]) -> Option<&Self> {
+        let () = Self::ALIGNED;
+
         if data.len() < size_of::<Self>() {
             return None;
         }
@@ -452,6 +461,8 @@ pub unsafe trait NetworkHeader: Sized {
 
     /// Returns a byte slice view of this header, for use in checksum calculations and serialization.
     fn as_bytes(&self) -> &[u8] {
+        let () = Self::ALIGNED;
+
         // # Safety: the struct is `repr(C, packed)` with only plain data fields, so it can be
         // safe to view it as a byte slice of the appropriate length.
         unsafe { slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) }
