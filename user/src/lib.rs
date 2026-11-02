@@ -14,6 +14,7 @@ use core::panic::PanicInfo;
 #[macro_use]
 mod io;
 mod args;
+pub mod dns;
 mod heap;
 mod line;
 mod net;

@@ -15,6 +15,7 @@ const TESTS: &[&str] = &[
     "/_packet",
     "/_udp",
     "/_ping",
+    "/_dns",
 ];
 
 #[unsafe(no_mangle)]
