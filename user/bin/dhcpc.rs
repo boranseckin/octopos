@@ -534,12 +534,13 @@ fn build_frame(
 }
 
 fn transmit(fd: Fd, interface: &Interface, buf: &[u8]) {
-    send(
+    if let Err(e) = send(
         fd,
         buf,
         SockAddr::link(Some(interface.id), Some(EtherType::Ipv4 as u16)),
-    )
-    .unwrap_or_else(|e| exit_with_msg(e));
+    ) {
+        println!("dhcpc: cannot send packet: {e}");
+    }
 }
 
 fn new_xid() -> u32 {
@@ -552,8 +553,8 @@ fn apply(interface: &Interface, offer: &Offer) {
     interface_set_ipv4(interface.id, offer.addr, offer.prefix_len)
         .unwrap_or_else(|e| exit_with_msg(e));
 
-    if let Some(router) = offer.router {
-        route_add(
+    if let Some(router) = offer.router
+        && let Err(e) = route_add(
             &RouteEntry {
                 dest_ip: Ipv4Addr::UNSPECIFIED,
                 prefix_len: 0,
@@ -566,7 +567,9 @@ fn apply(interface: &Interface, offer: &Offer) {
             },
             RouteFlag::ROUTE_REPLACE,
         )
-        .unwrap_or_else(|e| exit_with_msg(e))
+    {
+        // address is still valid, so log the error and carry on.
+        println!("dhcpc: cannot add default route for router ({router}): {e}");
     }
 }
 
@@ -625,6 +628,11 @@ fn parse_offer(header: &BootpHeader, data: &[u8]) -> Option<Offer> {
     let prefix_len = find_option_array(data, OPT_SUBNET_MASK)
         .map(Ipv4Addr)
         .and_then(Ipv4Addr::mask_to_prefix_len)?;
+
+    // offer must be a valid address in a subnet
+    if prefix_len == 0 || header.yiaddr == Ipv4Addr::UNSPECIFIED {
+        return None;
+    }
 
     let server_id = find_option_array(data, OPT_SERVER_ID).map(Ipv4Addr)?;
 
