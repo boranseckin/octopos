@@ -2,6 +2,17 @@
 
 xv6 for RISC-V in Rust
 
+## Current State
+
+The kernel boots, initializes all subsystems, and runs a full userspace environment including a
+shell with pipes, redirections, background jobs, and an interactive line editor with history.
+Memory management includes lazy page allocation and copy-on-write fork. An e1000 driver and a
+small IPv4 stack (ARP, ICMP, UDP, routing) let it get an address over DHCP, resolve names over DNS,
+and ping hosts.
+
+Run the test suite with `./test.sh`. It boots a separate image that runs every program in
+`user/testbin/` and powers off.
+
 ## Usage
 
 ### Prerequisites
@@ -22,12 +33,15 @@ qemu-img create target/fs.img 2G
 # Create a network interface (octopos0)
 ./setup_net.sh
 
-# Optional: Start a dhcp server (in a second terminal)
+# Optional: Start a DHCP and DNS server (in a second terminal)
+# dnsmasq hands out addresses, tells dhcpc to use it for DNS, and forwards lookups using the
+# host's resolvers. octo.test is answered locally, so `host octo.test` and `ping octo.test`
+# work even when outbound traffic is blocked.
 sudo dnsmasq -d \
     --interface=octopos0 \
     --bind-interfaces \
-    --no-resolv \
     --no-hosts \
+    --host-record=octo.test,192.168.10.1 \
     --dhcp-range=192.168.10.10,192.168.10.100,12h
 
 # Run in QEMU
@@ -47,12 +61,6 @@ cargo run            # QEMU starts frozen, waiting for GDB
 # in a second terminal:
 riscv64-elf-gdb      # .gdbinit connects to port 1234 and loads symbols automatically
 ```
-
-## Current State
-
-The kernel boots, initializes all subsystems, and runs a full userspace environment including a
-shell with pipes, redirections, background jobs, and an interactive line editor with history.
-Memory management includes lazy page allocation and copy-on-write fork.
 
 ## Development Plan
 
@@ -145,3 +153,15 @@ often needed to break circular dependencies.
 1. ioctl() syscall — device control interface; console supports raw mode and foreground PID for Ctrl-C delivery
 2. Line editor — cursor movement, rich word editing, history, ANSI arrow keys
 3. User-space I/O traits — `Read` and `Write` over `Fd`, `Stdin`, `Stdout`, `Stderr`
+
+### Stage 12: Networking
+
+1. PCI enumeration and e1000 driver — find the network card, set up descriptor rings and interrupts
+2. interface() — interface registry, address assignments, and loopback device
+3. ARP — physical address resolution with caching for outbound ethernet frames
+4. IPv4, ICMP, UDP — header parsing and checksum validation, header construction for outgoing packets
+5. Kernel replies — answers pings and unbound UDP ports without a user process
+6. socket(), send(), receive() — UDP, ping and raw packet sockets with fan-out
+7. route() — editable routing table and the `ip` tool
+8. DHCP client — user-space `dhcpc` as a background task for each interface
+9. DNS — user-space stub resolver, `host`, and `ping <name>`
