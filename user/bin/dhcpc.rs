@@ -100,6 +100,7 @@ unsafe impl NetworkHeader for BootpHeader {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
+    Init,
     Selecting,
     Requesting,
     Bound,
@@ -242,6 +243,13 @@ impl Client {
         self.discover(now);
     }
 
+    fn restart(&mut self, now: usize) {
+        println!("dhcpc: restarting");
+
+        self.state = State::Init;
+        self.deadline = now + jittered(INITIAL_INTERVAL);
+    }
+
     fn on_reply(&mut self, frame: &[u8], mac: MacAddr) {
         let Some((header, data)) = parse_reply(frame, &self.interface) else {
             return;
@@ -293,7 +301,7 @@ impl Client {
                     unapply(&self.interface, &self.offer);
                 }
 
-                self.discover(uptime());
+                self.restart(uptime());
             }
 
             _ => (),
@@ -302,6 +310,7 @@ impl Client {
 
     fn on_timeout(&mut self, now: usize) {
         match self.state {
+            State::Init => self.discover(now),
             State::Requesting if self.attempts + 1 >= MAX_ATTEMPTS => self.discover(now),
             State::Bound => self.renew(now),
             State::Renewing if now >= self.t2_at => self.rebind(now),
@@ -367,7 +376,7 @@ impl Client {
             State::Selecting | State::Requesting => now + backoff(self.attempts),
             State::Renewing => halfway(now, self.t2_at),
             State::Rebinding => halfway(now, self.expires_at),
-            State::Bound => unreachable!("should not send while in Bound"),
+            State::Init | State::Bound => unreachable!("should not send in this state"),
         };
     }
 }
@@ -660,7 +669,7 @@ fn main(args: Args) {
     let mut client = Client {
         fd,
         interface,
-        state: State::Selecting,
+        state: State::Init,
         xid: new_xid(),
         attempts: 0,
         deadline: 0,
