@@ -66,7 +66,7 @@ impl ArpCache {
         } else if let Some(entry) = cache
             .entries
             .iter_mut()
-            .find(|entry| entry.is_none() || entry.is_some_and(|e| e.expires_at <= now))
+            .find(|entry| entry.is_none_or(|e| e.expires_at <= now))
         {
             *entry = Some(ArpCacheEntry {
                 ip,

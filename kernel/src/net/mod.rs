@@ -10,8 +10,10 @@ use crate::net::eth::{EtherType, EthernetHeader};
 use crate::net::interface::{InterfaceEntry, InterfaceId, NetDevice};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::route::RouteEntry;
+use crate::param::TICKS_PER_SEC;
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
+use crate::trap::TICKS;
 
 pub(crate) mod arp;
 pub(crate) mod eth;
@@ -26,6 +28,7 @@ pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
 const INCOMING_QUEUE_SIZE: usize = 16;
+const ARP_RESOLVE_TIMEOUT: usize = 3 * TICKS_PER_SEC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
@@ -293,6 +296,7 @@ impl core::fmt::Display for Ipv4Cidr {
 #[derive(Clone)]
 struct OutgoingQueueEntry {
     dest_ip: Ipv4Addr,
+    expires_at: usize,
     interface: Arc<dyn NetDevice>,
     packet: Box<[u8]>,
 }
@@ -318,11 +322,17 @@ impl OutgoingQueue {
     ///
     /// Returns an error if the queue is full.
     fn enqueue(dest_ip: Ipv4Addr, interface: Arc<dyn NetDevice>, packet: Box<[u8]>) -> Result<()> {
+        let now = *TICKS.lock();
         let mut queue = OUTGOING_QUEUE.lock();
 
-        if let Some(slot) = queue.slots.iter_mut().find(|slot| slot.is_none()) {
+        if let Some(slot) = queue
+            .slots
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_none_or(|e| e.expires_at <= now))
+        {
             *slot = Some(OutgoingQueueEntry {
                 dest_ip,
+                expires_at: now + ARP_RESOLVE_TIMEOUT,
                 interface,
                 packet,
             });
@@ -567,10 +577,16 @@ pub fn transmit_with_route(
             packet[..6].copy_from_slice(&dest_mac.0);
             interface.device.transmit(&packet)
         } else {
-            // packet requires MAC address and we don't have it, queue the packet and send an ARP
-            // request. once the reply is received, the packet will be sent.
-            OutgoingQueue::enqueue(arp_target, interface.device, packet)?;
-            arp::request(interface.id, arp_target)
+            // packet requires MAC address and we don't have it:
+            // - queue the packet and send an ARP request.
+            // - once the reply is received, the packet will be sent.
+            //
+            // if the queue is full, send the arp request anyways before returning the error.
+            // the packet will be dropped but the arp request might resolve previously pending
+            // entries, thus clearing out the queue.
+            let queued = OutgoingQueue::enqueue(arp_target, interface.device, packet);
+            arp::request(interface.id, arp_target)?;
+            queued
         }
     }
 }
