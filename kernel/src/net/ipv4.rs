@@ -51,6 +51,11 @@ pub struct Ipv4Header {
 impl Ipv4Header {
     pub const SIZE: usize = size_of::<Self>();
 
+    /// More Fragments bit
+    const IP_MF: u16 = 0x2000;
+    /// Offset of a fragment relative to the beginning of the original data
+    const IP_OFFSET_MASK: u16 = 0x1fff;
+
     pub fn proto(&self) -> Ipv4Proto {
         Ipv4Proto::from(self.proto)
     }
@@ -58,6 +63,11 @@ impl Ipv4Header {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u16 {
         self.len.get()
+    }
+
+    fn is_fragment(&self) -> bool {
+        let off = self.off.get();
+        off & (Self::IP_MF | Self::IP_OFFSET_MASK) != 0
     }
 
     pub fn new(src: Ipv4Addr, dst: Ipv4Addr, proto: Ipv4Proto, payload_len: usize) -> Self {
@@ -118,6 +128,11 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<()> {
     };
     if net::internet_checksum(&[header_without_sum.as_bytes()]) != req_ipv4.sum.get() {
         err!(NetError::ChecksumFailed);
+    }
+
+    // No reassembly, so do not deliver fragments.
+    if req_ipv4.is_fragment() {
+        return Ok(());
     }
 
     // Remove extra padding bytes added by the NIC, if any.
