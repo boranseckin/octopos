@@ -434,3 +434,12 @@ pub fn resolve(name: &str) -> Result<Vec<Ipv4Addr>, DnsError> {
     // no server resolved, return the latest error
     Err(last_err.expect("error since loop did not return"))
 }
+
+/// Returns `host` as an address if it is one; otherwise resolves it and returns the first address.
+pub fn resolve_host(host: &str) -> Result<Ipv4Addr, DnsError> {
+    if let Ok(addr) = Ipv4Addr::from_str(host) {
+        return Ok(addr);
+    }
+
+    resolve(host)?.first().copied().ok_or(DnsError::NotFound)
+}

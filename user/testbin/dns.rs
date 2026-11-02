@@ -346,6 +346,10 @@ fn answer(_: usize, id: u16) -> Vec<(From, Vec<u8>)> {
     vec![(From::Server, reply(id, FLAGS_OK, &[a(&ADDR)]))]
 }
 
+fn two_answers(_: usize, id: u16) -> Vec<(From, Vec<u8>)> {
+    vec![(From::Server, reply(id, FLAGS_OK, &[a(&ADDR), a(&ADDR2)]))]
+}
+
 fn name_error(_: usize, id: u16) -> Vec<(From, Vec<u8>)> {
     vec![(From::Server, reply(id, FLAGS_OK | 3, &[]))]
 }
@@ -568,6 +572,51 @@ fn test_set_servers_round_trip() {
     assert_eq!(queries, 1, "one query");
 }
 
+/// A literal address comes back as is, with no lookup.
+fn test_resolve_host_literal() {
+    // with no /etc/resolv, any lookup would fail with NoServers
+    dns::set_servers(&[]).expect("clear servers");
+    assert_eq!(
+        dns::resolve_host("127.0.0.1"),
+        Ok(Ipv4Addr::LOOPBACK),
+        "literal address"
+    );
+}
+
+/// A name is resolved through /etc/resolv.
+fn test_resolve_host_name() {
+    dns::set_servers(&[Ipv4Addr::LOOPBACK]).expect("set_servers");
+    fake_server(DNS_PORT, 1, answer);
+    let result = dns::resolve_host("example.com");
+    let queries = server_queries();
+    dns::set_servers(&[]).expect("clear servers");
+
+    assert_eq!(result, Ok(ADDR));
+    assert_eq!(queries, 1, "one query");
+}
+
+/// With several addresses, the first one in the answer wins.
+fn test_resolve_host_first() {
+    dns::set_servers(&[Ipv4Addr::LOOPBACK]).expect("set_servers");
+    fake_server(DNS_PORT, 1, two_answers);
+    let result = dns::resolve_host("example.com");
+    server_queries();
+    dns::set_servers(&[]).expect("clear servers");
+
+    assert_eq!(result, Ok(ADDR), "first address");
+}
+
+/// The server's error comes back unchanged.
+fn test_resolve_host_not_found() {
+    dns::set_servers(&[Ipv4Addr::LOOPBACK]).expect("set_servers");
+    fake_server(DNS_PORT, 1, name_error);
+    let result = dns::resolve_host("example.com");
+    server_queries();
+    dns::set_servers(&[]).expect("clear servers");
+
+    assert_eq!(result, Err(DnsError::NotFound));
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     // first, before any test writes /etc/resolv
@@ -615,4 +664,9 @@ fn main(_args: Args) {
     test_set_servers_truncates();
     test_set_servers_empty();
     test_set_servers_round_trip();
+
+    test_resolve_host_literal();
+    test_resolve_host_name();
+    test_resolve_host_first();
+    test_resolve_host_not_found();
 }

@@ -3,7 +3,7 @@
 
 use user::*;
 
-const USAGE: &str = "usage: ping <address> [count]";
+const USAGE: &str = "usage: ping <host> [count]";
 
 const DEFAULT_COUNT: u16 = 4;
 
@@ -44,12 +44,13 @@ fn parse_echo_reply(msg: &[u8]) -> Option<(u16, u64)> {
 
 #[unsafe(no_mangle)]
 fn main(args: Args) {
-    let Some(dest_ip) = args.get_str(1) else {
+    let Some(host) = args.get_str(1) else {
         exit_with_msg(USAGE);
     };
-    let dest_ip = dest_ip.parse::<Ipv4Addr>().unwrap_or_else(|_| {
-        exit_with_msg("invalid address");
-    });
+
+    let dest_ip = dns::resolve_host(host)
+        .unwrap_or_else(|e| exit_with_msg(format_args!("ping: {host}: {e}")));
+
     // port is ignored by ping sockets, the kernel uses the socket's ident
     let dest = SockAddr::inet(dest_ip, 0);
 
@@ -59,6 +60,8 @@ fn main(args: Args) {
         }),
         None => DEFAULT_COUNT,
     };
+
+    println!("pinging {host} ({dest_ip})");
 
     let fd = socket(SocketType::Ping, SockAddr::any_inet()).unwrap_or_else(|e| exit_with_msg(e));
     ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, 10).unwrap_or_else(|e| exit_with_msg(e));
