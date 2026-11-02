@@ -65,6 +65,14 @@ impl Ipv4Header {
         self.len.get()
     }
 
+    pub fn src(&self) -> Ipv4Addr {
+        self.src
+    }
+
+    pub fn dest(&self) -> Ipv4Addr {
+        self.dest
+    }
+
     fn is_fragment(&self) -> bool {
         let off = self.off.get();
         off & (Self::IP_MF | Self::IP_OFFSET_MASK) != 0
@@ -141,7 +149,7 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<()> {
 
     match req_ipv4.proto() {
         Ipv4Proto::Icmp => icmp::handle_icmp(req_ipv4.src, req_data),
-        Ipv4Proto::Udp => udp::handle_udp(interface_id, req_ipv4.dest, req_ipv4.src, req_data),
+        Ipv4Proto::Udp => udp::handle_udp(interface_id, req_ipv4, req_data),
         Ipv4Proto::Unknown => Ok(()),
     }
 }

@@ -1,9 +1,9 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::abi::SockAddr;
-use crate::net::ipv4::Ipv4Proto;
-use crate::net::socket::RecvQueue;
+use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
+use crate::net::route;
+use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::udp::MAX_UDP_PAYLOAD;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
 use crate::param::NSOCKET;
@@ -187,6 +187,7 @@ impl PingTable {
 #[repr(u8)]
 pub enum IcmpType {
     EchoReply = 0,
+    DestUnreachable = 3,
     EchoRequest = 8,
     Unknown = u8::MAX,
 }
@@ -195,6 +196,7 @@ impl From<u8> for IcmpType {
     fn from(value: u8) -> Self {
         match value {
             0 => Self::EchoReply,
+            3 => Self::DestUnreachable,
             8 => Self::EchoRequest,
             _ => Self::Unknown,
         }
@@ -217,6 +219,8 @@ pub struct IcmpHeader {
 }
 
 impl IcmpHeader {
+    const CODE_PORT_UNREACHABLE: u8 = 3;
+
     fn r#type(&self) -> IcmpType {
         IcmpType::from(self.r#type)
     }
@@ -240,6 +244,15 @@ impl IcmpHeader {
         }
     }
 
+    fn new_port_unreachable() -> Self {
+        Self {
+            r#type: IcmpType::DestUnreachable as u8,
+            code: Self::CODE_PORT_UNREACHABLE,
+            sum: Be::new(0), // to be filled later
+            rest: Be::new(0),
+        }
+    }
+
     fn calculate_checksum(&self, data: &[u8]) -> u16 {
         let mut header = *self;
         header.sum = Be::new(0);
@@ -254,6 +267,30 @@ impl IcmpHeader {
 }
 
 unsafe impl NetworkHeader for IcmpHeader {}
+
+pub fn send_port_unreachable(orig_ip: &Ipv4Header, orig_data: &[u8]) -> Result<()> {
+    let src = orig_ip.src();
+
+    // RFC 1122 3.2.2
+    // Do not answer to a datagram whose source address does not define a single host.
+    if !route::is_local_addr(orig_ip.dest())
+        || src == Ipv4Addr::UNSPECIFIED
+        || src == Ipv4Addr::BROADCAST
+        || src.is_multicast()
+    {
+        return Ok(());
+    }
+
+    // RFC 1122 3.2.2
+    // Every ICMP error message includes the Internet header and at least the first 8 data octets of
+    // the datagram that triggered the error.
+    let mut quote = [0u8; Ipv4Header::SIZE + 8];
+    quote[..Ipv4Header::SIZE].copy_from_slice(orig_ip.as_bytes());
+    quote[Ipv4Header::SIZE..].copy_from_slice(&orig_data[..8]);
+
+    let icmp = IcmpHeader::new_port_unreachable().add_checksum(&quote);
+    net::transmit(src, Ipv4Proto::Icmp, &[icmp.as_bytes(), &quote])
+}
 
 /// Handles an incoming ICMP packet.
 /// If it's an Echo Request, sends back an Echo Reply.
@@ -284,6 +321,6 @@ pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<()> {
 
             Ok(())
         }
-        IcmpType::Unknown => Ok(()),
+        IcmpType::DestUnreachable | IcmpType::Unknown => Ok(()),
     }
 }

@@ -2,8 +2,9 @@ use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 
+use crate::net::icmp;
 use crate::net::interface::{self, InterfaceId};
-use crate::net::ipv4::Ipv4Proto;
+use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
 use crate::net::{route, source_addr};
@@ -349,14 +350,9 @@ fn transmit_udp(dest_ip: Ipv4Addr, dest_port: u16, src_port: u16, payload: &[u8]
 
 /// Handles an incoming UDP datagram by parsing the header, validating it, and enqueuing the payload
 /// into the receive queue of the appropriate socket based on the destination port. If no socket is
-/// bound to the destination port, the datagram is dropped.
-pub fn handle_udp(
-    interface_id: InterfaceId,
-    dest_ip: Ipv4Addr,
-    src_ip: Ipv4Addr,
-    req_data: &[u8],
-) -> Result<()> {
-    let Some((req_udp, req_data)) = UdpHeader::from_bytes_with_rest(req_data) else {
+/// bound to the destination port, sends a destination port unreachable icmp message.
+pub fn handle_udp(interface_id: InterfaceId, req_ipv4: &Ipv4Header, datagram: &[u8]) -> Result<()> {
+    let Some((req_udp, req_data)) = UdpHeader::from_bytes_with_rest(datagram) else {
         err!(NetError::MalformedPacket)
     };
 
@@ -366,22 +362,22 @@ pub fn handle_udp(
         err!(NetError::MalformedPacket);
     }
 
+    let Some(socket) = UDP_TABLE.lock().ingress_lookup(
+        req_ipv4.dest(),
+        req_udp.dest_port.get(),
+        Some(interface_id),
+    ) else {
+        // no socket is bound to this (ip, port)
+        return icmp::send_port_unreachable(req_ipv4, &datagram[..UdpHeader::SIZE]);
+    };
+
     // truncate data to declared length in the header
     let payload_len = udp_len.saturating_sub(UdpHeader::SIZE);
     let req_data = &req_data[..payload_len.min(req_data.len())];
 
-    let Some(socket) =
-        UDP_TABLE
-            .lock()
-            .ingress_lookup(dest_ip, req_udp.dest_port.get(), Some(interface_id))
-    else {
-        // no socket is bound to this (ip, port), drop it
-        return Ok(());
-    };
-
     // do not return here if the queue is full, might as well wakeup the proc so that they can
     // process the full queue.
-    socket.deliver(src_ip, req_udp.src_port.get(), req_data.into());
+    socket.deliver(req_ipv4.src(), req_udp.src_port.get(), req_data.into());
 
     Ok(())
 }

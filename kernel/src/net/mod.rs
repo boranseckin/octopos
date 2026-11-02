@@ -162,6 +162,11 @@ impl Ipv4Addr {
     pub const BROADCAST: Self = Self([255; 4]);
     pub const LOOPBACK: Self = Self([127, 0, 0, 1]);
 
+    /// 224.0.0.0 to 239.255.255.255 (224/4)
+    pub fn is_multicast(&self) -> bool {
+        self.0[0] & 0xf0 == 224
+    }
+
     /// Returns the subnet mask corresponding to the given prefix length, or `None` if the prefix
     /// length is greater than 32.
     pub fn prefix_len_to_mask(prefix_len: u8) -> Option<Self> {

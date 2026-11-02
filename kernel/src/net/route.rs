@@ -235,6 +235,14 @@ pub fn route_at(index: usize) -> Option<RouteEntry> {
     ROUTES.lock().get(index).copied()
 }
 
+/// Returns if `addr` is a unicast address of the host.
+pub fn is_local_addr(addr: Ipv4Addr) -> bool {
+    ROUTES
+        .lock()
+        .iter()
+        .any(|r| matches!(r.kind, RouteKind::Local if r.dest_ip == addr))
+}
+
 /// Adds a new route after validating it.
 /// If `replace` is true, when a route with the same dest, prefix, gateway, and interface already
 /// exists, it will be updated with the new information.
