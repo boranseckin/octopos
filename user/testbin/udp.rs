@@ -3,6 +3,31 @@
 
 use user::*;
 
+const ETHERTYPE_IPV4: u16 = 0x0800;
+const IPPROTO_ICMP: u8 = 1;
+const IPPROTO_UDP: u8 = 17;
+const ICMP_DEST_UNREACHABLE: u8 = 3;
+const ICMP_PORT_UNREACHABLE: u8 = 3;
+
+// Offsets into a frame of Ethernet + IPv4 without options.
+const IP_START: usize = 14;
+const IP_PROTO: usize = IP_START + 9;
+const IP_SRC: usize = IP_START + 12;
+const IP_DEST: usize = IP_START + 16;
+const L4_START: usize = IP_START + 20;
+
+// Offsets into an ICMP error frame.
+const ICMP_QUOTE: usize = L4_START + 8;
+const ICMP_QUOTE_UDP: usize = ICMP_QUOTE + 20;
+/// Headers, then the quoted IPv4 header and the first 8 bytes after it.
+const ICMP_ERROR_LEN: usize = ICMP_QUOTE_UDP + 8;
+
+/// Ticks to wait before deciding an ICMP error is not coming.
+const ICMP_TIMEOUT: usize = 5;
+
+/// Size of the frame built by `raw_udp_frame`.
+const RAW_FRAME_LEN: usize = L4_START + 8;
+
 /// Opening a socket succeeds, and the same port can be reused after closing.
 fn test_socket_open_close() {
     let addr = SockAddr::any_inet_with_port(26200);
@@ -232,6 +257,211 @@ fn test_receive_timeout_cleared() {
     close(fd).expect("close");
 }
 
+/// RFC 1071 internet checksum. A message with a valid checksum sums to zero.
+fn checksum(data: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+
+    let (chunks, remainder) = data.as_chunks::<2>();
+    for chunk in chunks {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    if let [byte] = remainder {
+        sum += (*byte as u32) << 8;
+    }
+
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
+    !(sum as u16)
+}
+
+/// Opens a packet socket that sees every IPv4 frame on lo.
+fn open_lo_capture() -> Fd {
+    let lo = loopback().expect("loopback interface").unwrap().id;
+    let fd = socket(
+        SocketType::Packet,
+        SockAddr::link(Some(lo), Some(ETHERTYPE_IPV4)),
+    )
+    .expect("packet socket open");
+    ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, ICMP_TIMEOUT).expect("ioctl set receive timeout");
+    fd
+}
+
+/// Returns a port with no socket bound to it.
+fn unbound_port() -> u16 {
+    let fd = socket(SocketType::Udp, SockAddr::any_inet()).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+    close(fd).expect("close");
+    port
+}
+
+/// Reads frames until an ICMP one arrives or the socket times out.
+/// Returns whether a UDP frame was seen, and the length of the ICMP frame left in `buf`.
+fn capture_icmp(fd: Fd, buf: &mut [u8]) -> (bool, Option<usize>) {
+    let mut saw_udp = false;
+
+    loop {
+        match receive(fd, buf) {
+            Ok((n, _)) if buf[IP_PROTO] == IPPROTO_ICMP => return (saw_udp, Some(n)),
+            Ok(_) => saw_udp |= buf[IP_PROTO] == IPPROTO_UDP,
+            Err(SysError::TimedOut) => return (saw_udp, None),
+            Err(e) => panic!("receive: {e:?}"),
+        }
+    }
+}
+
+/// Asserts the datagram was seen on lo, so the check below it isn't vacuous, and got no answer.
+fn assert_no_icmp(fd: Fd, msg: &str) {
+    let mut buf = [0u8; 128];
+    let (saw_udp, icmp) = capture_icmp(fd, &mut buf);
+
+    assert!(saw_udp, "datagram must reach lo: {msg}");
+    assert_eq!(icmp, None, "{msg}");
+}
+
+/// Builds a frame holding an empty UDP datagram, for addresses a UDP socket can't send from.
+fn raw_udp_frame(src: Ipv4Addr, dest: Ipv4Addr, dest_port: u16) -> [u8; RAW_FRAME_LEN] {
+    let mut frame = [0u8; RAW_FRAME_LEN];
+
+    frame[12..14].copy_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+
+    frame[IP_START] = 0x45; // IPv4 without options
+    frame[IP_START + 2..IP_START + 4].copy_from_slice(&28u16.to_be_bytes()); // total length
+    frame[IP_START + 8] = 64; // ttl
+    frame[IP_PROTO] = IPPROTO_UDP;
+    frame[IP_SRC..IP_SRC + 4].copy_from_slice(&src.0);
+    frame[IP_DEST..IP_DEST + 4].copy_from_slice(&dest.0);
+
+    let sum = checksum(&frame[IP_START..L4_START]);
+    frame[IP_START + 10..IP_START + 12].copy_from_slice(&sum.to_be_bytes());
+
+    frame[L4_START..L4_START + 2].copy_from_slice(&1234u16.to_be_bytes()); // source port
+    frame[L4_START + 2..L4_START + 4].copy_from_slice(&dest_port.to_be_bytes());
+    frame[L4_START + 4..L4_START + 6].copy_from_slice(&8u16.to_be_bytes()); // length
+
+    frame
+}
+
+/// An unbound port answers with Port Unreachable, quoting the original datagram.
+fn test_port_unreachable() {
+    let capture = open_lo_capture();
+    let fd = socket(SocketType::Udp, SockAddr::any_inet()).expect("socket open");
+    let src_port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+    let dest_port = unbound_port();
+
+    send(fd, b"x", SockAddr::inet(Ipv4Addr::LOOPBACK, dest_port)).expect("send");
+
+    let mut buf = [0u8; 128];
+    let (saw_udp, icmp) = capture_icmp(capture, &mut buf);
+    assert!(saw_udp, "original datagram must be seen first");
+    let n = icmp.expect("unbound port must answer with ICMP");
+
+    assert_eq!(n, ICMP_ERROR_LEN, "error frame length");
+    assert_eq!(buf[L4_START], ICMP_DEST_UNREACHABLE, "icmp type");
+    assert_eq!(buf[L4_START + 1], ICMP_PORT_UNREACHABLE, "icmp code");
+    assert_eq!(&buf[L4_START + 4..L4_START + 8], &[0; 4], "unused bytes");
+    assert_eq!(checksum(&buf[L4_START..n]), 0, "icmp checksum");
+
+    assert_eq!(
+        &buf[IP_DEST..IP_DEST + 4],
+        &Ipv4Addr::LOOPBACK.0,
+        "error must go back to the sender"
+    );
+
+    assert_eq!(buf[ICMP_QUOTE] >> 4, 4, "quoted ip version");
+    assert_eq!(buf[ICMP_QUOTE + 9], IPPROTO_UDP, "quoted ip protocol");
+    assert_eq!(
+        &buf[ICMP_QUOTE + 16..ICMP_QUOTE + 20],
+        &Ipv4Addr::LOOPBACK.0,
+        "quoted ip destination"
+    );
+    assert_eq!(
+        u16::from_be_bytes([buf[ICMP_QUOTE_UDP], buf[ICMP_QUOTE_UDP + 1]]),
+        src_port,
+        "quoted source port"
+    );
+    assert_eq!(
+        u16::from_be_bytes([buf[ICMP_QUOTE_UDP + 2], buf[ICMP_QUOTE_UDP + 3]]),
+        dest_port,
+        "quoted destination port"
+    );
+
+    close(fd).expect("close");
+    close(capture).expect("close");
+}
+
+/// A bound port delivers the datagram and answers nothing.
+fn test_no_port_unreachable_when_bound() {
+    let capture = open_lo_capture();
+    let fd = socket(SocketType::Udp, SockAddr::any_inet()).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+
+    send(fd, b"x", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+    let mut buf = [0u8; 8];
+    receive(fd, &mut buf).expect("bound socket must receive");
+    assert_no_icmp(capture, "bound port must not answer");
+
+    close(fd).expect("close");
+    close(capture).expect("close");
+}
+
+/// A destination that is not a unicast address of this host never gets an answer.
+fn test_no_port_unreachable_for_broadcast() {
+    let capture = open_lo_capture();
+    let fd = socket(SocketType::Udp, SockAddr::any_inet()).expect("socket open");
+    let port = unbound_port();
+
+    send(
+        fd,
+        b"x",
+        SockAddr::inet(Ipv4Addr([127, 255, 255, 255]), port),
+    )
+    .expect("send");
+    assert_no_icmp(capture, "subnet broadcast must not answer");
+
+    close(fd).expect("close");
+    close(capture).expect("close");
+}
+
+/// A source that does not name a single host never gets an answer.
+fn test_no_port_unreachable_for_bad_source() {
+    let capture = open_lo_capture();
+    let lo = loopback().expect("loopback interface").unwrap().id;
+    let addr = SockAddr::link(Some(lo), Some(ETHERTYPE_IPV4));
+    let port = unbound_port();
+
+    // without a route to these sources an answer fails to send, and the test would pass with no
+    // guard in the kernel. the high metric keeps any real default route preferred.
+    let fallback = RouteEntry {
+        dest_ip: Ipv4Addr::UNSPECIFIED,
+        prefix_len: 0,
+        gateway: None,
+        interface_id: lo,
+        metric: 1000,
+        owner: RouteOwner::Static,
+        kind: RouteKind::Unicast,
+        pref_src: None,
+    };
+    route_add(&fallback, 0).expect("route_add fallback");
+
+    let sources = [
+        ("unspecified", Ipv4Addr::UNSPECIFIED),
+        ("broadcast", Ipv4Addr([255, 255, 255, 255])),
+        ("multicast", Ipv4Addr([224, 0, 0, 1])),
+    ];
+
+    for (name, src) in sources {
+        let frame = raw_udp_frame(src, Ipv4Addr::LOOPBACK, port);
+        send(capture, &frame, addr).expect("send raw frame");
+        assert_no_icmp(capture, name);
+    }
+
+    route_remove(&fallback).expect("route_remove fallback");
+    close(capture).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -245,4 +475,8 @@ fn main(_args: Args) {
     test_receive_timeout_per_call();
     test_receive_before_timeout();
     test_receive_timeout_cleared();
+    test_port_unreachable();
+    test_no_port_unreachable_when_bound();
+    test_no_port_unreachable_for_broadcast();
+    test_no_port_unreachable_for_bad_source();
 }
