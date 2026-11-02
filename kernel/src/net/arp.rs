@@ -47,12 +47,13 @@ impl ArpCache {
     /// Inserts the given IP-MAC mapping into the ARP cache, evicting an existing entry if
     /// necessary.
     fn insert(ip: Ipv4Addr, mac: MacAddr) {
-        let expires_at = *TICKS.lock() + ARP_TTL;
+        let now = *TICKS.lock();
+        let expires_at = now + ARP_TTL;
 
         let mut cache = ARP_CACHE.lock();
 
         // check for existing mapping and update.
-        // if doesn't exist, find an empty slot and insert.
+        // if doesn't exist, find an empty slot (None or expired) and insert.
         // if doesn't exist, evict a "random" entry and insert.
         if let Some(matching) = cache
             .entries
@@ -62,8 +63,11 @@ impl ArpCache {
             let entry = matching.as_mut().unwrap();
             entry.mac = mac;
             entry.expires_at = expires_at;
-        } else if let Some(entry) = cache.entries.iter_mut().find(|entry| entry.is_none()) {
-            let expires_at = *TICKS.lock() + ARP_TTL;
+        } else if let Some(entry) = cache
+            .entries
+            .iter_mut()
+            .find(|entry| entry.is_none() || entry.is_some_and(|e| e.expires_at <= now))
+        {
             *entry = Some(ArpCacheEntry {
                 ip,
                 mac,
