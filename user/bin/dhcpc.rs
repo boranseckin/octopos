@@ -284,9 +284,9 @@ impl Client {
             }
 
             (State::Requesting | State::Renewing | State::Rebinding, NAK) => {
-                let server_id = find_option_array(data, OPT_SERVER_ID)
-                    .map(Ipv4Addr)
-                    .expect("server id in nak");
+                let Some(server_id) = find_option_array(data, OPT_SERVER_ID).map(Ipv4Addr) else {
+                    return;
+                };
                 println!("dhcpc: nak from {}", server_id);
 
                 if self.state != State::Requesting {
