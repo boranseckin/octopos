@@ -9,6 +9,7 @@ const CLIENT_PORT: u16 = 68;
 const SERVER_PORT: u16 = 67;
 
 const MAX_FRAME: usize = 1514;
+const MAX_DNS: usize = dns::MAX_SERVERS;
 
 const DHCP_ROUTE_METRIC: u32 = 100;
 
@@ -29,6 +30,7 @@ const NAK: u8 = 6;
 
 const OPT_SUBNET_MASK: u8 = 1;
 const OPT_ROUTER: u8 = 3;
+const OPT_DNS: u8 = 6;
 const OPT_REQUESTED_IP: u8 = 50;
 const OPT_LEASE_TIME: u8 = 51;
 const OPT_MESSAGE_TYPE: u8 = 53;
@@ -117,6 +119,7 @@ struct Offer {
     lease_secs: u32,
     t1_secs: u32,
     t2_secs: u32,
+    dns: [Option<Ipv4Addr>; MAX_DNS],
 }
 
 #[derive(Debug)]
@@ -502,6 +505,7 @@ fn build_frame(
         &[
             OPT_SUBNET_MASK,
             OPT_ROUTER,
+            OPT_DNS,
             OPT_LEASE_TIME,
             OPT_SERVER_ID,
             OPT_RENEWAL_TIME,
@@ -571,6 +575,17 @@ fn apply(interface: &Interface, offer: &Offer) {
         // address is still valid, so log the error and carry on.
         println!("dhcpc: cannot add default route for router ({router}): {e}");
     }
+
+    if let Err(e) = dns::set_servers(
+        offer
+            .dns
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .as_slice(),
+    ) {
+        println!("dhcpc: cannot set dns servers: {e}");
+    }
 }
 
 fn unapply(interface: &Interface, last_offer: &Option<Offer>) {
@@ -590,6 +605,10 @@ fn unapply(interface: &Interface, last_offer: &Option<Offer>) {
             Ok(_) | Err(SysError::NoEntry) => {}
             Err(e) => exit_with_msg(e),
         }
+    }
+
+    if let Err(e) = dns::set_servers(&[]) {
+        println!("dhcpc: cannot clear dns servers: {e}");
     }
 
     interface_set_ipv4(interface.id, Ipv4Addr::UNSPECIFIED, 0).unwrap_or_else(|e| exit_with_msg(e));
@@ -648,6 +667,20 @@ fn parse_offer(header: &BootpHeader, data: &[u8]) -> Option<Offer> {
         .map(u32::from_be_bytes)
         .unwrap_or(lease_secs / 8 * 7);
 
+    let mut dns = [None; MAX_DNS];
+    if let Some(value) = find_option(data, OPT_DNS) {
+        value
+            .as_chunks::<4>()
+            .0 // ignore remainder
+            .iter()
+            .map(|&a| Ipv4Addr::from(a))
+            .filter(|&a| a != Ipv4Addr::UNSPECIFIED)
+            .zip(dns.iter_mut())
+            .for_each(|(addr, slot)| {
+                *slot = Some(addr);
+            });
+    }
+
     Some(Offer {
         addr: header.yiaddr,
         prefix_len,
@@ -656,6 +689,7 @@ fn parse_offer(header: &BootpHeader, data: &[u8]) -> Option<Offer> {
         lease_secs,
         t1_secs,
         t2_secs,
+        dns,
     })
 }
 

@@ -15,6 +15,15 @@ fn main(_args: Args) {
 
     let test_mode = open("testmode", OpenFlag::READ_ONLY).map(close).is_ok();
 
+    match mkdir("/etc") {
+        Ok(_) | Err(SysError::AlreadyExists) => {
+            if let Err(e) = dns::set_servers(&[]) {
+                eprintln!("init: clear resolv failed: {e}");
+            }
+        }
+        _ => eprintln!("init: mkdir /etc failed"),
+    }
+
     if !test_mode {
         match mkdir("/log") {
             Ok(_) | Err(SysError::AlreadyExists) => {

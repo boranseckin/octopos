@@ -3,11 +3,12 @@
 use core::fmt;
 use core::str::FromStr;
 
+use alloc::format;
 use alloc::vec::Vec;
 
 use crate::{
     Be, Fd, Ioctl, Ipv4Addr, NetworkHeader, OpenFlag, SockAddr, SocketType, SysError,
-    TICKS_PER_SEC, close, ioctl, open, random, read, receive, send, socket, uptime,
+    TICKS_PER_SEC, close, ioctl, open, random, read, receive, send, socket, unlink, uptime, write,
 };
 
 const DNS_PORT: u16 = 53;
@@ -33,7 +34,7 @@ const TYPE_A: u16 = 1;
 const CLASS_IN: u16 = 1;
 
 const RESOLV_PATH: &str = "/etc/resolv";
-const MAX_SERVERS: usize = 3;
+pub const MAX_SERVERS: usize = 3;
 
 const ATTEMPTS: usize = 3;
 const ATTEMPT_TIMEOUT: usize = 2 * TICKS_PER_SEC;
@@ -46,7 +47,7 @@ pub enum DnsError {
     NotFound,
     /// The server answered with an error code, or the reply was truncated.
     ServerFailure,
-    /// /etc/resolv is missing or lists no servers.
+    /// `RESOLV_PATH` is missing or lists no servers.
     NoServers,
     /// No server answered in time.
     TimedOut,
@@ -60,7 +61,7 @@ impl fmt::Display for DnsError {
             DnsError::BadName => write!(f, "bad name"),
             DnsError::NotFound => write!(f, "name not found"),
             DnsError::ServerFailure => write!(f, "truncated or error response"),
-            DnsError::NoServers => write!(f, "no server found in /etc/resolv"),
+            DnsError::NoServers => write!(f, "no server found in {}", RESOLV_PATH),
             DnsError::TimedOut => write!(f, "query timed out"),
             DnsError::Sys(e) => write!(f, "{e}"),
         }
@@ -287,8 +288,34 @@ pub fn parse_reply(msg: &[u8], id: u16) -> Option<Result<Vec<Ipv4Addr>, DnsError
     }
 }
 
-/// Reads up to `MAX_SERVERS` addresses from `/etc/resolv`, one per line.
-fn servers() -> Result<Vec<Ipv4Addr>, DnsError> {
+/// Replaces `RESOLV_PATH` with `servers`, one per line.
+/// An empty list removes the file.
+pub fn set_servers(servers: &[Ipv4Addr]) -> Result<(), SysError> {
+    if servers.is_empty() {
+        return match unlink(RESOLV_PATH) {
+            Ok(_) | Err(SysError::NoEntry) => Ok(()),
+            Err(e) => Err(e),
+        };
+    }
+
+    let fd = open(
+        RESOLV_PATH,
+        OpenFlag::CREATE | OpenFlag::WRITE_ONLY | OpenFlag::TRUNCATE,
+    )?;
+
+    for server in servers {
+        if let Err(e) = write(fd, format!("{}\n", server).as_bytes()) {
+            let _ = close(fd);
+            return Err(e);
+        }
+    }
+
+    close(fd)?;
+    Ok(())
+}
+
+/// Reads up to `MAX_SERVERS` addresses from `RESOLV_PATH`, one per line.
+fn get_servers() -> Result<Vec<Ipv4Addr>, DnsError> {
     let fd = open(RESOLV_PATH, OpenFlag::READ_ONLY).map_err(|_| DnsError::NoServers)?;
 
     let mut buf = [0u8; 256];
@@ -381,11 +408,11 @@ fn wait_reply(
     }
 }
 
-/// Resolves `name` using the servers in `/etc/resolv`, in order.
+/// Resolves `name` using the servers in `RESOLV_PATH`, in order.
 pub fn resolve(name: &str) -> Result<Vec<Ipv4Addr>, DnsError> {
     let mut last_err = None;
 
-    for server in servers()? {
+    for server in get_servers()? {
         match query(SockAddr::inet(server, DNS_PORT), name) {
             Ok(a) => return Ok(a),
             Err(e) => match e {

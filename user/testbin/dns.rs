@@ -494,8 +494,85 @@ fn test_resolve_uses_file() {
     assert_eq!(queries, 1, "one query");
 }
 
+/// Returns the contents of /etc/resolv, or `None` if it doesn't exist.
+fn read_resolv() -> Option<String> {
+    let fd = match open(RESOLV_PATH, OpenFlag::READ_ONLY) {
+        Ok(fd) => fd,
+        Err(SysError::NoEntry) => return None,
+        Err(e) => panic!("open {RESOLV_PATH}: {e:?}"),
+    };
+
+    let mut buf = [0u8; 256];
+    let n = read(fd, &mut buf).expect("read resolv");
+    close(fd).expect("close");
+
+    Some(String::from(
+        str::from_utf8(&buf[..n]).expect("resolv must be UTF-8"),
+    ))
+}
+
+/// init creates /etc and removes any /etc/resolv left by a previous boot.
+fn test_boot_state() {
+    let fd = open(RESOLV_DIR, OpenFlag::READ_ONLY).expect("init must create /etc");
+    close(fd).expect("close");
+    assert_eq!(read_resolv(), None, "init must remove /etc/resolv at boot");
+}
+
+/// set_servers writes one address per line, in order.
+fn test_set_servers_format() {
+    let servers = [ADDR, ADDR2, Ipv4Addr::LOOPBACK];
+    dns::set_servers(&servers).expect("set_servers");
+    let content = read_resolv();
+    remove_resolv();
+
+    assert_eq!(
+        content.as_deref(),
+        Some("192.0.2.10\n192.0.2.11\n127.0.0.1\n"),
+        "file contents"
+    );
+}
+
+/// A shorter list replaces a longer one completely.
+fn test_set_servers_truncates() {
+    dns::set_servers(&[ADDR, ADDR2, Ipv4Addr::LOOPBACK]).expect("set_servers three");
+    dns::set_servers(&[ADDR]).expect("set_servers one");
+    let content = read_resolv();
+    remove_resolv();
+
+    assert_eq!(
+        content.as_deref(),
+        Some("192.0.2.10\n"),
+        "old lines must not survive"
+    );
+}
+
+/// An empty list removes the file, and removing a missing file is fine.
+fn test_set_servers_empty() {
+    dns::set_servers(&[ADDR]).expect("set_servers");
+    dns::set_servers(&[]).expect("set_servers empty");
+    assert_eq!(read_resolv(), None, "empty list must remove the file");
+
+    dns::set_servers(&[]).expect("clearing twice must be fine");
+    assert_eq!(dns::resolve("example.com"), Err(DnsError::NoServers));
+}
+
+/// What set_servers writes is what resolve uses.
+fn test_set_servers_round_trip() {
+    dns::set_servers(&[Ipv4Addr::LOOPBACK]).expect("set_servers");
+    fake_server(DNS_PORT, 1, answer);
+    let result = dns::resolve("example.com");
+    let queries = server_queries();
+    dns::set_servers(&[]).expect("set_servers empty");
+
+    assert_eq!(result, Ok(vec![ADDR]));
+    assert_eq!(queries, 1, "one query");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
+    // first, before any test writes /etc/resolv
+    test_boot_state();
+
     test_encode_example();
     test_encode_trailing_dot();
     test_encode_longest_name();
@@ -533,4 +610,9 @@ fn main(_args: Args) {
     test_resolve_no_file();
     test_resolve_no_servers();
     test_resolve_uses_file();
+
+    test_set_servers_format();
+    test_set_servers_truncates();
+    test_set_servers_empty();
+    test_set_servers_round_trip();
 }
