@@ -3,7 +3,6 @@
 
 use user::prelude::*;
 
-use user::env::str_from_cstr;
 use user::fs::open;
 use user::io::close;
 
@@ -25,7 +24,7 @@ fn wc(mut fd: Fd, name: &str) {
             buf[n] = 0; // null-terminate the buffer for str_from_cstr
         }
 
-        match unsafe { str_from_cstr(&buf) } {
+        match str::from_utf8(&buf) {
             Ok(str) => {
                 c += str.len();
                 l += str.chars().filter(|&c| c == '\n').count();

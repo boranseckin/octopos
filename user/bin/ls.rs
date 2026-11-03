@@ -3,7 +3,6 @@
 
 use user::prelude::*;
 
-use user::env::str_from_cstr;
 use user::fs::{Directory, InodeType, MAXPATH, Stat, fstat, open};
 use user::io::close;
 
@@ -56,8 +55,9 @@ fn ls(path: &str) {
                 }
                 full_path[path_len..path_len + name_len].copy_from_slice(&dir.name[..name_len]);
 
-                let file_name = unsafe { str_from_cstr(&dir.name).expect("ls: malformed path") };
-                let file_path = unsafe { str_from_cstr(&full_path).expect("ls: malformed path") };
+                let file_name = str::from_utf8(&dir.name[..name_len]).expect("ls: malformed path");
+                let file_path =
+                    str::from_utf8(&full_path[..path_len + name_len]).expect("ls: malformed path");
 
                 let Ok(file_fd) = open(file_path, OpenFlag::READ_ONLY) else {
                     eprintln!("ls: cannot open {}", file_name);

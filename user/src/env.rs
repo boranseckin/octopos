@@ -1,6 +1,5 @@
 use core::arch::asm;
 use core::slice;
-use core::str::Utf8Error;
 
 /// Represents command-line arguments passed to the program.
 pub struct Args {
@@ -144,20 +143,5 @@ impl IntoIterator for &Args {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
-    }
-}
-
-/// Converts a C-style string pointer to a Rust-style `&str`.
-///
-/// # Safety
-/// The caller must ensure that `cstr` is a valid null-terminated UTF-8 string.
-pub unsafe fn str_from_cstr<'a>(cstr: &[u8]) -> Result<&'a str, Utf8Error> {
-    let ptr = cstr.as_ptr();
-    unsafe {
-        let mut len = 0;
-        while len < cstr.len() && *ptr.add(len) != 0 {
-            len += 1;
-        }
-        str::from_utf8(slice::from_raw_parts(ptr, len))
     }
 }
