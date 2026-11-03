@@ -193,6 +193,24 @@ impl NetDevice for E1000Interface {
     }
 }
 
+/// Reads the MAC the card loaded into receive address 0 at reset (from its EEPROM, or QEMU's
+/// `mac=` option). Returns `None` if the address-valid bit isn't set.
+fn read_mac(state: &E1000) -> Option<MacAddr> {
+    let ral = state.read_reg(E1000_MMIO_RAL);
+    let rah = state.read_reg(E1000_MMIO_RAH);
+
+    // check valid bit
+    if (rah >> 31) == 0 {
+        return None;
+    }
+
+    let mut bytes = [0u8; 6];
+    bytes[0..4].copy_from_slice(&ral.to_le_bytes());
+    bytes[4..6].copy_from_slice(&rah.to_le_bytes()[..2]);
+
+    Some(MacAddr(bytes))
+}
+
 /// Handles an interrupt from the e1000 device by checking the Interrupt Cause Read (ICR) register
 /// to determine the cause of the interrupt. If the interrupt was caused by a received packet
 /// (RXT0), the function disables further RXT0 interrupts until the packet is processed.
@@ -284,8 +302,12 @@ pub unsafe fn init() {
     state.base = base;
 
     // set RST bit to trigger a full reset
-    // documentation suggests a 1us sleep after reset, but we ignore it
     state.set_mask(E1000_MMIO_CTRL, 1 << 26);
+
+    // wait until out of reset
+    while state.read_reg(E1000_MMIO_CTRL) & (1 << 26) != 0 {}
+
+    let mac = read_mac(&state).expect("e1000: no MAC address");
 
     // allocate receive buffers
     // each buffer is 2 KB in size by default set in RCTL.BSIZE.
@@ -298,10 +320,6 @@ pub unsafe fn init() {
             ) as u64;
         }
     }
-
-    // set RAL/RAH to MAC 52:54:00:12:34:56 and address valid bit RAH[31]
-    state.write_reg(E1000_MMIO_RAL, 0x12005452);
-    state.write_reg(E1000_MMIO_RAH, 0x80005634);
 
     // set MTA to 0 for all 128 entries
     for i in 0..128 {
@@ -367,7 +385,7 @@ pub unsafe fn init() {
         interface_id,
         InterfaceConfig {
             name: "e1000",
-            mac: MacAddr([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
+            mac,
             ipv4: None,
             is_up: true,
         },
