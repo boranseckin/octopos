@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::net::eth::EthernetHeader;
+use crate::net::eth::{EthernetHeader, MAX_FRAME};
 use crate::net::interface;
 use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::{InterfaceId, NetError, Result};
@@ -49,7 +49,7 @@ impl PacketSocket {
             err!(NetError::MalformedPacket);
         }
 
-        if frame.len() > 1514 {
+        if frame.len() > MAX_FRAME {
             err!(NetError::PacketTooLarge);
         }
 

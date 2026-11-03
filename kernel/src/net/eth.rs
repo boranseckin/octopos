@@ -1,5 +1,7 @@
 use crate::net::{Be, MacAddr, NetworkHeader};
 
+pub const MAX_FRAME: usize = 1514;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum EtherType {

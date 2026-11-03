@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
+use crate::net::eth::MAX_FRAME;
 use crate::net::icmp::PingSocket;
 use crate::net::interface;
 use crate::net::packet::PacketSocket;
@@ -10,6 +11,9 @@ use crate::net::{InterfaceId, Ipv4Addr, MacAddr, NetError, Result};
 use crate::proc::{self, Channel, Pod};
 use crate::spinlock::SpinLock;
 use crate::trap::TICKS;
+
+/// Largest payload any socket type accepts: a full Ethernet frame for packet sockets.
+pub const MAX_SEND: usize = MAX_FRAME;
 
 const MAX_RECV_QUEUE_DEPTH: usize = 16;
 

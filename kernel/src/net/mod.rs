@@ -28,6 +28,7 @@ pub(crate) mod udp;
 
 const OUTGOING_QUEUE_SIZE: usize = 16;
 const INCOMING_QUEUE_SIZE: usize = 16;
+
 const ARP_RESOLVE_TIMEOUT: usize = 3 * TICKS_PER_SEC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3,7 +3,7 @@ use alloc::vec;
 use crate::file::{FILE_TABLE, File, FileType};
 use crate::net::interface::{self, InterfaceId, RawInterface};
 use crate::net::route::{self, RawRoute, RouteEntry};
-use crate::net::socket::{RawSockAddr, SockAddr, Socket, SocketType};
+use crate::net::socket::{MAX_SEND, RawSockAddr, SockAddr, Socket, SocketType};
 use crate::net::{Ipv4Addr, Ipv4Cidr};
 use crate::proc::{self, copy_from_user, copy_struct_from_user, copy_struct_to_user};
 use crate::syscall::{Result, SysError, SyscallArgs};
@@ -127,12 +127,15 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize> {
     let buf_addr = args.get_addr(1);
     let buf_len = args.get_int(2) as usize;
 
+    ensure!(buf_len <= MAX_SEND, SysError::MessageTooLarge);
+
     let socket = file_socket(&file)?;
 
     let raw_addr_va = args.get_addr(3);
     let raw_addr: RawSockAddr = copy_struct_from_user(raw_addr_va)?;
     let addr = SockAddr::try_from(raw_addr)?;
 
+    // allocation is capped at MAX_SEND length by the ensure
     let mut payload = vec![0u8; buf_len];
     copy_from_user(buf_addr, &mut payload)?;
 
