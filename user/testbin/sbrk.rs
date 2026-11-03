@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::process::{fork, sbrk, wait};
 
 fn test_grow() {
     let base = sbrk(0x1000).expect("grow");

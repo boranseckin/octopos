@@ -1,14 +1,14 @@
 #![no_std]
 #![no_main]
 
-extern crate alloc;
-
-use alloc::alloc::{alloc as raw_alloc, dealloc as raw_dealloc};
 use core::alloc::Layout;
 use core::hint::black_box;
 use core::ptr;
 
-use user::*;
+use user::prelude::*;
+
+use user::alloc::alloc::{alloc as raw_alloc, dealloc as raw_dealloc};
+use user::process::{fork, sbrk, wait};
 
 /// Allocator unit: one 16-byte header.
 const UNIT: usize = 16;

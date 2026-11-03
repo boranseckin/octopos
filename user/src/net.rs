@@ -1,8 +1,93 @@
 use alloc::vec::Vec;
 
-use crate::{
-    InterfaceFlag, InterfaceId, Ipv4Addr, Ipv4Cidr, MacAddr, RawInterface, SysError, interface_get,
+use kernel::abi::{RawInterface, RawRoute, RawSockAddr, SysError};
+
+use crate::io::Fd;
+use crate::syscall::{check, check_unit, raw};
+
+pub use kernel::abi::{
+    Be, EtherType, EthernetHeader, InterfaceFlag, InterfaceId, Ipv4Addr, Ipv4Cidr, Ipv4Header,
+    Ipv4Proto, MacAddr, NetworkHeader, RouteEntry, RouteFlag, RouteKind, RouteOwner, SockAddr,
+    SocketType, UdpHeader,
 };
+
+pub fn socket(typ: SocketType, addr: SockAddr) -> Result<Fd, SysError> {
+    check(raw::socket(
+        typ as usize,
+        &RawSockAddr::from(addr) as *const RawSockAddr,
+    ))
+    .map(Fd)
+}
+
+pub fn send(fd: Fd, buf: &[u8], dest_addr: SockAddr) -> Result<usize, SysError> {
+    check(raw::send(
+        fd.as_raw(),
+        buf.as_ptr(),
+        buf.len(),
+        &RawSockAddr::from(dest_addr) as *const RawSockAddr,
+    ))
+}
+
+pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<(usize, SockAddr), SysError> {
+    let mut src_addr = RawSockAddr::default();
+
+    let value = check(raw::receive(
+        fd.as_raw(),
+        buf.as_mut_ptr(),
+        buf.len(),
+        &mut src_addr as *mut RawSockAddr,
+    ))?;
+
+    Ok((
+        value,
+        SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
+    ))
+}
+
+pub fn interface_get(index: usize) -> Result<RawInterface, SysError> {
+    let mut raw_interface = RawInterface::default();
+
+    check_unit(raw::interface_get(
+        &mut raw_interface as *mut RawInterface,
+        index,
+    ))?;
+
+    Ok(raw_interface)
+}
+
+/// Sets the IPv4 address of interface `id`. `0.0.0.0` clears it.
+pub fn interface_set_ipv4(id: InterfaceId, addr: Ipv4Addr, prefix_len: u8) -> Result<(), SysError> {
+    let raw_interface = RawInterface {
+        id: id.0,
+        addr: addr.0,
+        prefix_len,
+        ..Default::default()
+    };
+
+    check_unit(raw::interface_set_ipv4(
+        &raw_interface as *const RawInterface,
+    ))
+}
+
+pub fn route_get(index: usize) -> Result<RouteEntry, SysError> {
+    let mut raw_route = RawRoute::default();
+
+    check(raw::route_get(&mut raw_route as *mut RawRoute, index))?;
+
+    Ok(RouteEntry::try_from(raw_route)?)
+}
+
+pub fn route_add(route: &RouteEntry, flags: usize) -> Result<(), SysError> {
+    let raw_route = RawRoute::from(*route);
+
+    check_unit(raw::route_add(&raw_route as *const RawRoute, flags))
+}
+
+pub fn route_remove(route: &RouteEntry) -> Result<(), SysError> {
+    let raw_route = RawRoute::from(*route);
+
+    check_unit(raw::route_remove(&raw_route as *const RawRoute))
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Interface {

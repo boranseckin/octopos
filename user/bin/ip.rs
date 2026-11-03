@@ -2,9 +2,12 @@
 #![no_main]
 #![feature(anonymous_lifetime_in_impl_trait)]
 
-use core::str::FromStr;
+use user::prelude::*;
 
-use user::*;
+use user::net::{
+    Interface, Ipv4Cidr, RouteEntry, RouteFlag, RouteKind, RouteOwner, interface_set_ipv4,
+    interfaces, resolve_interface, route_add, route_get, route_remove,
+};
 
 const USAGE: &str = "usage: ip addr
        ip addr set <dev> <addr>/<prefix>
@@ -101,8 +104,9 @@ fn addr_list_cmd() {
 
 fn addr_set_cmd(rest: &mut impl Iterator<Item = &str>) {
     let interface = resolve_dev(next_arg(rest));
-    let Ipv4Cidr { addr, prefix_len } =
-        Ipv4Cidr::from_str(next_arg(rest)).unwrap_or_else(|_| exit_with_msg("invalid address"));
+    let Ipv4Cidr { addr, prefix_len } = next_arg(rest)
+        .parse()
+        .unwrap_or_else(|_| exit_with_msg("invalid address"));
 
     if addr == Ipv4Addr::UNSPECIFIED {
         exit_with_msg("use `ip addr clear` to remove an address");
@@ -185,7 +189,8 @@ fn route_list_cmd() {
 /// Parses `<dest>/<prefix> [via <gw>] dev <dev> [metric <n>] [src <addr>] [replace]`.
 /// `metric`, `src` and `replace` are only accepted when `minimum` is unset (for `add`).
 fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEntry, bool) {
-    let Ipv4Cidr { addr, prefix_len } = Ipv4Cidr::from_str(next_arg(rest))
+    let Ipv4Cidr { addr, prefix_len } = next_arg(rest)
+        .parse()
         .unwrap_or_else(|_| exit_with_msg("invalid destination address"));
 
     let mut gateway = None;
@@ -198,7 +203,8 @@ fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEn
         match keyword {
             "via" => {
                 gateway = Some(
-                    Ipv4Addr::from_str(next_arg(rest))
+                    next_arg(rest)
+                        .parse()
                         .unwrap_or_else(|_| exit_with_msg("invalid gateway address")),
                 )
             }
@@ -210,7 +216,8 @@ fn parse_route(rest: &mut impl Iterator<Item = &str>, minimum: bool) -> (RouteEn
             }
             "src" if !minimum => {
                 pref_src = Some(
-                    Ipv4Addr::from_str(next_arg(rest))
+                    next_arg(rest)
+                        .parse()
                         .unwrap_or_else(|_| exit_with_msg("invalid src address")),
                 );
             }

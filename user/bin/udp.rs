@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::read;
+use user::net::{SocketType, receive, send, socket};
 
 const USAGE: &str = "usage: udp listen <port>
        udp send <address> <port> [message]";

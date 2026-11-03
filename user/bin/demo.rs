@@ -1,14 +1,15 @@
 #![no_std]
 #![no_main]
 
-use core::str;
+use user::prelude::*;
 
-use user::*;
+use user::io::{close, pipe};
+use user::process::{TICKS_PER_SEC, fork, getpid, sleep, uptime, wait};
 
 // Duration each parallel worker sleeps. Timer ticks run at ~100 Hz in xv6-style systems, so 10
-// ticks ≈ 100 ms. We keep it short so the demo finishes quickly while still being measurable with
+// ticks ~= 100 ms. We keep it short so the demo finishes quickly while still being measurable with
 // the tick counter.
-const SLEEP_TICKS: usize = 10;
+const SLEEP_TICKS: usize = TICKS_PER_SEC;
 
 // Must match the -smp value in .cargo/config.toml so we actually saturate all available hardware
 // threads.

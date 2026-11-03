@@ -1,7 +1,15 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::close;
+use user::net::{
+    Interface, InterfaceId, RouteEntry, RouteFlag, RouteKind, RouteOwner, SocketType,
+    interface_get, interface_iter, interface_set_ipv4, loopback, route_add, route_get,
+    route_remove, send, socket,
+};
+use user::syscall::RawInterface;
 
 // All tests only touch lo and routes through lo, so a failure cannot cut the host link.
 // Tests that change lo's address restore 127.0.0.1/8 before returning.

@@ -1,7 +1,17 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::dns;
+use user::io::{Ioctl, ioctl};
+use user::net::{
+    Be, EtherType, EthernetHeader, Interface, Ipv4Header, Ipv4Proto, MacAddr, NetworkHeader,
+    RouteEntry, RouteFlag, RouteKind, RouteOwner, SocketType, UdpHeader, interface_set_ipv4,
+    receive, resolve_interface, route_add, route_remove, send, socket,
+};
+use user::process::{TICKS_PER_SEC, uptime};
+use user::random::random;
 
 const USAGE: &str = "usage: dhcpc <dev>";
 

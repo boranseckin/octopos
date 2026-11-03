@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::{close, pipe};
+use user::process::{fork, uptime, wait};
 
 // Upper bound for prime counting.
 const LIMIT: usize = 30_000_000;

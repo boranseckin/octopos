@@ -1,7 +1,13 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::dns;
+use user::fs::{mkdir, mknod, open};
+use user::io::{CONSOLE, close, dup};
+use user::net::interfaces;
+use user::process::{exec, fork, wait};
 
 #[unsafe(no_mangle)]
 fn main(_args: Args) {

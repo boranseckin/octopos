@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::env::str_from_cstr;
+use user::fs::{Directory, InodeType, MAXPATH, Stat, fstat, open};
+use user::io::close;
 
 fn type_char(t: InodeType) -> char {
     match t {

@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::env::str_from_cstr;
+use user::fs::open;
+use user::io::close;
 
 fn wc(mut fd: Fd, name: &str) {
     let mut l = 0;

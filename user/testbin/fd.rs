@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::fs::{open, unlink};
+use user::io::{close, dup, pipe, read, write};
+use user::process::{fork, wait};
 
 const O_CREATE_RW: usize = OpenFlag::CREATE | OpenFlag::READ_WRITE | OpenFlag::TRUNCATE;
 

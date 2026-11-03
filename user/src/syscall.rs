@@ -1,3 +1,52 @@
+use kernel::abi::{MAXPATH, SysError};
+
+pub use kernel::abi::{InterfaceOp, RawInterface, RawRoute, RawSockAddr, RouteOp, Syscall};
+
+/// A validated path suitable for passing to syscalls.
+///
+/// Guarantees that the inner string is shorter than `MAXPATH` and contains no
+/// embedded null bytes, so it can be safely null-terminated on the stack.
+#[derive(Debug, Clone, Copy)]
+struct Path<'a>(&'a str);
+
+impl<'a> Path<'a> {
+    fn new(s: &'a str) -> Result<Self, SysError> {
+        if s.len() >= MAXPATH || s.bytes().any(|b| b == 0) {
+            return Err(SysError::NameTooLong);
+        }
+        Ok(Self(s))
+    }
+
+    /// Creates a null-terminated C-string buffer on the stack.
+    fn as_cpath(&self) -> [u8; MAXPATH] {
+        let mut buf = [0u8; MAXPATH];
+        buf[..self.0.len()].copy_from_slice(self.0.as_bytes());
+        buf
+    }
+}
+
+/// Validates a path string and creates a C-compatible path buffer.
+pub fn validate_path(path: &str) -> Result<[u8; MAXPATH], SysError> {
+    Ok(Path::new(path)?.as_cpath())
+}
+
+/// Converts a raw signed syscall return into `Result`, treating negative values as error codes.
+#[inline(always)]
+pub fn check(ret: isize) -> Result<usize, SysError> {
+    if ret >= 0 {
+        Ok(ret as usize)
+    } else {
+        Err(SysError::from_code((-ret) as u16))
+    }
+}
+
+/// Converts a raw syscall return into `Result<(), SysError>`.
+#[inline(always)]
+pub fn check_unit(ret: isize) -> Result<(), SysError> {
+    check(ret).map(|_| ())
+}
+
+/// Unchecked syscalls using raw-pointers and lengths.
 pub mod raw {
     use core::arch::asm;
 
@@ -213,292 +262,4 @@ pub mod raw {
     pub fn random(buf: *mut u8, len: usize) -> isize {
         syscall2(Syscall::Random, buf as usize, len)
     }
-}
-
-use core::fmt::Display;
-
-use kernel::abi::{
-    InterfaceId, Ipv4Addr, MAXPATH, RawInterface, RawRoute, RawSockAddr, RouteEntry, SockAddr,
-    SocketType, Stat, SysError,
-};
-
-/// A file descriptor returned by or passed to syscalls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Fd(usize);
-
-impl Fd {
-    pub const STDIN: Fd = Fd(0);
-    pub const STDOUT: Fd = Fd(1);
-    pub const STDERR: Fd = Fd(2);
-
-    /// Returns the raw file descriptor number.
-    pub fn as_raw(&self) -> usize {
-        self.0
-    }
-}
-
-impl core::fmt::Display for Fd {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// A validated path suitable for passing to syscalls.
-///
-/// Guarantees that the inner string is shorter than `MAXPATH` and contains no
-/// embedded null bytes, so it can be safely null-terminated on the stack.
-#[derive(Debug, Clone, Copy)]
-struct Path<'a>(&'a str);
-
-impl<'a> Path<'a> {
-    fn new(s: &'a str) -> Result<Self, SysError> {
-        if s.len() >= MAXPATH || s.bytes().any(|b| b == 0) {
-            return Err(SysError::NameTooLong);
-        }
-        Ok(Self(s))
-    }
-
-    /// Creates a null-terminated C-string buffer on the stack.
-    fn as_cpath(&self) -> [u8; MAXPATH] {
-        let mut buf = [0u8; MAXPATH];
-        buf[..self.0.len()].copy_from_slice(self.0.as_bytes());
-        buf
-    }
-}
-
-/// Converts a raw signed syscall return into `Result`, treating negative values as error codes.
-#[inline(always)]
-fn check(ret: isize) -> Result<usize, SysError> {
-    if ret >= 0 {
-        Ok(ret as usize)
-    } else {
-        Err(SysError::from_code((-ret) as u16))
-    }
-}
-
-/// Converts a raw syscall return into `Result<(), SysError>`.
-#[inline(always)]
-fn check_unit(ret: isize) -> Result<(), SysError> {
-    check(ret).map(|_| ())
-}
-
-/// Validates a path string and creates a C-compatible path buffer.
-fn validate_path(path: &str) -> Result<[u8; MAXPATH], SysError> {
-    Ok(Path::new(path)?.as_cpath())
-}
-
-pub fn fork() -> Result<usize, SysError> {
-    check(raw::fork())
-}
-
-pub fn exit(code: usize) -> ! {
-    raw::exit(code)
-}
-
-pub fn exit_with_msg(msg: impl Display) -> ! {
-    eprintln!("{}", msg);
-    exit(1);
-}
-
-pub fn wait(status: &mut usize) -> Result<usize, SysError> {
-    check(raw::wait(status as *mut usize))
-}
-
-pub fn pipe() -> Result<(Fd, Fd), SysError> {
-    let mut fds = [0usize; 2];
-    check_unit(raw::pipe(fds.as_mut_ptr()))?;
-    Ok((Fd(fds[0]), Fd(fds[1])))
-}
-
-pub fn read(fd: Fd, buf: &mut [u8]) -> Result<usize, SysError> {
-    check(raw::read(fd.as_raw(), buf.as_mut_ptr(), buf.len()))
-}
-
-pub fn write(fd: Fd, buf: &[u8]) -> Result<usize, SysError> {
-    check(raw::write(fd.as_raw(), buf.as_ptr(), buf.len()))
-}
-
-pub fn kill(pid: usize) -> Result<(), SysError> {
-    check_unit(raw::kill(pid))
-}
-
-/// Replaces the current process image with the program at `path`.
-///
-/// `argv` contains the argument strings. This function packs them into a contiguous
-/// stack buffer with null terminators and builds the pointer array expected by the kernel.
-///
-/// Returns `SysError` because if `exec` returns at all, it failed.
-pub fn exec(path: &str, argv: &[&str]) -> SysError {
-    let cpath = match validate_path(path) {
-        Ok(cpath) => cpath,
-        Err(e) => return e,
-    };
-
-    const MAX_ARGV: usize = 16;
-    const BUF_SIZE: usize = 512;
-
-    let mut buf = [0u8; BUF_SIZE];
-    let mut ptrs: [*const u8; MAX_ARGV + 1] = [core::ptr::null(); MAX_ARGV + 1];
-    let mut offset = 0;
-
-    for (i, arg) in argv.iter().enumerate().take(MAX_ARGV) {
-        ptrs[i] = buf[offset..].as_ptr();
-        buf[offset..offset + arg.len()].copy_from_slice(arg.as_bytes());
-        // buf is zeroed, so the byte after the arg is already a null terminator
-        offset += arg.len() + 1;
-    }
-    // ptrs is already null-terminated (initialized to null)
-
-    let ret = raw::exec(cpath.as_ptr(), ptrs.as_ptr());
-    // exec only returns on failure
-    SysError::from_code((-ret) as u16)
-}
-
-pub fn fstat(fd: Fd, stat: &mut Stat) -> Result<(), SysError> {
-    check_unit(raw::fstat(fd.as_raw(), stat as *mut Stat))
-}
-
-pub fn chdir(path: &str) -> Result<(), SysError> {
-    let cpath = validate_path(path)?;
-    check_unit(raw::chdir(cpath.as_ptr()))
-}
-
-pub fn dup(fd: Fd) -> Result<Fd, SysError> {
-    check(raw::dup(fd.as_raw())).map(Fd)
-}
-
-pub fn getpid() -> usize {
-    raw::getpid() as usize
-}
-
-pub fn sbrk(n: isize) -> Result<usize, SysError> {
-    check(raw::sbrk(n as usize))
-}
-
-pub fn sleep(ticks: usize) -> Result<(), SysError> {
-    check_unit(raw::sleep(ticks))
-}
-
-pub fn uptime() -> usize {
-    raw::uptime() as usize
-}
-
-pub fn open(path: &str, flags: usize) -> Result<Fd, SysError> {
-    let cpath = validate_path(path)?;
-    check(raw::open(cpath.as_ptr(), flags)).map(Fd)
-}
-
-pub fn close(fd: Fd) -> Result<(), SysError> {
-    check_unit(raw::close(fd.as_raw()))
-}
-
-pub fn mknod(path: &str, major: usize, minor: usize) -> Result<(), SysError> {
-    let cpath = validate_path(path)?;
-    check_unit(raw::mknod(cpath.as_ptr(), major, minor))
-}
-
-pub fn unlink(path: &str) -> Result<(), SysError> {
-    let cpath = validate_path(path)?;
-    check_unit(raw::unlink(cpath.as_ptr()))
-}
-
-pub fn link(old: &str, new: &str) -> Result<(), SysError> {
-    let cold = validate_path(old)?;
-    let cnew = validate_path(new)?;
-    check_unit(raw::link(cold.as_ptr(), cnew.as_ptr()))
-}
-
-pub fn mkdir(path: &str) -> Result<(), SysError> {
-    let cpath = validate_path(path)?;
-    check_unit(raw::mkdir(cpath.as_ptr()))
-}
-
-pub fn poweroff(code: u32) -> ! {
-    raw::poweroff(code)
-}
-
-pub fn ioctl(fd: Fd, cmd: usize, arg: usize) -> Result<usize, SysError> {
-    check(raw::ioctl(fd.as_raw(), cmd, arg))
-}
-
-pub fn socket(typ: SocketType, addr: SockAddr) -> Result<Fd, SysError> {
-    check(raw::socket(
-        typ as usize,
-        &RawSockAddr::from(addr) as *const RawSockAddr,
-    ))
-    .map(Fd)
-}
-
-pub fn send(fd: Fd, buf: &[u8], dest_addr: SockAddr) -> Result<usize, SysError> {
-    check(raw::send(
-        fd.as_raw(),
-        buf.as_ptr(),
-        buf.len(),
-        &RawSockAddr::from(dest_addr) as *const RawSockAddr,
-    ))
-}
-
-pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<(usize, SockAddr), SysError> {
-    let mut src_addr = RawSockAddr::default();
-
-    let value = check(raw::receive(
-        fd.as_raw(),
-        buf.as_mut_ptr(),
-        buf.len(),
-        &mut src_addr as *mut RawSockAddr,
-    ))?;
-
-    Ok((
-        value,
-        SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
-    ))
-}
-
-pub fn interface_get(index: usize) -> Result<RawInterface, SysError> {
-    let mut raw_interface = RawInterface::default();
-
-    check_unit(raw::interface_get(
-        &mut raw_interface as *mut RawInterface,
-        index,
-    ))?;
-
-    Ok(raw_interface)
-}
-
-/// Sets the IPv4 address of interface `id`. `0.0.0.0` clears it.
-pub fn interface_set_ipv4(id: InterfaceId, addr: Ipv4Addr, prefix_len: u8) -> Result<(), SysError> {
-    let raw_interface = RawInterface {
-        id: id.0,
-        addr: addr.0,
-        prefix_len,
-        ..Default::default()
-    };
-
-    check_unit(raw::interface_set_ipv4(
-        &raw_interface as *const RawInterface,
-    ))
-}
-
-pub fn route_get(index: usize) -> Result<RouteEntry, SysError> {
-    let mut raw_route = RawRoute::default();
-
-    check(raw::route_get(&mut raw_route as *mut RawRoute, index))?;
-
-    Ok(RouteEntry::try_from(raw_route)?)
-}
-
-pub fn route_add(route: &RouteEntry, flags: usize) -> Result<(), SysError> {
-    let raw_route = RawRoute::from(*route);
-
-    check_unit(raw::route_add(&raw_route as *const RawRoute, flags))
-}
-
-pub fn route_remove(route: &RouteEntry) -> Result<(), SysError> {
-    let raw_route = RawRoute::from(*route);
-
-    check_unit(raw::route_remove(&raw_route as *const RawRoute))
-}
-
-pub fn random(buf: &mut [u8]) -> Result<(), SysError> {
-    check_unit(raw::random(buf.as_mut_ptr(), buf.len()))
 }

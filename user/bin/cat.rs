@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::fs::open;
+use user::io::{Stdout, close};
 
 fn cat(mut fd: Fd) {
     let mut buf = [0u8; 512];

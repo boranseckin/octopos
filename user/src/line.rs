@@ -1,7 +1,6 @@
 use kernel::abi::Ioctl;
 
-use crate::io::{Read, Stderr, Stdin, Stdout, Write};
-use crate::syscall::{Fd, ioctl};
+use crate::io::{Fd, Read, Stderr, Stdin, Stdout, Write, ioctl};
 
 /// A line editor for reading user input from the console, supporting basic editing
 /// and a history of previous lines entered.

@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::env::Args;
+use user::process::{exit, fork, sbrk, wait};
 
 /// Verify parent and child see independent copies of the same page after a write.
 fn test_basic_cow() {

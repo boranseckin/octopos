@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::{Ioctl, close, ioctl};
+use user::net::{InterfaceId, MacAddr, SocketType, loopback, receive, send, socket};
+use user::process::uptime;
 
 const ETH_HEADER_SIZE: usize = 14;
 const ETH_MAX_FRAME: usize = 1514;

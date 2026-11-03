@@ -4,7 +4,11 @@
 use core::iter::Peekable;
 use core::str::Chars;
 
-use user::*;
+use user::prelude::*;
+
+use user::fs::{MAXPATH, chdir, open};
+use user::io::{Ioctl, LineEditor, close, dup, ioctl, pipe};
+use user::process::{exec, fork, wait};
 
 const MAXARGS: usize = 16;
 const MAXNODES: usize = 16;

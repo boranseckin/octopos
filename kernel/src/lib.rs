@@ -41,6 +41,7 @@ pub(crate) mod uart;
 pub(crate) mod virtio_disk;
 pub(crate) mod vm;
 
+#[doc(hidden)]
 pub mod abi;
 pub use kalloc::KernelAllocator;
 

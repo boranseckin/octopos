@@ -10,7 +10,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 use core::ptr;
 
-use crate::sbrk;
+use crate::process::sbrk;
 
 /// Minimum number of headers to request from sbrk at once (4 KiB).
 const MIN_GROW_UNITS: usize = 0x1000 / size_of::<Header>();

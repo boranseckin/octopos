@@ -6,10 +6,15 @@ use core::str::FromStr;
 use alloc::format;
 use alloc::vec::Vec;
 
-use crate::{
-    Be, Fd, Ioctl, Ipv4Addr, NetworkHeader, OpenFlag, SockAddr, SocketType, SysError,
-    TICKS_PER_SEC, close, ioctl, open, random, read, receive, send, socket, unlink, uptime, write,
+use kernel::abi::{
+    Be, Ioctl, Ipv4Addr, NetworkHeader, OpenFlag, SockAddr, SocketType, SysError, TICKS_PER_SEC,
 };
+
+use crate::fs::{open, unlink};
+use crate::io::{Fd, close, ioctl, read, write};
+use crate::net::{receive, send, socket};
+use crate::process::uptime;
+use crate::random::random;
 
 const DNS_PORT: u16 = 53;
 

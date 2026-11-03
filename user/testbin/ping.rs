@@ -1,7 +1,11 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::{Ioctl, close, ioctl};
+use user::net::{SocketType, receive, send, socket};
+use user::process::uptime;
 
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;

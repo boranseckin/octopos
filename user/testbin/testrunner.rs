@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::process::{exec, fork, poweroff, wait};
 
 const TESTS: &[&str] = &[
     "/_fs",

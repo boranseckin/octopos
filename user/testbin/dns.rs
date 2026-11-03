@@ -1,8 +1,14 @@
 #![no_std]
 #![no_main]
 
+use user::prelude::*;
+
+use user::fs::{mkdir, open, unlink};
+use user::io::{Ioctl, close, dup, ioctl, read, write};
+use user::net::{SocketType, receive, send, socket};
+
 use user::dns::{self, DnsError};
-use user::*;
+use user::process::{fork, wait};
 
 const ID: u16 = 0x1a2b;
 const ADDR: Ipv4Addr = Ipv4Addr([192, 0, 2, 10]);

@@ -1,7 +1,12 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::{close, pipe, read, write};
+use user::process::{fork, getpid, kill, sleep, wait};
+use user::random::random;
+use user::syscall::raw;
 
 /// getpid must return a valid (non-zero) pid, and a forked child must receive a
 /// different pid from its parent.

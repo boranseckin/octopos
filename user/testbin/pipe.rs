@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::io::{close, pipe, read, write};
+use user::process::{fork, wait};
 
 /// Write data into the write end of a pipe, close it, then drain the read end and verify that every
 /// byte arrives intact.

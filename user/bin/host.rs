@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
 
-use core::str::FromStr;
+use user::prelude::*;
 
-use user::*;
+use user::dns;
 
 const USAGE: &str = "usage: host <name>";
 
@@ -13,7 +13,7 @@ fn main(args: Args) {
         exit_with_msg(USAGE);
     };
 
-    if Ipv4Addr::from_str(name).is_ok() {
+    if name.parse::<Ipv4Addr>().is_ok() {
         exit_with_msg("host: reverse lookups are not supported")
     }
 

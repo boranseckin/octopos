@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::fs::{InodeType, Stat, fstat, link, mkdir, open, unlink};
+use user::io::{close, read, write};
 
 /// Open for both reading and writing, creating the file if it doesn't exist.
 const O_CREATE_RW: usize = OpenFlag::CREATE | OpenFlag::READ_WRITE | OpenFlag::TRUNCATE;

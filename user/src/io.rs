@@ -1,6 +1,56 @@
 use kernel::abi::SysError;
 
-use crate::syscall::{self, Fd};
+use crate::syscall::{check, check_unit, raw};
+
+pub use crate::line::LineEditor;
+pub use kernel::abi::{CONSOLE, Ioctl};
+
+/// A file descriptor returned by or passed to syscalls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fd(pub usize);
+
+impl Fd {
+    pub const STDIN: Fd = Fd(0);
+    pub const STDOUT: Fd = Fd(1);
+    pub const STDERR: Fd = Fd(2);
+
+    /// Returns the raw file descriptor number.
+    pub fn as_raw(&self) -> usize {
+        self.0
+    }
+}
+
+impl core::fmt::Display for Fd {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub fn dup(fd: Fd) -> Result<Fd, SysError> {
+    check(raw::dup(fd.as_raw())).map(Fd)
+}
+
+pub fn close(fd: Fd) -> Result<(), SysError> {
+    check_unit(raw::close(fd.as_raw()))
+}
+
+pub fn ioctl(fd: Fd, cmd: usize, arg: usize) -> Result<usize, SysError> {
+    check(raw::ioctl(fd.as_raw(), cmd, arg))
+}
+
+pub fn pipe() -> Result<(Fd, Fd), SysError> {
+    let mut fds = [0usize; 2];
+    check_unit(raw::pipe(fds.as_mut_ptr()))?;
+    Ok((Fd(fds[0]), Fd(fds[1])))
+}
+
+pub fn read(fd: Fd, buf: &mut [u8]) -> Result<usize, SysError> {
+    check(raw::read(fd.as_raw(), buf.as_mut_ptr(), buf.len()))
+}
+
+pub fn write(fd: Fd, buf: &[u8]) -> Result<usize, SysError> {
+    check(raw::write(fd.as_raw(), buf.as_ptr(), buf.len()))
+}
 
 /// Implemented by readable byte sources, analogous to `std::io::Read`.
 pub trait Read {
@@ -38,13 +88,13 @@ pub trait Write {
 /// generic reader or writer is expected (e.g. `fn cat(src: &mut impl Read)`).
 impl Read for Fd {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, SysError> {
-        syscall::read(*self, buf)
+        read(*self, buf)
     }
 }
 
 impl Write for Fd {
     fn write(&mut self, buf: &[u8]) -> Result<usize, SysError> {
-        syscall::write(*self, buf)
+        write(*self, buf)
     }
 }
 
@@ -52,7 +102,7 @@ pub struct Stdin;
 
 impl Read for Stdin {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, SysError> {
-        syscall::read(Fd::STDIN, buf)
+        read(Fd::STDIN, buf)
     }
 }
 
@@ -60,7 +110,7 @@ pub struct Stdout;
 
 impl Write for Stdout {
     fn write(&mut self, buf: &[u8]) -> Result<usize, SysError> {
-        syscall::write(Fd::STDOUT, buf)
+        write(Fd::STDOUT, buf)
     }
 }
 
@@ -76,7 +126,7 @@ pub struct Stderr;
 
 impl Write for Stderr {
     fn write(&mut self, buf: &[u8]) -> Result<usize, SysError> {
-        syscall::write(Fd::STDERR, buf)
+        write(Fd::STDERR, buf)
     }
 }
 
@@ -89,8 +139,8 @@ impl core::fmt::Write for Stderr {
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        <$crate::Stdout as core::fmt::Write>::write_fmt(
-            &mut $crate::Stdout,
+        <$crate::io::Stdout as core::fmt::Write>::write_fmt(
+            &mut $crate::io::Stdout,
             format_args!($($arg)*),
         ).unwrap()
     };
@@ -103,15 +153,15 @@ macro_rules! println {
     };
 
     ($($arg:tt)*) => {
-        $crate::print!("{}\n", format_args!($($arg)*))
+        $crate::print!("{}\n", core::format_args!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! eprint {
     ($($arg:tt)*) => {
-        <$crate::Stderr as core::fmt::Write>::write_fmt(
-            &mut $crate::Stderr,
+        <$crate::io::Stderr as core::fmt::Write>::write_fmt(
+            &mut $crate::io::Stderr,
             format_args!($($arg)*),
         ).unwrap()
     };
@@ -124,6 +174,6 @@ macro_rules! eprintln {
     };
 
     ($($arg:tt)*) => {
-        $crate::eprint!("{}\n", format_args!($($arg)*))
+        $crate::eprint!("{}\n", core::format_args!($($arg)*))
     };
 }

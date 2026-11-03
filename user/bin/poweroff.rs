@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::process::poweroff;
 
 #[unsafe(no_mangle)]
 fn main(args: Args) {

@@ -1,7 +1,12 @@
 #![no_std]
 #![no_main]
 
-use user::*;
+use user::prelude::*;
+
+use user::dns;
+use user::io::{Ioctl, close, ioctl};
+use user::net::{SocketType, receive, send, socket};
+use user::process::{sleep, uptime};
 
 const USAGE: &str = "usage: ping <host> [count]";
 
