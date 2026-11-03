@@ -141,6 +141,14 @@ pub struct MacAddr(pub [u8; 6]);
 impl MacAddr {
     pub const UNSPECIFIED: Self = Self([0x00; 6]);
     pub const BROADCAST: Self = Self([0xff; 6]);
+
+    pub fn is_unspecified(&self) -> bool {
+        *self == Self::UNSPECIFIED
+    }
+
+    pub fn is_broadcast(&self) -> bool {
+        *self == Self::BROADCAST
+    }
 }
 
 impl core::fmt::Display for MacAddr {
@@ -162,6 +170,16 @@ impl Ipv4Addr {
     pub const UNSPECIFIED: Self = Self([0; 4]);
     pub const BROADCAST: Self = Self([255; 4]);
     pub const LOOPBACK: Self = Self([127, 0, 0, 1]);
+
+    /// 0.0.0.0
+    pub fn is_unspecified(&self) -> bool {
+        *self == Self::UNSPECIFIED
+    }
+
+    /// 255.255.255.255
+    pub fn is_broadcast(&self) -> bool {
+        *self == Self::BROADCAST
+    }
 
     /// 224.0.0.0 to 239.255.255.255 (224/4)
     pub fn is_multicast(&self) -> bool {
@@ -566,6 +584,28 @@ pub fn source_addr(route: &RouteEntry, interface: &InterfaceEntry) -> Option<Ipv
     route.pref_src.or(interface.config.ipv4.map(|c| c.addr))
 }
 
+/// Returns the Ethernet destination for `dest` if it does not need ARP: broadcast or multicast.
+/// `cidr` is the egress interface's address, for its subnet broadcast.
+fn link_destination(dest: Ipv4Addr, cidr: Ipv4Cidr) -> Option<MacAddr> {
+    if dest.is_broadcast() || Some(dest) == cidr.addr.subnet_broadcast(cidr.prefix_len) {
+        return Some(MacAddr::BROADCAST);
+    }
+
+    if dest.is_multicast() {
+        // 01:00:5e plus the low 23 bits of the address (RFC 1112 §6.4)
+        return Some(MacAddr([
+            0x01,
+            0x00,
+            0x5e,
+            dest.0[1] & 0x7f,
+            dest.0[2],
+            dest.0[3],
+        ]));
+    }
+
+    None
+}
+
 /// Transmits a packet after looking up the best route for the destination IP address, and passing
 /// it to the corresponding interface.
 /// Packets are passed as a list of segments that will be concatenated together.
@@ -617,6 +657,21 @@ pub fn transmit_with_route(
         // packet does not require address resolution, send it.
         interface.device.transmit(&packet)
     } else {
+        if let Some(cidr) = interface.config.ipv4
+            && let Some(mac) = link_destination(dest_ip, cidr)
+        {
+            packet[..6].copy_from_slice(&mac.0);
+            let sent = interface.device.transmit(&packet);
+
+            // the NIC does not see its own frames, so deliver local broadcasts ourselves.
+            // loopback does not need this since it already loops back.
+            if mac.is_broadcast() {
+                let _ = enqueue_incoming(interface.id, packet.clone());
+            }
+
+            return sent;
+        }
+
         // if gateway is specified, ARP for the gateway IP instead of the destination IP, since
         // that's the next hop we need to send the packet to.
         let arp_target = route.gateway.unwrap_or(dest_ip);
