@@ -186,6 +186,11 @@ impl Ipv4Addr {
         self.0[0] & 0xf0 == 224
     }
 
+    /// 127.0.0.0/8
+    pub fn is_loopback(&self) -> bool {
+        self.0[0] == 127
+    }
+
     /// Returns the subnet mask corresponding to the given prefix length, or `None` if the prefix
     /// length is greater than 32.
     pub fn prefix_len_to_mask(prefix_len: u8) -> Option<Self> {

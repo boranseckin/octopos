@@ -62,6 +62,12 @@ pub struct InterfaceEntry {
     pub device: Arc<dyn NetDevice>,
 }
 
+impl InterfaceEntry {
+    pub fn is_loopback(&self) -> bool {
+        self.id == loopback::interface_id()
+    }
+}
+
 pub struct InterfaceFlag;
 
 impl InterfaceFlag {
@@ -88,13 +94,13 @@ unsafe impl Pod for RawInterface {}
 
 impl From<InterfaceEntry> for RawInterface {
     fn from(value: InterfaceEntry) -> Self {
-        let config = value.config;
+        let config = &value.config;
 
         let mut flags = 0;
         if config.is_up {
             flags |= InterfaceFlag::UP;
         }
-        if value.id == loopback::interface_id() {
+        if value.is_loopback() {
             flags |= InterfaceFlag::LOOPBACK;
         }
         if config.ipv4.is_some() {

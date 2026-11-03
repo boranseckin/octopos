@@ -35,6 +35,10 @@ impl UdpSocket {
     /// - If the `interface` argument is `Some`, the socket will only receive datagrams that arrived
     ///   on that interface. If `None`, it will receive datagrams from any interface.
     pub fn bind(ip: Ipv4Addr, port: u16, interface: Option<InterfaceId>) -> Result<Arc<Self>> {
+        if !ip.is_unspecified() && !route::is_local_addr(ip) {
+            err!(NetError::InvalidAddress);
+        }
+
         let mut table = UDP_TABLE.lock();
         table.add(ip, port, interface)
     }
@@ -58,7 +62,8 @@ impl UdpSocket {
             err!(NetError::BadSocket)
         }
 
-        transmit_udp(dest_ip, dest_port, self.bound_port, buf)
+        let src_ip = (!self.bound_ip.is_unspecified()).then_some(self.bound_ip);
+        transmit_udp(src_ip, dest_ip, dest_port, self.bound_port, buf)
     }
 
     pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
@@ -322,7 +327,13 @@ impl UdpHeader {
 /// Transmits a UDP datagram to the specified destination IP and port, with the given source port
 /// and payload. This function constructs the UDP header, calculates the checksum, and then sends
 /// the packet using the underlying `net::transmit` function.
-fn transmit_udp(dest_ip: Ipv4Addr, dest_port: u16, src_port: u16, payload: &[u8]) -> Result<()> {
+fn transmit_udp(
+    src_ip: Option<Ipv4Addr>,
+    dest_ip: Ipv4Addr,
+    dest_port: u16,
+    src_port: u16,
+    payload: &[u8],
+) -> Result<()> {
     // UDP requires L3 routing information in the header for checksum calculation, so we need to do
     // the routing lookup before passing it to net::transmit().
     // To avoid double lookup, we are using net::transmit_with_route().
@@ -332,9 +343,14 @@ fn transmit_udp(dest_ip: Ipv4Addr, dest_port: u16, src_port: u16, payload: &[u8]
         err!(NetError::NotConfigured);
     };
 
-    let Some(src_ipv4) = source_addr(&route, &interface) else {
+    let Some(src_ipv4) = src_ip.or_else(|| source_addr(&route, &interface)) else {
         err!(NetError::NotConfigured);
     };
+
+    // reject loopback IPs when interface is not loopback.
+    if src_ipv4.is_loopback() && !interface.is_loopback() {
+        err!(NetError::NetworkUnreachable);
+    }
 
     let header =
         UdpHeader::new(src_port, dest_port, payload.len()).add_checksum(src_ipv4, dest_ip, payload);
