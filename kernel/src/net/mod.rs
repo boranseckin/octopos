@@ -430,26 +430,36 @@ struct IncomingPacket {
 #[derive(Debug, Clone)]
 struct IncomingQueue {
     slots: [Option<IncomingPacket>; INCOMING_QUEUE_SIZE],
+    /// Index of the oldest packet.
+    head: usize,
+    /// Number of queue packets.
+    len: usize,
 }
 
 static INCOMING_QUEUE: SpinLock<IncomingQueue> = SpinLock::new(
     IncomingQueue {
         slots: [const { None }; INCOMING_QUEUE_SIZE],
+        head: 0,
+        len: 0,
     },
     "net_in",
 );
 
 impl IncomingQueue {
     /// Enqueues a received packet to be processed by the network thread.
+    /// Errs if queue if full.
     fn enqueue(packet: IncomingPacket) -> Result<()> {
         let mut queue = INCOMING_QUEUE.lock();
 
-        if let Some(slot) = queue.slots.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(packet);
-            Ok(())
-        } else {
-            err!(NetError::QueueFull)
+        if queue.len == INCOMING_QUEUE_SIZE {
+            err!(NetError::QueueFull);
         }
+
+        let index = (queue.head + queue.len) % INCOMING_QUEUE_SIZE;
+        queue.slots[index] = Some(packet);
+        queue.len += 1;
+
+        Ok(())
     }
 
     /// Dequeues a packet for processing by the network thread, returning `None` if the queue is
@@ -458,7 +468,17 @@ impl IncomingQueue {
     /// Unlike other queue methods, caller holds the lock since it will sleep on the channel with
     /// the lock if the queue is empty.
     fn dequeue(&mut self) -> Option<IncomingPacket> {
-        self.slots.iter_mut().find_map(|slot| slot.take())
+        if self.len == 0 {
+            return None;
+        }
+
+        let packet = self.slots[self.head]
+            .take()
+            .expect("incoming queue should have a packet");
+        self.head = (self.head + 1) % INCOMING_QUEUE_SIZE;
+        self.len -= 1;
+
+        Some(packet)
     }
 }
 

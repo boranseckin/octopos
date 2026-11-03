@@ -548,6 +548,31 @@ fn test_accepts_broadcast() {
     close(fd).expect("close");
 }
 
+/// Datagrams sent back to back on lo arrive in the order they were sent.
+///
+/// This can only fail if packets are reordered, but timing decides whether the old incoming
+/// queue reordered them on a given run, so a pass isn't proof of FIFO order.
+fn test_loopback_order() {
+    // fits both the incoming queue and the socket's receive queue, so nothing is dropped
+    const COUNT: u8 = 16;
+
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+    let dest = SockAddr::inet(Ipv4Addr::LOOPBACK, port);
+
+    for i in 0..COUNT {
+        send(fd, &[i], dest).expect("send");
+    }
+
+    let mut buf = [0u8; 8];
+    for i in 0..COUNT {
+        let (n, _) = receive(fd, &mut buf).expect("receive");
+        assert_eq!(&buf[..n], &[i], "datagram {i} out of order");
+    }
+
+    close(fd).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -568,4 +593,5 @@ fn main(_args: Args) {
     test_no_port_unreachable_for_bad_source();
     test_drops_other_hosts();
     test_accepts_broadcast();
+    test_loopback_order();
 }
