@@ -1,8 +1,7 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
-use crate::net::route;
+use crate::net::ipv4::{Destination, Ipv4Header, Ipv4Proto};
 use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::udp::MAX_UDP_PAYLOAD;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
@@ -268,12 +267,16 @@ impl IcmpHeader {
 
 unsafe impl NetworkHeader for IcmpHeader {}
 
-pub fn send_port_unreachable(orig_ip: &Ipv4Header, orig_data: &[u8]) -> Result<()> {
+pub fn send_port_unreachable(
+    orig_ip: &Ipv4Header,
+    destination: Destination,
+    orig_data: &[u8],
+) -> Result<()> {
     let src = orig_ip.src();
 
     // RFC 1122 3.2.2
     // Do not answer to a datagram whose source address does not define a single host.
-    if !route::is_local_addr(orig_ip.dest())
+    if destination != Destination::Unicast
         || src == Ipv4Addr::UNSPECIFIED
         || src == Ipv4Addr::BROADCAST
         || src.is_multicast()
@@ -295,7 +298,12 @@ pub fn send_port_unreachable(orig_ip: &Ipv4Header, orig_data: &[u8]) -> Result<(
 /// Handles an incoming ICMP packet.
 /// If it's an Echo Request, sends back an Echo Reply.
 /// Otherwise, ignores it.
-pub fn handle_icmp(src_ip: Ipv4Addr, req_data: &[u8]) -> Result<()> {
+pub fn handle_icmp(src_ip: Ipv4Addr, destination: Destination, req_data: &[u8]) -> Result<()> {
+    // only respond to unicast messages.
+    if destination != Destination::Unicast {
+        return Ok(());
+    }
+
     let Some((header, payload)) = IcmpHeader::from_bytes_with_rest(req_data) else {
         err!(NetError::MalformedPacket)
     };

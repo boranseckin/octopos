@@ -196,6 +196,20 @@ impl Ipv4Addr {
 
         (mask == expected).then_some(prefix_len)
     }
+
+    /// Returns the subnet broadcast address for the given `prefix_len`.
+    /// e.g. 127.0.0.1/8 -> 127.255.255.255
+    ///
+    /// Returns `None` for /31 and /32, which have no broadcast address (RFC 3021), and for a
+    /// prefix length over 32.
+    pub fn subnet_broadcast(&self, prefix_len: u8) -> Option<Self> {
+        if prefix_len > 30 {
+            return None;
+        }
+
+        let mask = Self::prefix_len_to_mask(prefix_len)?;
+        Some(*self | !mask)
+    }
 }
 
 impl core::ops::BitAnd for Ipv4Addr {
@@ -205,6 +219,24 @@ impl core::ops::BitAnd for Ipv4Addr {
         let a = u32::from_be_bytes(self.0);
         let b = u32::from_be_bytes(rhs.0);
         Self((a & b).to_be_bytes())
+    }
+}
+
+impl core::ops::BitOr for Ipv4Addr {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        let a = u32::from_be_bytes(self.0);
+        let b = u32::from_be_bytes(rhs.0);
+        Self((a | b).to_be_bytes())
+    }
+}
+
+impl core::ops::Not for Ipv4Addr {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self((!u32::from_be_bytes(self.0)).to_be_bytes())
     }
 }
 

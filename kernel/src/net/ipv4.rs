@@ -1,7 +1,7 @@
-use crate::net::icmp;
-use crate::net::interface::InterfaceId;
+use crate::net::interface::{self, InterfaceId};
 use crate::net::udp;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
+use crate::net::{icmp, route};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -107,6 +107,28 @@ impl Ipv4Header {
 
 unsafe impl NetworkHeader for Ipv4Header {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Destination {
+    /// One of this host's own addresses.
+    Unicast,
+    /// 255.255.255.255, or the subnet broadcast of the receiving interface.
+    Broadcast,
+}
+
+/// Returns how `dest` reached us on `interface_id`, or `None` if the packet isn't for this host.
+fn classify(interface_id: InterfaceId, dest: Ipv4Addr) -> Option<Destination> {
+    if dest == Ipv4Addr::BROADCAST {
+        return Some(Destination::Broadcast);
+    }
+
+    if route::is_local_addr(dest) {
+        return Some(Destination::Unicast);
+    }
+
+    let cidr = interface::find_interface_by_id(interface_id)?.config.ipv4?;
+    (cidr.addr.subnet_broadcast(cidr.prefix_len)? == dest).then_some(Destination::Broadcast)
+}
+
 /// Handles an incoming IPv4 packet by parsing the header and dispatching to the appropriate
 /// protocol handler.
 pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<()> {
@@ -143,13 +165,19 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<()> {
         return Ok(());
     }
 
+    // Make sure the packet is addressed to us either by unicast or by broadcast.
+    // This might take route and interface locks so check this after everything else.
+    let Some(destination) = classify(interface_id, req_ipv4.dest()) else {
+        return Ok(());
+    };
+
     // Remove extra padding bytes added by the NIC, if any.
     let ipv4_payload_len = total_len - Ipv4Header::SIZE;
     let req_data = &req_data[..ipv4_payload_len.min(req_data.len())];
 
     match req_ipv4.proto() {
-        Ipv4Proto::Icmp => icmp::handle_icmp(req_ipv4.src, req_data),
-        Ipv4Proto::Udp => udp::handle_udp(interface_id, req_ipv4, req_data),
+        Ipv4Proto::Icmp => icmp::handle_icmp(req_ipv4.src, destination, req_data),
+        Ipv4Proto::Udp => udp::handle_udp(interface_id, req_ipv4, destination, req_data),
         Ipv4Proto::Unknown => Ok(()),
     }
 }

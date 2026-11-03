@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 
 use crate::net::icmp;
 use crate::net::interface::{self, InterfaceId};
-use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
+use crate::net::ipv4::{Destination, Ipv4Header, Ipv4Proto};
 use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
 use crate::net::{route, source_addr};
@@ -351,7 +351,12 @@ fn transmit_udp(dest_ip: Ipv4Addr, dest_port: u16, src_port: u16, payload: &[u8]
 /// Handles an incoming UDP datagram by parsing the header, validating it, and enqueuing the payload
 /// into the receive queue of the appropriate socket based on the destination port. If no socket is
 /// bound to the destination port, sends a destination port unreachable icmp message.
-pub fn handle_udp(interface_id: InterfaceId, req_ipv4: &Ipv4Header, datagram: &[u8]) -> Result<()> {
+pub fn handle_udp(
+    interface_id: InterfaceId,
+    req_ipv4: &Ipv4Header,
+    destination: Destination,
+    datagram: &[u8],
+) -> Result<()> {
     let Some((req_udp, req_data)) = UdpHeader::from_bytes_with_rest(datagram) else {
         err!(NetError::MalformedPacket)
     };
@@ -368,7 +373,7 @@ pub fn handle_udp(interface_id: InterfaceId, req_ipv4: &Ipv4Header, datagram: &[
         Some(interface_id),
     ) else {
         // no socket is bound to this (ip, port)
-        return icmp::send_port_unreachable(req_ipv4, &datagram[..UdpHeader::SIZE]);
+        return icmp::send_port_unreachable(req_ipv4, destination, &datagram[..UdpHeader::SIZE]);
     };
 
     // truncate data to declared length in the header

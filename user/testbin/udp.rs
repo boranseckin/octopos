@@ -504,6 +504,50 @@ fn test_send_rejects_huge_length() {
     close(fd).expect("close");
 }
 
+/// A datagram to an address on lo's subnet that isn't ours is dropped, even with a socket on
+/// 0.0.0.0 and the matching port.
+fn test_drops_other_hosts() {
+    let capture = open_lo_capture();
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+
+    send(fd, b"x", SockAddr::inet(Ipv4Addr([127, 0, 0, 2]), port)).expect("send");
+
+    // the datagram did reach lo, so a timeout below means it was dropped, not never sent
+    let mut frame = [0u8; 128];
+    let (saw_udp, _) = capture_icmp(capture, &mut frame);
+    assert!(saw_udp, "datagram must reach lo");
+
+    let mut buf = [0u8; 8];
+    assert_eq!(
+        receive(fd, &mut buf).map(|(n, _)| n),
+        Err(SysError::TimedOut),
+        "a datagram for another host must not be delivered"
+    );
+
+    close(fd).expect("close");
+    close(capture).expect("close");
+}
+
+/// A datagram to lo's subnet broadcast is delivered.
+fn test_accepts_broadcast() {
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+
+    send(
+        fd,
+        b"broadcast",
+        SockAddr::inet(Ipv4Addr([127, 255, 255, 255]), port),
+    )
+    .expect("send");
+
+    let mut buf = [0u8; 16];
+    let (n, _) = receive(fd, &mut buf).expect("a subnet broadcast must be delivered");
+    assert_eq!(&buf[..n], b"broadcast", "payload");
+
+    close(fd).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -522,4 +566,6 @@ fn main(_args: Args) {
     test_no_port_unreachable_when_bound();
     test_no_port_unreachable_for_broadcast();
     test_no_port_unreachable_for_bad_source();
+    test_drops_other_hosts();
+    test_accepts_broadcast();
 }

@@ -231,6 +231,34 @@ fn test_receive_timeout() {
     close(fd).expect("close");
 }
 
+/// Echo requests are only answered when sent to one of our own addresses.
+fn test_no_reply_unless_unicast() {
+    const TIMEOUT: usize = 5;
+
+    let cases = [
+        ("subnet broadcast", Ipv4Addr([127, 255, 255, 255])),
+        ("another host", Ipv4Addr([127, 0, 0, 2])),
+    ];
+
+    for (what, dest) in cases {
+        let (fd, _) = open_ping(0).expect("socket open");
+        ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, TIMEOUT).expect("ioctl set receive timeout");
+
+        let mut request = [0u8; 64];
+        let len = echo_request(&mut request, 0, 1, 0, PAYLOAD);
+        send(fd, &request[..len], SockAddr::inet(dest, 0)).expect("send");
+
+        let mut buf = [0u8; 64];
+        assert_eq!(
+            receive(fd, &mut buf).map(|(n, _)| n),
+            Err(SysError::TimedOut),
+            "no reply expected for {what}"
+        );
+
+        close(fd).expect("close");
+    }
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_echo_round_trip();
@@ -240,4 +268,5 @@ fn main(_args: Args) {
     test_duplicate_ident();
     test_reject_invalid_messages();
     test_receive_timeout();
+    test_no_reply_unless_unicast();
 }
