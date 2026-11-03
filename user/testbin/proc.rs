@@ -127,6 +127,52 @@ fn test_wait_only_own_children() {
     );
 }
 
+/// random fills every byte of a buffer that spans several of the kernel's 256-byte chunks.
+fn test_random_spans_chunks() {
+    const LEN: usize = 1000; // three full chunks and a partial one
+
+    let mut buf = [0u8; LEN];
+    random(&mut buf).expect("random");
+
+    // a 64-byte run of zeros from a working RNG is vanishingly unlikely
+    for (i, block) in buf.chunks(64).enumerate() {
+        assert!(
+            block.iter().any(|&b| b != 0),
+            "bytes {}..{} were never filled",
+            i * 64,
+            i * 64 + block.len()
+        );
+    }
+}
+
+/// Two calls give different bytes, so random isn't returning a fixed buffer.
+fn test_random_differs() {
+    let mut a = [0u8; 32];
+    let mut b = [0u8; 32];
+    random(&mut a).expect("random");
+    random(&mut b).expect("random");
+    assert_ne!(a, b, "two random buffers must differ");
+}
+
+/// A huge length at an invalid address fails cleanly instead of allocating for it.
+/// Before chunking, this panicked the kernel.
+fn test_random_huge_length() {
+    // user programs are linked at 0, so a low address would be our own code. MAXVA (1 << 38) is
+    // past the end of every user address space, so the kernel rejects it before writing.
+    const PAST_MAXVA: usize = 1 << 38;
+    let ret = raw::random(PAST_MAXVA as *mut u8, 1 << 40);
+    assert!(ret < 0, "random into an unmapped address must fail");
+    assert_eq!(
+        SysError::from_code((-ret) as u16),
+        SysError::BadAddress,
+        "error for an unmapped address"
+    );
+
+    // and the kernel is still fine
+    let mut buf = [0u8; 16];
+    random(&mut buf).expect("random after a failed call");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_getpid();
@@ -135,4 +181,7 @@ fn main(_args: Args) {
     test_kill();
     test_kill_invalid_pid();
     test_wait_only_own_children();
+    test_random_spans_chunks();
+    test_random_differs();
+    test_random_huge_length();
 }

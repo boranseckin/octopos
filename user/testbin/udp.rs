@@ -462,6 +462,40 @@ fn test_no_port_unreachable_for_bad_source() {
     close(capture).expect("close");
 }
 
+/// Converts a raw syscall return value into a result, like the safe wrappers do.
+fn raw_result(ret: isize) -> Result<usize, SysError> {
+    if ret >= 0 {
+        Ok(ret as usize)
+    } else {
+        Err(SysError::from_code((-ret) as u16))
+    }
+}
+
+/// A send length far larger than any buffer is rejected before the kernel allocates for it.
+/// Before the limit check, this panicked the kernel and ended the whole test run.
+fn test_send_rejects_huge_length() {
+    let (fd, port) = open_udp();
+    let dest = RawSockAddr::from(SockAddr::inet(Ipv4Addr::LOOPBACK, port));
+    let buf = [0u8; 8];
+
+    for len in [1usize << 40, usize::MAX, 1515] {
+        let ret = raw::send(fd.as_raw(), buf.as_ptr(), len, &dest);
+        assert_eq!(
+            raw_result(ret),
+            Err(SysError::MessageTooLarge),
+            "send of {len} bytes"
+        );
+    }
+
+    // the kernel and the socket still work
+    send(fd, b"ok", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send after rejection");
+    let mut out = [0u8; 8];
+    let (n, _) = receive(fd, &mut out).expect("receive after rejection");
+    assert_eq!(&out[..n], b"ok", "payload after rejection");
+
+    close(fd).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -475,6 +509,7 @@ fn main(_args: Args) {
     test_receive_timeout_per_call();
     test_receive_before_timeout();
     test_receive_timeout_cleared();
+    test_send_rejects_huge_length();
     test_port_unreachable();
     test_no_port_unreachable_when_bound();
     test_no_port_unreachable_for_broadcast();

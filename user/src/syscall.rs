@@ -1,4 +1,4 @@
-mod raw {
+pub mod raw {
     use core::arch::asm;
 
     use kernel::abi::{InterfaceOp, RawInterface, RawRoute, RawSockAddr, RouteOp, Stat, Syscall};
