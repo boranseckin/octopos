@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use user::net::Received;
 use user::prelude::*;
 
 use user::dns;
@@ -753,8 +754,12 @@ fn main(args: Args) {
         .unwrap_or_else(|e| exit_with_msg(e));
 
         match receive(fd, &mut buf) {
-            Ok((len, SockAddr::Link { mac, .. })) => client.on_reply(&buf[..len], mac),
-            Ok((_, SockAddr::Inet { .. })) => unreachable!("socket must have a link address"),
+            Ok(Received {
+                data,
+                src: SockAddr::Link { mac, .. },
+                ..
+            }) => client.on_reply(data, mac),
+            Ok(_) => unreachable!("socket must have a link address"),
             Err(SysError::TimedOut) => client.on_timeout(uptime()),
             Err(e) => exit_with_msg(e),
         };

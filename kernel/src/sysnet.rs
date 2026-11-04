@@ -155,13 +155,14 @@ pub fn sys_send(args: &SyscallArgs) -> Result<usize> {
 ///
 /// - `a0` (`Fd`): socket file descriptor.
 /// - `a1` (`*mut u8`): pointer to the receive buffer.
-/// - `a2` (`usize`): receive buffer capacity in bytes. If the datagram is larger, excess bytes
-///   are silently discarded.
+/// - `a2` (`usize`): receive buffer capacity in bytes. If the datagram is larger, only the first
+///   `a2` bytes are written and the rest is discarded.
 /// - `a3` (`*mut RawSockAddr`): pointer to a source socket address.
 ///
 /// # Returns
 ///
-/// `Ok(n)`: number of bytes written into the receive buffer.
+/// `Ok(n)`: total number of bytes received. At most `a2` bytes are written, so `n > a2` means
+/// it was truncated.
 ///
 /// # Errors
 ///
@@ -180,13 +181,14 @@ pub fn sys_receive(args: &SyscallArgs) -> Result<usize> {
     let socket = file_socket(&file)?;
 
     let (addr, received) = socket.receive()?;
-    let copy_len = received.len().min(buf_len);
+    let recv_len = received.len();
+    let copy_len = recv_len.min(buf_len);
     let raw_addr = RawSockAddr::from(addr);
 
     proc::copy_struct_to_user(&raw_addr, src_addr_ptr)?;
     proc::copy_to_user(&received[..copy_len], buf_addr)?;
 
-    Ok(copy_len)
+    Ok(recv_len)
 }
 
 #[repr(usize)]

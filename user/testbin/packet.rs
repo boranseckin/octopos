@@ -54,7 +54,7 @@ fn assert_nothing_received(fd: Fd, msg: &str) {
     set_receive_timeout(fd, TIMEOUT);
     let mut buf = [0u8; 64];
     assert_eq!(
-        receive(fd, &mut buf).map(|(n, _)| n),
+        receive(fd, &mut buf).map(|r| r.len()),
         Err(SysError::TimedOut),
         "{msg}"
     );
@@ -84,15 +84,15 @@ fn test_round_trip() {
     assert_eq!(n, len, "send must return frame length");
 
     let mut buf = [0u8; 64];
-    let (n, src) = receive(fd, &mut buf).expect("receive");
+    let reply = receive(fd, &mut buf).expect("receive");
 
     assert_eq!(
-        &buf[..n],
+        reply.data,
         &out[..len],
         "received frame must equal sent frame"
     );
     assert_eq!(
-        src,
+        reply.src,
         SockAddr::Link {
             interface: Some(lo),
             ether_type: Some(ETHERTYPE_TEST),
@@ -115,8 +115,8 @@ fn test_ethertype_filter() {
     send(fd_test2, &out[..len], SockAddr::any_link()).expect("send");
 
     let mut buf = [0u8; 64];
-    let (n, _) = receive(fd_test2, &mut buf).expect("matching socket must receive");
-    assert_eq!(&buf[..n], &out[..len], "frame mismatch");
+    let reply = receive(fd_test2, &mut buf).expect("matching socket must receive");
+    assert_eq!(reply.data, &out[..len], "frame mismatch");
 
     assert_nothing_received(
         fd_test,
@@ -140,10 +140,10 @@ fn test_fan_out_to_packet_sockets() {
 
     for fd in [fd1, fd2, fd_all] {
         let mut buf = [0u8; 64];
-        let (n, src) = receive(fd, &mut buf).expect("every matching socket must receive");
-        assert_eq!(&buf[..n], &out[..len], "frame mismatch");
+        let reply = receive(fd, &mut buf).expect("every matching socket must receive");
+        assert_eq!(reply.data, &out[..len], "frame mismatch");
         assert_eq!(
-            src,
+            reply.src,
             SockAddr::Link {
                 interface: Some(lo),
                 ether_type: Some(ETHERTYPE_TEST),
@@ -171,28 +171,32 @@ fn test_fan_out_with_kernel() {
     send(fd_udp, PAYLOAD, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("udp send");
 
     let mut buf = [0u8; 128];
-    let (n, _) = receive(fd_udp, &mut buf).expect("udp socket must still receive");
-    assert_eq!(&buf[..n], PAYLOAD, "udp payload mismatch");
+    let reply = receive(fd_udp, &mut buf).expect("udp socket must still receive");
+    assert_eq!(reply.data, PAYLOAD, "udp payload mismatch");
 
-    let (n, src) = receive(fd_packet, &mut buf).expect("packet socket must receive a copy");
+    let reply = receive(fd_packet, &mut buf).expect("packet socket must receive a copy");
+    let frame = reply.data;
     assert_eq!(
-        src,
+        reply.src,
         SockAddr::Link {
             interface: Some(lo),
             ether_type: Some(ETHERTYPE_IPV4),
-            mac: MacAddr(buf[6..12].try_into().unwrap()),
+            mac: MacAddr(frame[6..12].try_into().unwrap()),
         },
         "source mismatch"
     );
     assert_eq!(
-        u16::from_be_bytes([buf[12], buf[13]]),
+        u16::from_be_bytes([frame[12], frame[13]]),
         ETHERTYPE_IPV4,
         "frame must keep its Ethernet header"
     );
-    assert_eq!(buf[ETH_HEADER_SIZE], 0x45, "expected IPv4 without options");
+    assert_eq!(
+        frame[ETH_HEADER_SIZE], 0x45,
+        "expected IPv4 without options"
+    );
 
     let start = ETH_HEADER_SIZE + IPV4_HEADER_SIZE + UDP_HEADER_SIZE;
-    assert!(n >= start + PAYLOAD.len(), "frame too short");
+    assert!(reply.len() >= start + PAYLOAD.len(), "frame too short");
     assert_eq!(
         &buf[start..start + PAYLOAD.len()],
         PAYLOAD,
@@ -220,10 +224,10 @@ fn test_unbound_interface() {
     send(fd, &out[..len], SockAddr::link(Some(lo), None)).expect("send on explicit interface");
 
     let mut buf = [0u8; 64];
-    let (n, src) = receive(fd, &mut buf).expect("receive");
-    assert_eq!(&buf[..n], &out[..len], "frame mismatch");
+    let reply = receive(fd, &mut buf).expect("receive");
+    assert_eq!(reply.data, &out[..len], "frame mismatch");
     assert_eq!(
-        src,
+        reply.src,
         SockAddr::Link {
             interface: Some(lo),
             ether_type: Some(ETHERTYPE_TEST),
@@ -305,12 +309,20 @@ fn test_frame_size_limits() {
     let mut buf = [0u8; ETH_MAX_FRAME + 1];
 
     send(fd, &out[..ETH_HEADER_SIZE], dest).expect("header-only frame must be accepted");
-    let (n, _) = receive(fd, &mut buf).expect("receive header-only frame");
-    assert_eq!(n, ETH_HEADER_SIZE, "header-only frame length mismatch");
+    let reply = receive(fd, &mut buf).expect("receive header-only frame");
+    assert_eq!(
+        reply.len(),
+        ETH_HEADER_SIZE,
+        "header-only frame length mismatch"
+    );
 
     send(fd, &out[..ETH_MAX_FRAME], dest).expect("1514-byte frame must be accepted");
-    let (n, _) = receive(fd, &mut buf).expect("receive full-size frame");
-    assert_eq!(n, ETH_MAX_FRAME, "full-size frame length mismatch");
+    let reply = receive(fd, &mut buf).expect("receive full-size frame");
+    assert_eq!(
+        reply.len(),
+        ETH_MAX_FRAME,
+        "full-size frame length mismatch"
+    );
 
     close(fd).expect("close");
 }

@@ -28,20 +28,45 @@ pub fn send(fd: Fd, buf: &[u8], dest_addr: SockAddr) -> Result<usize, SysError> 
     ))
 }
 
-pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<(usize, SockAddr), SysError> {
+/// A datagram received into the caller's buffer.
+pub struct Received<'a> {
+    /// The bytes written into the buffer.
+    pub data: &'a [u8],
+    /// Source address.
+    pub src: SockAddr,
+    /// Indicator that the datagram was larger than the buffer, and the rest was discarded.
+    pub truncated: bool,
+}
+
+impl Received<'_> {
+    /// Bytes written into the buffer.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+pub fn receive(fd: Fd, buf: &mut [u8]) -> Result<Received<'_>, SysError> {
     let mut src_addr = RawSockAddr::default();
 
-    let value = check(raw::receive(
+    let full_len = check(raw::receive(
         fd.as_raw(),
         buf.as_mut_ptr(),
         buf.len(),
         &mut src_addr as *mut RawSockAddr,
     ))?;
 
-    Ok((
-        value,
-        SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
-    ))
+    let len = full_len.min(buf.len());
+
+    Ok(Received {
+        data: &buf[..len],
+        src: SockAddr::try_from(src_addr).expect("kernel to send correct RawSockAddr"),
+        truncated: full_len > len,
+    })
 }
 
 pub fn interface_get(index: usize) -> Result<RawInterface, SysError> {

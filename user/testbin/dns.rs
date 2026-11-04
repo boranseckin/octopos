@@ -299,15 +299,15 @@ fn fake_server(port: u16, count: usize, respond: Respond) {
         let mut received = 0;
 
         while received < count {
-            let (n, client) = match receive(fd, &mut buf) {
+            let reply = match receive(fd, &mut buf) {
                 Ok(r) => r,
                 Err(SysError::TimedOut) => break,
                 Err(_) => exit(BAD_QUERY),
             };
 
             // the query must be exactly EXAMPLE_QUERY apart from its random id
-            let query = &buf[..n];
-            if n != EXAMPLE_QUERY.len() || query[2..] != EXAMPLE_QUERY[2..] {
+            let query = reply.data;
+            if reply.len() != EXAMPLE_QUERY.len() || query[2..] != EXAMPLE_QUERY[2..] {
                 exit(BAD_QUERY);
             }
 
@@ -317,7 +317,7 @@ fn fake_server(port: u16, count: usize, respond: Respond) {
                     From::Server => fd,
                     From::Other => other,
                 };
-                if send(via, &msg, client).is_err() {
+                if send(via, &msg, reply.src).is_err() {
                     exit(BAD_QUERY);
                 }
             }

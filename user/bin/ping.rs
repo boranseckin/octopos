@@ -78,8 +78,8 @@ fn main(args: Args) {
         // skip stale replies to earlier requests until ours arrives
         let mut buf = [0u8; 64];
         loop {
-            let (len, src) = match receive(fd, &mut buf) {
-                Ok(res) => res,
+            let reply = match receive(fd, &mut buf) {
+                Ok(r) => r,
                 Err(SysError::TimedOut) => {
                     println!("request timeout for seq={}", seq);
                     break;
@@ -87,14 +87,20 @@ fn main(args: Args) {
                 Err(e) => exit_with_msg(e),
             };
 
-            let SockAddr::Inet { ip, .. } = src else {
+            let SockAddr::Inet { ip, .. } = reply.src else {
                 unreachable!("should be inet socket")
             };
 
-            match parse_echo_reply(&buf[..len]) {
+            match parse_echo_reply(reply.data) {
                 Some((reply_seq, sent)) if reply_seq == seq => {
                     let rtt = (uptime() as u64).saturating_sub(sent);
-                    println!("{} bytes from {}: seq={} time={} ticks", len, ip, seq, rtt);
+                    println!(
+                        "{} bytes from {}: seq={} time={} ticks",
+                        reply.len(),
+                        ip,
+                        seq,
+                        rtt
+                    );
                     break;
                 }
                 _ => continue,

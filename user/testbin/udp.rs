@@ -98,24 +98,24 @@ fn test_echo_round_trip() {
     send(fd, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
 
     let mut buf = [0u8; 64];
-    let (n, addr) = receive(fd, &mut buf).expect("receive");
+    let reply = receive(fd, &mut buf).expect("receive");
     let SockAddr::Inet {
         ip: src_ip,
         port: src_port,
         interface: None,
-    } = addr
+    } = reply.src
     else {
         unreachable!()
     };
 
-    assert_eq!(&buf[..n], payload, "echo payload mismatch");
+    assert_eq!(reply.data, payload, "echo payload mismatch");
     assert_eq!(src_ip, Ipv4Addr::LOOPBACK, "echo source IP must be host");
     assert_eq!(src_port, port, "echo source port must be echo server port");
 
     close(fd).expect("close");
 }
 
-/// receive() must return the number of bytes copied (not the full payload length).
+/// receive() must set truncated when the buffer is too small to fit the datagram.
 fn test_receive_truncation() {
     let fd = socket(SocketType::Udp, SockAddr::any_inet()).expect("socket open");
     let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
@@ -124,13 +124,38 @@ fn test_receive_truncation() {
     let payload = b"truncation test payload that is long";
     send(fd, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
 
-    let mut buf = [0u8; 8];
-    let (n, _addr) = receive(fd, &mut buf).expect("receive");
+    const BUF_LEN: usize = 8;
+    let mut buf = [0u8; BUF_LEN];
+    let reply = receive(fd, &mut buf).expect("receive");
 
-    assert_eq!(n, buf.len(), "receive must be clamped to buffer length");
+    assert!(reply.truncated, "receive must indicate truncated");
     assert_eq!(
-        &buf[..n],
-        &payload[..n],
+        reply.len(),
+        BUF_LEN,
+        "receive must be clamped to buffer length"
+    );
+    assert_eq!(
+        reply.data,
+        &payload[..reply.len()],
+        "truncated bytes must match payload prefix"
+    );
+
+    // Send a payload with the exact size as the receive buffer we will use.
+    let payload = b"12345678";
+    send(fd, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+    let mut buf = [0u8; BUF_LEN];
+    let reply = receive(fd, &mut buf).expect("receive");
+
+    assert!(!reply.truncated, "receive must not indicate truncated");
+    assert_eq!(
+        reply.len(),
+        BUF_LEN,
+        "receive must be clamped to buffer length"
+    );
+    assert_eq!(
+        reply.data,
+        &payload[..reply.len()],
         "truncated bytes must match payload prefix"
     );
 
@@ -154,17 +179,17 @@ fn test_add_remove_multiple() {
     send(fd2, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port2)).expect("send");
 
     let mut buf = [0u8; 64];
-    let (n, addr) = receive(fd2, &mut buf).expect("receive");
+    let reply = receive(fd2, &mut buf).expect("receive");
     let SockAddr::Inet {
         ip: src_ip,
         port: src_port,
         interface: None,
-    } = addr
+    } = reply.src
     else {
         unreachable!()
     };
 
-    assert_eq!(&buf[..n], payload, "echo payload mismatch");
+    assert_eq!(reply.data, payload, "echo payload mismatch");
     assert_eq!(src_ip, Ipv4Addr::LOOPBACK, "echo source IP must be host");
     assert_eq!(src_port, port2, "echo source port must be echo server port");
 
@@ -193,7 +218,7 @@ fn test_receive_timeout() {
     let start = uptime();
     let mut buf = [0u8; 64];
     assert_eq!(
-        receive(fd, &mut buf).map(|(n, _)| n),
+        receive(fd, &mut buf).map(|r| r.len()),
         Err(SysError::TimedOut),
         "receive with nothing queued must time out"
     );
@@ -216,7 +241,7 @@ fn test_receive_timeout_per_call() {
     for _ in 0..2 {
         let start = uptime();
         assert_eq!(
-            receive(fd, &mut buf).map(|(n, _)| n),
+            receive(fd, &mut buf).map(|r| r.len()),
             Err(SysError::TimedOut),
             "receive with nothing queued must time out"
         );
@@ -241,8 +266,8 @@ fn test_receive_before_timeout() {
 
     let start = uptime();
     let mut buf = [0u8; 64];
-    let (n, _) = receive(fd, &mut buf).expect("receive must not time out");
-    assert_eq!(&buf[..n], payload, "payload mismatch");
+    let reply = receive(fd, &mut buf).expect("receive must not time out");
+    assert_eq!(reply.data, payload, "payload mismatch");
     assert!(
         uptime() - start < TIMEOUT,
         "receive must return as soon as the datagram arrives"
@@ -261,8 +286,8 @@ fn test_receive_timeout_cleared() {
     send(fd, payload, SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
 
     let mut buf = [0u8; 64];
-    let (n, _) = receive(fd, &mut buf).expect("blocking receive");
-    assert_eq!(&buf[..n], payload, "payload mismatch");
+    let reply = receive(fd, &mut buf).expect("blocking receive");
+    assert_eq!(reply.data, payload, "payload mismatch");
 
     close(fd).expect("close");
 }
@@ -313,7 +338,9 @@ fn capture_icmp(fd: Fd, buf: &mut [u8]) -> (bool, Option<usize>) {
 
     loop {
         match receive(fd, buf) {
-            Ok((n, _)) if buf[IP_PROTO] == IPPROTO_ICMP => return (saw_udp, Some(n)),
+            Ok(reply) if reply.data[IP_PROTO] == IPPROTO_ICMP => {
+                return (saw_udp, Some(reply.len()));
+            }
             Ok(_) => saw_udp |= buf[IP_PROTO] == IPPROTO_UDP,
             Err(SysError::TimedOut) => return (saw_udp, None),
             Err(e) => panic!("receive: {e:?}"),
@@ -500,8 +527,8 @@ fn test_send_rejects_huge_length() {
     // the kernel and the socket still work
     send(fd, b"ok", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send after rejection");
     let mut out = [0u8; 8];
-    let (n, _) = receive(fd, &mut out).expect("receive after rejection");
-    assert_eq!(&out[..n], b"ok", "payload after rejection");
+    let reply = receive(fd, &mut out).expect("receive after rejection");
+    assert_eq!(&reply.data, b"ok", "payload after rejection");
 
     close(fd).expect("close");
 }
@@ -522,7 +549,7 @@ fn test_drops_other_hosts() {
 
     let mut buf = [0u8; 8];
     assert_eq!(
-        receive(fd, &mut buf).map(|(n, _)| n),
+        receive(fd, &mut buf).map(|r| r.len()),
         Err(SysError::TimedOut),
         "a datagram for another host must not be delivered"
     );
@@ -544,8 +571,8 @@ fn test_accepts_broadcast() {
     .expect("send");
 
     let mut buf = [0u8; 16];
-    let (n, _) = receive(fd, &mut buf).expect("a subnet broadcast must be delivered");
-    assert_eq!(&buf[..n], b"broadcast", "payload");
+    let reply = receive(fd, &mut buf).expect("a subnet broadcast must be delivered");
+    assert_eq!(reply.data, b"broadcast", "payload");
 
     close(fd).expect("close");
 }
@@ -568,8 +595,8 @@ fn test_loopback_order() {
 
     let mut buf = [0u8; 8];
     for i in 0..COUNT {
-        let (n, _) = receive(fd, &mut buf).expect("receive");
-        assert_eq!(&buf[..n], &[i], "datagram {i} out of order");
+        let reply = receive(fd, &mut buf).expect("receive");
+        assert_eq!(reply.data, &[i], "datagram {i} out of order");
     }
 
     close(fd).expect("close");
@@ -606,10 +633,10 @@ fn test_bind_interface_receives() {
         send(sender, b"bound", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
 
         let mut buf = [0u8; 16];
-        let (n, src) = receive(fd, &mut buf).expect("socket bound to lo must receive");
-        assert_eq!(&buf[..n], b"bound", "payload ({ip})");
+        let reply = receive(fd, &mut buf).expect("socket bound to lo must receive");
+        assert_eq!(reply.data, b"bound", "payload ({ip})");
         assert_eq!(
-            src,
+            reply.src,
             SockAddr::inet(Ipv4Addr::LOOPBACK, sender_port),
             "source must be the sender, with no interface ({ip})"
         );
@@ -638,7 +665,7 @@ fn test_bind_interface_filters() {
 
     let mut buf = [0u8; 8];
     assert_eq!(
-        receive(fd, &mut buf).map(|(n, _)| n),
+        receive(fd, &mut buf).map(|r| r.len()),
         Err(SysError::TimedOut),
         "a socket bound to another interface must not receive from lo"
     );
@@ -717,8 +744,8 @@ fn test_bind_interface_zero_is_any() {
     send(fd, b"any", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
 
     let mut buf = [0u8; 8];
-    let (n, _) = receive(fd, &mut buf).expect("interface 0 must receive like any interface");
-    assert_eq!(&buf[..n], b"any", "payload");
+    let reply = receive(fd, &mut buf).expect("interface 0 must receive like any interface");
+    assert_eq!(reply.data, b"any", "payload");
 
     close(fd).expect("close");
 }
@@ -737,8 +764,8 @@ fn test_bound_send_uses_interface() {
     let (on_lo, _) = open_udp_on(Ipv4Addr::UNSPECIFIED, lo_id());
     send(on_lo, b"lo", dest).expect("send from a socket bound to lo");
     let mut buf = [0u8; 8];
-    let (n, _) = receive(receiver, &mut buf).expect("receive");
-    assert_eq!(&buf[..n], b"lo", "payload");
+    let reply = receive(receiver, &mut buf).expect("receive");
+    assert_eq!(reply.data, b"lo", "payload");
     close(on_lo).expect("close");
 
     if let Some(other) = other_id() {
@@ -834,7 +861,7 @@ fn test_checksum_verified() {
     bad[UDP_SUM..UDP_SUM + 2].copy_from_slice(&(sum ^ 1).to_be_bytes());
     send(capture, &bad, lo).expect("send raw frame");
     assert_eq!(
-        receive(fd, &mut buf).map(|(n, _)| n),
+        receive(fd, &mut buf).map(|r| r.len()),
         Err(SysError::TimedOut),
         "a wrong checksum must be dropped"
     );
@@ -843,8 +870,8 @@ fn test_checksum_verified() {
     none[UDP_SUM..UDP_SUM + 2].copy_from_slice(&[0, 0]);
     for (what, frame) in [("valid checksum", &valid), ("no checksum", &none)] {
         send(capture, frame, lo).expect("send raw frame");
-        let (n, _) = receive(fd, &mut buf).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-        assert_eq!(&buf[..n], PAYLOAD, "payload ({what})");
+        let reply = receive(fd, &mut buf).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert_eq!(reply.data, PAYLOAD, "payload ({what})");
     }
 
     close(fd).expect("close");
@@ -862,7 +889,10 @@ fn test_no_port_unreachable_for_bad_checksum() {
     send(capture, &valid, lo).expect("send raw frame");
     let mut buf = [0u8; 128];
     let (_, icmp) = capture_icmp(capture, &mut buf);
-    assert!(icmp.is_some(), "a valid checksum to an unbound port must be answered");
+    assert!(
+        icmp.is_some(),
+        "a valid checksum to an unbound port must be answered"
+    );
 
     let mut bad = valid;
     bad[UDP_SUM] ^= 0xff;
@@ -892,7 +922,7 @@ fn test_zero_checksum_sent_as_ones() {
 
     let mut frame = [0u8; 128];
     loop {
-        let (_, _) = receive(capture, &mut frame).expect("datagram must reach lo");
+        let _ = receive(capture, &mut frame).expect("datagram must reach lo");
         let dest_port = u16::from_be_bytes([frame[L4_START + 2], frame[L4_START + 3]]);
         if frame[IP_PROTO] == IPPROTO_UDP && dest_port == port {
             break;
@@ -905,8 +935,8 @@ fn test_zero_checksum_sent_as_ones() {
     );
 
     let mut buf = [0u8; 8];
-    let (n, _) = receive(fd, &mut buf).expect("an all ones checksum must be accepted");
-    assert_eq!(&buf[..n], &payload, "payload");
+    let reply = receive(fd, &mut buf).expect("an all ones checksum must be accepted");
+    assert_eq!(reply.data, &payload, "payload");
 
     close(fd).expect("close");
     close(capture).expect("close");

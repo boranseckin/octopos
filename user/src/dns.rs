@@ -396,17 +396,17 @@ fn wait_reply(
         ioctl(fd, Ioctl::SOCKET_SET_RECV_TIMEOUT, remaining)?;
 
         let mut buf = [0u8; MAX_MESSAGE];
-        let (len, source) = match receive(fd, &mut buf) {
-            Ok(resp) => resp,
+        let reply = match receive(fd, &mut buf) {
+            Ok(r) => r,
             Err(SysError::TimedOut) => return Ok(None),
             Err(e) => return Err(e),
         };
 
-        if source != server {
+        if reply.src != server || reply.truncated {
             continue;
         }
 
-        match parse_reply(&buf[..len], id) {
+        match parse_reply(reply.data, id) {
             Some(r) => return Ok(Some(r)),
             None => continue,
         }

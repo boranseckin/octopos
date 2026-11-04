@@ -59,33 +59,35 @@ fn ping_loopback(fd: Fd, ident: u16, seq: u16, request: &[u8]) {
     assert_eq!(n, request.len(), "send must return message length");
 
     let mut buf = [0u8; 64];
-    let (len, src) = receive(fd, &mut buf).expect("receive");
-    let reply = &buf[..len];
+    let reply = receive(fd, &mut buf).expect("receive");
 
     assert_eq!(
-        src,
+        reply.src,
         SockAddr::inet(Ipv4Addr::LOOPBACK, ident),
         "reply source must be loopback, with the socket's ident as port"
     );
     assert_eq!(
-        len,
+        reply.len(),
         ICMP_HEADER_SIZE + PAYLOAD.len(),
         "reply must be the full ICMP message"
     );
-    assert_eq!(reply[0], ICMP_ECHO_REPLY, "reply type must be Echo Reply");
-    assert_eq!(reply[1], 0, "reply code must be zero");
-    assert_eq!(checksum(reply), 0, "reply checksum must be valid");
     assert_eq!(
-        u16::from_be_bytes([reply[4], reply[5]]),
+        reply.data[0], ICMP_ECHO_REPLY,
+        "reply type must be Echo Reply"
+    );
+    assert_eq!(reply.data[1], 0, "reply code must be zero");
+    assert_eq!(checksum(reply.data), 0, "reply checksum must be valid");
+    assert_eq!(
+        u16::from_be_bytes([reply.data[4], reply.data[5]]),
         ident,
         "reply ident must be the socket's ident"
     );
     assert_eq!(
-        u16::from_be_bytes([reply[6], reply[7]]),
+        u16::from_be_bytes([reply.data[6], reply.data[7]]),
         seq,
         "seq mismatch"
     );
-    assert_eq!(&reply[ICMP_HEADER_SIZE..], PAYLOAD, "payload mismatch");
+    assert_eq!(&reply.data[ICMP_HEADER_SIZE..], PAYLOAD, "payload mismatch");
 }
 
 /// A well-formed Echo Request to loopback gets a matching Echo Reply.
@@ -126,16 +128,16 @@ fn test_demux_by_ident() {
     send(fd2, &request[..len], dest).expect("send");
 
     let mut buf = [0u8; 64];
-    let (len1, _) = receive(fd1, &mut buf).expect("receive");
-    assert!(len1 >= ICMP_HEADER_SIZE, "reply too short");
+    let reply1 = receive(fd1, &mut buf).expect("receive");
+    assert!(reply1.len() >= ICMP_HEADER_SIZE, "reply too short");
     assert_eq!(
         u16::from_be_bytes([buf[4], buf[5]]),
         ident1,
         "fd1 got another socket's reply"
     );
 
-    let (len2, _) = receive(fd2, &mut buf).expect("receive");
-    assert!(len2 >= ICMP_HEADER_SIZE, "reply too short");
+    let reply2 = receive(fd2, &mut buf).expect("receive");
+    assert!(reply2.len() >= ICMP_HEADER_SIZE, "reply too short");
     assert_eq!(
         u16::from_be_bytes([buf[4], buf[5]]),
         ident2,
@@ -213,7 +215,7 @@ fn test_receive_timeout() {
     let start = uptime();
     let mut buf = [0u8; 64];
     assert_eq!(
-        receive(fd, &mut buf).map(|(n, _)| n),
+        receive(fd, &mut buf).map(|r| r.len()),
         Err(SysError::TimedOut),
         "receive with no request sent must time out"
     );
@@ -250,7 +252,7 @@ fn test_no_reply_unless_unicast() {
 
         let mut buf = [0u8; 64];
         assert_eq!(
-            receive(fd, &mut buf).map(|(n, _)| n),
+            receive(fd, &mut buf).map(|r| r.len()),
             Err(SysError::TimedOut),
             "no reply expected for {what}"
         );

@@ -31,8 +31,8 @@ fn main(args: Args) {
             let mut buf = [0u8; 1024];
 
             loop {
-                let (rc_len, rc_addr) = receive(fd, &mut buf).expect("receive failed");
-                let SockAddr::Inet { ip, port, .. } = rc_addr else {
+                let reply = receive(fd, &mut buf).expect("receive failed");
+                let SockAddr::Inet { ip, port, .. } = reply.src else {
                     unreachable!("should be a inet socket")
                 };
 
@@ -40,7 +40,7 @@ fn main(args: Args) {
                     "[{}:{}]: {}",
                     ip,
                     port,
-                    str::from_utf8(&buf[..rc_len]).unwrap_or("<invalid utf-8>")
+                    str::from_utf8(reply.data).unwrap_or("<invalid utf-8>")
                 );
             }
         }
