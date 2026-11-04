@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 
+use crate::net::eth::MTU;
 use crate::net::icmp;
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Destination, Ipv4Header, Ipv4Proto};
@@ -14,7 +15,7 @@ use crate::spinlock::SpinLock;
 const EPHEMERAL_PORT_START: u16 = 49152;
 const EPHEMERAL_PORT_END: u16 = 65535;
 
-pub const MAX_UDP_PAYLOAD: usize = 1024;
+const MAX_UDP_PAYLOAD: usize = MTU - Ipv4Header::SIZE - UdpHeader::SIZE;
 
 /// A bound UDP socket. The binding is fixed at creation; only the receive state is mutable.
 /// The queue has a fixed maximum depth; if the queue is full, incoming datagrams for that port will

@@ -1,6 +1,7 @@
 use crate::net::{Be, MacAddr, NetworkHeader};
 
 pub const MAX_FRAME: usize = 1514;
+pub const MTU: usize = MAX_FRAME - EthernetHeader::SIZE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]

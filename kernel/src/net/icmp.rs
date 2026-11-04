@@ -1,15 +1,18 @@
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
+use crate::net::eth::MTU;
 use crate::net::ipv4::{Destination, Ipv4Header, Ipv4Proto};
 use crate::net::socket::{RecvQueue, SockAddr};
-use crate::net::udp::MAX_UDP_PAYLOAD;
+use crate::net::udp::UdpHeader;
 use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result, Unresolved};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
 
 const EPHEMERAL_IDENT_START: u16 = 1;
 const EPHEMERAL_IDENT_END: u16 = u16::MAX;
+
+const MAX_ICMP_PAYLOAD: usize = MTU - Ipv4Header::SIZE - UdpHeader::SIZE;
 
 /// Ping socket, only handles ICMP Echo.
 /// Identified by its echo identifier, like a UDP port.
@@ -41,7 +44,7 @@ impl PingSocket {
     ///
     /// The ident is overwritten for security, and the checksum is recalculated.
     pub fn send(&self, dest_ip: Ipv4Addr, buf: &[u8]) -> Result<()> {
-        if buf.len() > MAX_UDP_PAYLOAD {
+        if buf.len() > MAX_ICMP_PAYLOAD {
             err!(NetError::PacketTooLarge)
         }
 
