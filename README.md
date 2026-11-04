@@ -19,6 +19,9 @@ Run the test suite with `./test.sh`. It boots a separate image that runs every p
 
 - Rust nightly toolchain
 - qemu-system-riscv64
+- riscv64-elf-gdb (for debugging)
+- iproute2 (for network setup)
+- dnsmasq (for dhcp and dns)
 
 ### Build and Run
 
