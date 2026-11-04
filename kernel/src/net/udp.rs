@@ -71,7 +71,11 @@ impl UdpSocket {
     }
 
     fn deliver(&self, ip: Ipv4Addr, port: u16, payload: Box<[u8]>) {
-        let addr = SockAddr::Inet { ip, port };
+        let addr = SockAddr::Inet {
+            ip,
+            port,
+            interface: None,
+        };
         self.queue.deliver(addr, payload);
     }
 

@@ -102,6 +102,7 @@ fn test_echo_round_trip() {
     let SockAddr::Inet {
         ip: src_ip,
         port: src_port,
+        interface: None,
     } = addr
     else {
         unreachable!()
@@ -157,6 +158,7 @@ fn test_add_remove_multiple() {
     let SockAddr::Inet {
         ip: src_ip,
         port: src_port,
+        interface: None,
     } = addr
     else {
         unreachable!()

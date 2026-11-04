@@ -17,8 +17,8 @@ pub const MAX_SEND: usize = MAX_FRAME;
 
 const MAX_RECV_QUEUE_DEPTH: usize = 16;
 
-const ANY_INTERFACE: u16 = u16::MAX;
-const ANY_ETHER_TYPE: u16 = u16::MAX;
+const ANY_INTERFACE: u16 = 0;
+const ANY_ETHER_TYPE: u16 = 0;
 
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +45,11 @@ impl TryFrom<usize> for SocketType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SockAddr {
     /// IPv4 address and port, used by UDP sockets.
-    Inet { ip: Ipv4Addr, port: u16 },
+    Inet {
+        interface: Option<InterfaceId>,
+        ip: Ipv4Addr,
+        port: u16,
+    },
 
     /// Link layer endpoint, used by packet sockets.
     Link {
@@ -60,11 +64,16 @@ pub enum SockAddr {
 
 impl SockAddr {
     pub const fn inet(ip: Ipv4Addr, port: u16) -> Self {
-        Self::Inet { ip, port }
+        Self::Inet {
+            interface: None,
+            ip,
+            port,
+        }
     }
 
     pub const fn any_inet() -> Self {
         Self::Inet {
+            interface: None,
             ip: Ipv4Addr::UNSPECIFIED,
             port: 0,
         }
@@ -72,6 +81,7 @@ impl SockAddr {
 
     pub const fn any_inet_with_port(port: u16) -> Self {
         Self::Inet {
+            interface: None,
             ip: Ipv4Addr::UNSPECIFIED,
             port,
         }
@@ -100,17 +110,21 @@ impl SockAddr {
 pub struct RawSockAddr {
     /// 1 = inet, 2 = link
     pub family: u16,
-    /// inet: port(2) addr(4) pad(8)
+    /// inet: interface(2) port(2) addr(4) pad(6)
     /// link: interface(2) ether_type(2) mac(6) pad(4)
     pub data: [u8; 14],
 }
 
+const _: () = assert!(size_of::<RawSockAddr>() == 16);
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 struct RawInetAddr {
+    /// ANY_INTERFACE = any
+    interface: u16,
     port: u16,
     ipv4: [u8; 4],
-    _pad: [u8; 8],
+    _pad: [u8; 6],
 }
 
 const _: () = assert!(size_of::<RawInetAddr>() == 14);
@@ -135,8 +149,13 @@ impl From<SockAddr> for RawSockAddr {
     fn from(value: SockAddr) -> Self {
         // # Safety: Raw address structs consist of only primitive types with no implicit padding.
         match value {
-            SockAddr::Inet { ip, port } => {
+            SockAddr::Inet {
+                ip,
+                port,
+                interface,
+            } => {
                 let raw = RawInetAddr {
+                    interface: interface.map_or(ANY_INTERFACE, |i| i.0),
                     port,
                     ipv4: ip.0,
                     ..Default::default()
@@ -178,6 +197,8 @@ impl TryFrom<RawSockAddr> for SockAddr {
                 let raw: RawInetAddr = unsafe { core::mem::transmute(value.data) };
 
                 Ok(Self::Inet {
+                    interface: (raw.interface != ANY_INTERFACE)
+                        .then_some(InterfaceId(raw.interface)),
                     ip: Ipv4Addr::from(raw.ipv4),
                     port: raw.port,
                 })
@@ -187,16 +208,9 @@ impl TryFrom<RawSockAddr> for SockAddr {
                 let raw: RawLinkAddr = unsafe { core::mem::transmute(value.data) };
 
                 Ok(Self::Link {
-                    interface: if raw.interface == ANY_INTERFACE {
-                        None
-                    } else {
-                        Some(InterfaceId(raw.interface))
-                    },
-                    ether_type: if raw.ether_type == ANY_ETHER_TYPE {
-                        None
-                    } else {
-                        Some(raw.ether_type)
-                    },
+                    interface: (raw.interface != ANY_INTERFACE)
+                        .then_some(InterfaceId(raw.interface)),
+                    ether_type: (raw.ether_type != ANY_ETHER_TYPE).then_some(raw.ether_type),
                     mac: MacAddr(raw.mac),
                 })
             }
@@ -249,11 +263,13 @@ impl Socket {
             Socket::Udp(udp_socket) => SockAddr::Inet {
                 ip: udp_socket.bound_ip,
                 port: udp_socket.bound_port,
+                interface: None,
             },
 
             Socket::Ping(ping_socket) => SockAddr::Inet {
                 ip: Ipv4Addr::UNSPECIFIED,
                 port: ping_socket.ident,
+                interface: None,
             },
 
             Socket::Packet(packet_socket) => SockAddr::Link {
@@ -270,7 +286,7 @@ impl Socket {
     pub fn send(&self, remote_addr: SockAddr, buf: &[u8]) -> Result<()> {
         match self {
             Socket::Udp(udp_socket) => {
-                let SockAddr::Inet { ip, port } = remote_addr else {
+                let SockAddr::Inet { ip, port, .. } = remote_addr else {
                     err!(NetError::InvalidAddress)
                 };
 
@@ -278,7 +294,7 @@ impl Socket {
             }
 
             Socket::Ping(ping_socket) => {
-                let SockAddr::Inet { ip, port: _ } = remote_addr else {
+                let SockAddr::Inet { ip, .. } = remote_addr else {
                     err!(NetError::InvalidAddress)
                 };
 

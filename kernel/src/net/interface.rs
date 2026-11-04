@@ -26,7 +26,8 @@ pub struct InterfaceId(pub u16);
 
 impl InterfaceId {
     pub fn next_interface_id() -> Self {
-        static ID_COUNTER: AtomicU16 = AtomicU16::new(0);
+        // zero is reserved for ANY_INTERFACE
+        static ID_COUNTER: AtomicU16 = AtomicU16::new(1);
         Self(ID_COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 }
