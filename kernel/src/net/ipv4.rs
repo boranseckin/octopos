@@ -121,7 +121,7 @@ fn classify(interface_id: InterfaceId, dest: Ipv4Addr) -> Option<Destination> {
         return Some(Destination::Broadcast);
     }
 
-    if route::is_local_addr(dest) {
+    if route::is_local_addr(dest, None) {
         return Some(Destination::Unicast);
     }
 
@@ -165,7 +165,7 @@ pub fn handle_ipv4(interface_id: InterfaceId, packet: &[u8]) -> Result<()> {
         return Ok(());
     }
 
-    // Make sure the packet is addressed to us either by unicast or by broadcast.
+    // Make sure the packet is addressed to us either by unicast or broadcast.
     // This might take route and interface locks so check this after everything else.
     let Some(destination) = classify(interface_id, req_ipv4.dest()) else {
         return Ok(());

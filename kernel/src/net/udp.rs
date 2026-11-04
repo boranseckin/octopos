@@ -35,19 +35,27 @@ impl UdpSocket {
     /// - If the `interface` argument is `Some`, the socket will only receive datagrams that arrived
     ///   on that interface. If `None`, it will receive datagrams from any interface.
     pub fn bind(ip: Ipv4Addr, port: u16, interface: Option<InterfaceId>) -> Result<Arc<Self>> {
-        if !ip.is_unspecified() && !route::is_local_addr(ip) {
-            err!(NetError::InvalidAddress);
+        // if interface is given, ensure it exists
+        if let Some(interface) = interface {
+            ensure!(
+                interface::find_interface_by_id(interface).is_some(),
+                NetError::InterfaceNotFound
+            );
         }
 
-        let mut table = UDP_TABLE.lock();
-        table.add(ip, port, interface)
+        // unless address is 0.0.0.0, make sure it is a local address, on the interface (if given).
+        ensure!(
+            ip.is_unspecified() || route::is_local_addr(ip, interface),
+            NetError::InvalidAddress
+        );
+
+        UDP_TABLE.lock().add(ip, port, interface)
     }
 
     /// Unregisters from the table, marks closed, wakes sleepers.
     pub fn close(self: &Arc<Self>) {
         {
-            let mut table = UDP_TABLE.lock();
-            table.remove(self);
+            UDP_TABLE.lock().remove(self);
         }
 
         self.queue.close();
@@ -63,7 +71,14 @@ impl UdpSocket {
         }
 
         let src_ip = (!self.bound_ip.is_unspecified()).then_some(self.bound_ip);
-        transmit_udp(src_ip, dest_ip, dest_port, self.bound_port, buf)
+        transmit_udp(
+            src_ip,
+            self.bound_interface,
+            dest_ip,
+            dest_port,
+            self.bound_port,
+            buf,
+        )
     }
 
     pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
@@ -333,6 +348,7 @@ impl UdpHeader {
 /// the packet using the underlying `net::transmit` function.
 fn transmit_udp(
     src_ip: Option<Ipv4Addr>,
+    bound_interface: Option<InterfaceId>,
     dest_ip: Ipv4Addr,
     dest_port: u16,
     src_port: u16,
@@ -341,7 +357,7 @@ fn transmit_udp(
     // UDP requires L3 routing information in the header for checksum calculation, so we need to do
     // the routing lookup before passing it to net::transmit().
     // To avoid double lookup, we are using net::transmit_with_route().
-    let route = route::best_route_for(dest_ip)?;
+    let route = route::best_route_for(dest_ip, bound_interface)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::NotConfigured);
@@ -352,7 +368,7 @@ fn transmit_udp(
     };
 
     // reject loopback IPs when interface is not loopback.
-    if src_ipv4.is_loopback() && !interface.is_loopback() {
+    if (src_ipv4.is_loopback() || dest_ip.is_loopback()) && !interface.is_loopback() {
         err!(NetError::NetworkUnreachable);
     }
 

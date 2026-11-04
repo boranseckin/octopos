@@ -637,7 +637,7 @@ fn link_destination(dest: Ipv4Addr, cidr: Ipv4Cidr) -> Option<MacAddr> {
 ///
 /// Currently only support IPv4 packets.
 pub fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<()> {
-    let route = route::best_route_for(dest_ip)?;
+    let route = route::best_route_for(dest_ip, None)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::InterfaceNotFound);

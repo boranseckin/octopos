@@ -50,10 +50,15 @@ pub fn sys_socket(args: &SyscallArgs) -> Result<usize> {
 
     let socket = match socket_type {
         SocketType::Udp => {
-            let SockAddr::Inet { ip, port, .. } = addr else {
+            let SockAddr::Inet {
+                ip,
+                port,
+                interface,
+            } = addr
+            else {
                 err!(SysError::InvalidArgument);
             };
-            Socket::open_udp(ip, port)?
+            Socket::open_udp(ip, port, interface)?
         }
 
         SocketType::Ping => {

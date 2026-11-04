@@ -71,6 +71,14 @@ impl SockAddr {
         }
     }
 
+    pub const fn inet_on(ip: Ipv4Addr, port: u16, interface: InterfaceId) -> Self {
+        Self::Inet {
+            interface: Some(interface),
+            ip,
+            port,
+        }
+    }
+
     pub const fn any_inet() -> Self {
         Self::Inet {
             interface: None,
@@ -195,6 +203,7 @@ impl TryFrom<RawSockAddr> for SockAddr {
         match value.family {
             1 => {
                 let raw: RawInetAddr = unsafe { core::mem::transmute(value.data) };
+                ensure!(raw._pad.iter().all(|&p| p == 0), NetError::InvalidAddress);
 
                 Ok(Self::Inet {
                     interface: (raw.interface != ANY_INTERFACE)
@@ -206,6 +215,7 @@ impl TryFrom<RawSockAddr> for SockAddr {
 
             2 => {
                 let raw: RawLinkAddr = unsafe { core::mem::transmute(value.data) };
+                ensure!(raw._pad.iter().all(|&p| p == 0), NetError::InvalidAddress);
 
                 Ok(Self::Link {
                     interface: (raw.interface != ANY_INTERFACE)
@@ -230,8 +240,8 @@ pub enum Socket {
 }
 
 impl Socket {
-    pub fn open_udp(ip: Ipv4Addr, port: u16) -> Result<Self> {
-        Ok(Self::Udp(UdpSocket::bind(ip, port, None)?))
+    pub fn open_udp(ip: Ipv4Addr, port: u16, interface: Option<InterfaceId>) -> Result<Self> {
+        Ok(Self::Udp(UdpSocket::bind(ip, port, interface)?))
     }
 
     pub fn open_ping(ident: u16) -> Result<Self> {
@@ -263,7 +273,7 @@ impl Socket {
             Socket::Udp(udp_socket) => SockAddr::Inet {
                 ip: udp_socket.bound_ip,
                 port: udp_socket.bound_port,
-                interface: None,
+                interface: udp_socket.bound_interface,
             },
 
             Socket::Ping(ping_socket) => SockAddr::Inet {

@@ -235,12 +235,13 @@ pub fn route_at(index: usize) -> Option<RouteEntry> {
     ROUTES.lock().get(index).copied()
 }
 
-/// Returns if `addr` is a unicast address of the host.
-pub fn is_local_addr(addr: Ipv4Addr) -> bool {
-    ROUTES
-        .lock()
-        .iter()
-        .any(|r| matches!(r.kind, RouteKind::Local if r.dest_ip == addr))
+/// Returns if `addr` has a `Local` route, on `interface_id` if given.
+pub fn is_local_addr(addr: Ipv4Addr, interface_id: Option<InterfaceId>) -> bool {
+    ROUTES.lock().iter().any(|r| {
+        r.kind == RouteKind::Local
+            && r.dest_ip == addr
+            && interface_id.is_none_or(|i| r.interface_id == i)
+    })
 }
 
 /// Adds a new route after validating it.
@@ -365,17 +366,18 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Cidr) {
     prune_interface(&mut routes, interface_id);
 }
 
-/// Finds the best matching route for a given destination IP address, based on the longest prefix
-/// match and lowest metric.
+/// Finds the best matching route for a given destination IP address on the interface, based on the
+/// longest prefix match and lowest metric.
 ///
 /// Returns `None` if no matching route is found.
-pub fn best_route_for(dest_ip: Ipv4Addr) -> Result<RouteEntry> {
+pub fn best_route_for(dest_ip: Ipv4Addr, interface_id: Option<InterfaceId>) -> Result<RouteEntry> {
     let routes = ROUTES.lock();
 
     // Find all routes that match the destination,
     // then sort them by longest prefix and lowest metric.
     if let Some(route) = routes
         .iter()
+        .filter(|r| interface_id.is_none_or(|i| r.interface_id == i))
         .filter(|r| route_matches(dest_ip, r.dest_ip, r.prefix_len))
         .max_by_key(|r| route_sort_key(r))
     {
