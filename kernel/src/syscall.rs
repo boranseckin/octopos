@@ -358,6 +358,7 @@ pub enum Syscall {
     Random = 27,
     Interface = 28,
     Route = 29,
+    Reboot = 30,
 }
 
 impl TryFrom<usize> for Syscall {
@@ -394,6 +395,7 @@ impl TryFrom<usize> for Syscall {
             27 => Ok(Syscall::Random),
             28 => Ok(Syscall::Interface),
             29 => Ok(Syscall::Route),
+            30 => Ok(Syscall::Reboot),
             _ => Err(SysError::NotImplemented),
         }
     }
@@ -439,6 +441,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Random => sys_random(&args),
             Syscall::Interface => sys_interface(&args),
             Syscall::Route => sys_route(&args),
+            Syscall::Reboot => sys_reboot(&args),
         },
         Err(e) => Err(Traced::from(e)),
     };

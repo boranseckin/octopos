@@ -97,3 +97,11 @@ pub fn sys_poweroff(args: &SyscallArgs) -> ! {
 
     unreachable!("poweroff failed");
 }
+
+pub fn sys_reboot(_args: &SyscallArgs) -> ! {
+    println!("! rebooting...");
+
+    unsafe { *(QEMU_POWER as *mut u32) = 0x7777 };
+
+    unreachable!("reboot failed");
+}

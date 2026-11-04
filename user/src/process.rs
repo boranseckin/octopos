@@ -78,3 +78,7 @@ pub fn uptime() -> usize {
 pub fn poweroff(code: u32) -> ! {
     raw::poweroff(code)
 }
+
+pub fn reboot() -> ! {
+    raw::reboot()
+}

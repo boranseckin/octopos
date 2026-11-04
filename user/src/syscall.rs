@@ -213,6 +213,11 @@ pub mod raw {
         unreachable!();
     }
 
+    pub fn reboot() -> ! {
+        syscall0(Syscall::Reboot);
+        unreachable!();
+    }
+
     pub fn ioctl(fd: usize, cmd: usize, arg: usize) -> isize {
         syscall3(Syscall::Ioctl, fd, cmd, arg)
     }

@@ -54,6 +54,10 @@ pub unsafe fn start() -> ! {
         mideleg::write(0xffff);
         sie::write(sie::read() | sie::SEIE | sie::STIE | sie::SSIE);
 
+        // restore a known clean state for interrupts (disabled)
+        // already clean on cold boot but necessary for reset
+        sstatus::write(sstatus::read() & !(sstatus::SIE | sstatus::SPIE | sstatus::SPP));
+
         // configure physical memory protection to give supervisor mode
         // access to all of physical memory
         pmpaddr0::write(0x3fffffffffffff);
