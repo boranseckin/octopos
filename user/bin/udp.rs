@@ -32,9 +32,7 @@ fn main(args: Args) {
 
             loop {
                 let reply = receive(fd, &mut buf).expect("receive failed");
-                let SockAddr::Inet { ip, port, .. } = reply.src else {
-                    unreachable!("should be a inet socket")
-                };
+                let (ip, port) = reply.src.ip_port().expect("inet addr");
 
                 println!(
                     "[{}:{}]: {}",

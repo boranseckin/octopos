@@ -110,6 +110,20 @@ impl SockAddr {
             mac: MacAddr::UNSPECIFIED,
         }
     }
+
+    pub fn ip_port(&self) -> Option<(Ipv4Addr, u16)> {
+        match self {
+            SockAddr::Inet { ip, port, .. } => Some((*ip, *port)),
+            _ => None,
+        }
+    }
+
+    pub fn mac(&self) -> Option<MacAddr> {
+        match self {
+            SockAddr::Link { mac, .. } => Some(*mac),
+            _ => None,
+        }
+    }
 }
 
 /// Wire format of a socket address shared with user space.

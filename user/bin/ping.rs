@@ -87,9 +87,7 @@ fn main(args: Args) {
                 Err(e) => exit_with_msg(e),
             };
 
-            let SockAddr::Inet { ip, .. } = reply.src else {
-                unreachable!("should be inet socket")
-            };
+            let (ip, _) = reply.src.ip_port().expect("inet socket");
 
             match parse_echo_reply(reply.data) {
                 Some((reply_seq, sent)) if reply_seq == seq => {

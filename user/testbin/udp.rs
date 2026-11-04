@@ -99,14 +99,7 @@ fn test_echo_round_trip() {
 
     let mut buf = [0u8; 64];
     let reply = receive(fd, &mut buf).expect("receive");
-    let SockAddr::Inet {
-        ip: src_ip,
-        port: src_port,
-        interface: None,
-    } = reply.src
-    else {
-        unreachable!()
-    };
+    let (src_ip, src_port) = reply.src.ip_port().expect("inet addr");
 
     assert_eq!(reply.data, payload, "echo payload mismatch");
     assert_eq!(src_ip, Ipv4Addr::LOOPBACK, "echo source IP must be host");
@@ -180,14 +173,7 @@ fn test_add_remove_multiple() {
 
     let mut buf = [0u8; 64];
     let reply = receive(fd2, &mut buf).expect("receive");
-    let SockAddr::Inet {
-        ip: src_ip,
-        port: src_port,
-        interface: None,
-    } = reply.src
-    else {
-        unreachable!()
-    };
+    let (src_ip, src_port) = reply.src.ip_port().expect("inet addr");
 
     assert_eq!(reply.data, payload, "echo payload mismatch");
     assert_eq!(src_ip, Ipv4Addr::LOOPBACK, "echo source IP must be host");
