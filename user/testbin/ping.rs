@@ -162,8 +162,8 @@ fn test_duplicate_ident() {
 
     assert_eq!(
         open_ping(4242).map(|(fd, _)| fd),
-        Err(SysError::AlreadyExists),
-        "duplicate ident must return AlreadyExists"
+        Err(SysError::AddressInUse),
+        "duplicate ident must return AddressInUse"
     );
 
     close(fd).expect("close");

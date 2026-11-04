@@ -326,7 +326,7 @@ fn test_route_add_rejects() {
             },
             0
         ),
-        Err(SysError::NoEntry),
+        Err(SysError::NoDevice),
         "unknown interface must be rejected"
     );
 
@@ -338,7 +338,7 @@ fn test_route_add_rejects() {
             },
             0
         ),
-        Err(SysError::InvalidArgument),
+        Err(SysError::NetworkUnreachable),
         "gateway not on any direct route must be rejected"
     );
 
@@ -351,7 +351,7 @@ fn test_route_add_rejects() {
                 },
                 0
             ),
-            Err(SysError::InvalidArgument),
+            Err(SysError::NetworkUnreachable),
             "gateway on-link on a different interface must be rejected"
         );
     }
@@ -389,7 +389,7 @@ fn test_route_add_rejects() {
     };
     assert_eq!(
         route_add(&via_gateway, 0),
-        Err(SysError::InvalidArgument),
+        Err(SysError::NetworkUnreachable),
         "gateway behind another gateway must be rejected"
     );
     route_remove(&route).expect("route_remove");
@@ -410,7 +410,7 @@ fn test_route_add_rejects() {
             },
             0
         ),
-        Err(SysError::InvalidArgument),
+        Err(SysError::AddressUnavailable),
         "pref_src the host does not own must be rejected"
     );
 
@@ -426,7 +426,7 @@ fn test_route_add_rejects() {
                 },
                 0
             ),
-            Err(SysError::InvalidArgument),
+            Err(SysError::AddressUnavailable),
             "pref_src owned by another interface must be rejected"
         );
     }
@@ -494,7 +494,7 @@ fn test_set_ipv4_rejects() {
 
     assert_eq!(
         interface_set_ipv4(InterfaceId(999), LO_ADDR, LO_PREFIX),
-        Err(SysError::NoEntry),
+        Err(SysError::NoDevice),
         "unknown interface must be rejected"
     );
 

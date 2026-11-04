@@ -58,7 +58,7 @@ impl PacketSocket {
         }
 
         let Some(id) = interface.or(self.interface) else {
-            err!(NetError::NotConfigured);
+            err!(NetError::InvalidAddress);
         };
 
         let Some(interface) = interface::find_interface_by_id(id) else {

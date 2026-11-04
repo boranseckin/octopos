@@ -132,12 +132,8 @@ impl From<InterfaceEntry> for RawInterface {
 static INTERFACES: SpinLock<Vec<InterfaceEntry>> = SpinLock::new(Vec::new(), "net_interfaces");
 
 /// Returns a copy of the interface entry at a given index.
-pub fn interface_at(index: usize) -> Result<InterfaceEntry> {
-    Ok(INTERFACES
-        .lock()
-        .get(index)
-        .ok_or(NetError::InterfaceNotFound)
-        .cloned()?)
+pub fn interface_at(index: usize) -> Option<InterfaceEntry> {
+    INTERFACES.lock().get(index).cloned()
 }
 
 /// Registers a network interface with the given id and the network stack.

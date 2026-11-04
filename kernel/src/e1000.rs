@@ -163,7 +163,7 @@ impl NetDevice for E1000Interface {
 
         // check if bit 0 of status (DD) is unset; not available to use
         if desc.status & 1 == 0 {
-            err!(NetError::ResourceUnavailable);
+            err!(NetError::QueueFull);
         }
 
         // copy buf into tx desc

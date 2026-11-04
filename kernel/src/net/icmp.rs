@@ -170,7 +170,7 @@ impl PingTable {
             ident,
             queue: RecvQueue::new(),
         }) else {
-            err!(NetError::ResourceUnavailable);
+            err!(NetError::OutOfMemory);
         };
 
         self.entries[id] = Some(socket.clone());

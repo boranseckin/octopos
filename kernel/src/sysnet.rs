@@ -234,7 +234,10 @@ pub fn sys_interface(args: &SyscallArgs) -> Result<usize> {
         InterfaceOp::Get => {
             let index = args.get_int(2) as usize;
 
-            let interface = interface::interface_at(index)?;
+            let Some(interface) = interface::interface_at(index) else {
+                err!(SysError::NoEntry);
+            };
+
             let raw_interface = RawInterface::from(interface);
 
             copy_struct_to_user(&raw_interface, raw_interface_va)?;

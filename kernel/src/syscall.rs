@@ -34,6 +34,7 @@ pub enum SysError {
     BadAddress = 14,
     AlreadyExists = 17,
     CrossDeviceLink = 18,
+    NoDevice = 19,
     NotDirectory = 20,
     IsDirectory = 21,
     InvalidArgument = 22,
@@ -46,7 +47,11 @@ pub enum SysError {
     NotImplemented = 38,
     NotEmpty = 39,
     MessageTooLarge = 90,
+    AddressInUse = 98,
+    AddressUnavailable = 99,
+    NetworkDown = 100,
     NetworkUnreachable = 101,
+    NoBufferSpace = 105,
     TimedOut = 110,
 }
 
@@ -61,6 +66,9 @@ impl Expected for SysError {
                 | Self::NoEntry
                 | Self::AlreadyExists
                 | Self::NetworkUnreachable
+                | Self::AddressInUse
+                | Self::AddressUnavailable
+                | Self::NoDevice
         )
     }
 }
@@ -87,6 +95,7 @@ impl SysError {
             14 => Self::BadAddress,
             17 => Self::AlreadyExists,
             18 => Self::CrossDeviceLink,
+            19 => Self::NoDevice,
             20 => Self::NotDirectory,
             21 => Self::IsDirectory,
             22 => Self::InvalidArgument,
@@ -99,7 +108,11 @@ impl SysError {
             38 => Self::NotImplemented,
             39 => Self::NotEmpty,
             90 => Self::MessageTooLarge,
+            98 => Self::AddressInUse,
+            99 => Self::AddressUnavailable,
+            100 => Self::NetworkDown,
             101 => Self::NetworkUnreachable,
+            105 => Self::NoBufferSpace,
             110 => Self::TimedOut,
             _ => Self::InvalidArgument,
         }
@@ -136,6 +149,11 @@ impl Display for SysError {
             SysError::MessageTooLarge => write!(f, "message too large"),
             SysError::NetworkUnreachable => write!(f, "network unreachable"),
             SysError::TimedOut => write!(f, "timed out"),
+            SysError::NoDevice => write!(f, "no such device"),
+            SysError::AddressInUse => write!(f, "address already in use"),
+            SysError::AddressUnavailable => write!(f, "address not available"),
+            SysError::NetworkDown => write!(f, "network is down"),
+            SysError::NoBufferSpace => write!(f, "no buffer space available"),
         }
     }
 }
@@ -185,11 +203,11 @@ traced_from!(FsError => SysError);
 impl From<NetError> for SysError {
     fn from(value: NetError) -> Self {
         match value {
-            NetError::NotConfigured => SysError::NotPermitted,
-            NetError::QueueFull => SysError::ResourceUnavailable,
+            NetError::NotConfigured => SysError::NetworkDown,
+            NetError::QueueFull => SysError::NoBufferSpace,
             NetError::TableFull => SysError::FileTableFull,
-            NetError::OutOfSocket => SysError::ResourceUnavailable,
-            NetError::PortInUse => SysError::AlreadyExists,
+            NetError::OutOfSocket => SysError::AddressInUse,
+            NetError::PortInUse => SysError::AddressInUse,
             NetError::BadSocket => SysError::BadDescriptor,
             NetError::InvalidAddress => SysError::InvalidArgument,
             NetError::MalformedPacket => SysError::InvalidArgument,
@@ -198,13 +216,14 @@ impl From<NetError> for SysError {
             NetError::NetworkUnreachable => SysError::NetworkUnreachable,
             NetError::RouteNotFound => SysError::NoEntry,
             NetError::PacketTooLarge => SysError::MessageTooLarge,
-            NetError::ResourceUnavailable => SysError::ResourceUnavailable,
-            NetError::InterfaceNotFound => SysError::NoEntry,
+            NetError::OutOfMemory => SysError::OutOfMemory,
+            NetError::InterfaceNotFound => SysError::NoDevice,
             NetError::ChecksumFailed => SysError::InvalidArgument,
             NetError::TimedOut => SysError::TimedOut,
             NetError::RouteExists => SysError::AlreadyExists,
-            NetError::GatewayUnreachable => SysError::InvalidArgument,
+            NetError::GatewayUnreachable => SysError::NetworkUnreachable,
             NetError::NotPermitted => SysError::NotPermitted,
+            NetError::AddressUnavailable => SysError::AddressUnavailable,
         }
     }
 }

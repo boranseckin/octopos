@@ -55,8 +55,8 @@ fn test_socket_duplicate_port() {
 
     assert_eq!(
         socket(SocketType::Udp, addr),
-        Err(SysError::AlreadyExists),
-        "duplicate port must return AlreadyExists"
+        Err(SysError::AddressInUse),
+        "duplicate port must return AddressInUse"
     );
 
     close(fd).expect("close");
@@ -672,12 +672,12 @@ fn test_bind_interface_conflicts() {
     let fd = socket(SocketType::Udp, on_lo).expect("socket open on lo");
     assert_eq!(
         socket(SocketType::Udp, on_lo),
-        Err(SysError::AlreadyExists),
+        Err(SysError::AddressInUse),
         "same port on the same interface must conflict"
     );
     assert_eq!(
         socket(SocketType::Udp, any),
-        Err(SysError::AlreadyExists),
+        Err(SysError::AddressInUse),
         "any interface must conflict with a bound interface"
     );
 
@@ -692,9 +692,25 @@ fn test_bind_interface_conflicts() {
     let fd = socket(SocketType::Udp, any).expect("socket open on any interface");
     assert_eq!(
         socket(SocketType::Udp, on_lo),
-        Err(SysError::AlreadyExists),
+        Err(SysError::AddressInUse),
         "a bound interface must conflict with any interface"
     );
+    close(fd).expect("close");
+}
+
+/// Binding fails for an address the host doesn't own, on lo's subnet or off it, while one of
+/// its own addresses binds.
+fn test_bind_rejects_foreign_address() {
+    for ip in [Ipv4Addr([127, 0, 0, 2]), Ipv4Addr([10, 1, 2, 3])] {
+        assert_eq!(
+            socket(SocketType::Udp, SockAddr::inet(ip, 0)),
+            Err(SysError::AddressUnavailable),
+            "{ip} is not an address of this host"
+        );
+    }
+
+    let fd = socket(SocketType::Udp, SockAddr::inet(Ipv4Addr::LOOPBACK, 0))
+        .expect("an address of this host must bind");
     close(fd).expect("close");
 }
 
@@ -706,8 +722,8 @@ fn test_bind_interface_rejects() {
             SocketType::Udp,
             SockAddr::inet_on(Ipv4Addr::UNSPECIFIED, 0, InterfaceId(999))
         ),
-        Err(SysError::NoEntry),
-        "unknown interface must return NoEntry"
+        Err(SysError::NoDevice),
+        "unknown interface must return NoDevice"
     );
 
     if let Some(other) = other_id() {
@@ -716,7 +732,7 @@ fn test_bind_interface_rejects() {
                 SocketType::Udp,
                 SockAddr::inet_on(Ipv4Addr::LOOPBACK, 0, other)
             ),
-            Err(SysError::InvalidArgument),
+            Err(SysError::AddressUnavailable),
             "an address owned by lo must not bind on another interface"
         );
     }
@@ -952,6 +968,7 @@ fn main(_args: Args) {
     test_bind_interface_receives();
     test_bind_interface_filters();
     test_bind_interface_conflicts();
+    test_bind_rejects_foreign_address();
     test_bind_interface_rejects();
     test_bind_interface_zero_is_any();
     test_bound_send_uses_interface();

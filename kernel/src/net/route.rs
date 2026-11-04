@@ -274,7 +274,7 @@ pub fn add_route(route: RouteEntry, replace: bool) -> Result<()> {
     if let Some(pref_src) = route.pref_src {
         // a pref_src addr must be owned by the interface.
         if !owns_addr(&routes, route.interface_id, pref_src) {
-            err!(NetError::InvalidAddress)
+            err!(NetError::AddressUnavailable)
         }
     }
 

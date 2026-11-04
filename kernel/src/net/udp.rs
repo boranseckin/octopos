@@ -47,7 +47,7 @@ impl UdpSocket {
         // unless address is 0.0.0.0, make sure it is a local address, on the interface (if given).
         ensure!(
             ip.is_unspecified() || route::is_local_addr(ip, interface),
-            NetError::InvalidAddress
+            NetError::AddressUnavailable
         );
 
         UDP_TABLE.lock().add(ip, port, interface)
@@ -254,7 +254,7 @@ impl UdpTable {
             bound_interface: interface,
             queue: RecvQueue::new(),
         }) else {
-            err!(NetError::ResourceUnavailable);
+            err!(NetError::OutOfMemory);
         };
 
         self.entries[id] = Some(socket.clone());

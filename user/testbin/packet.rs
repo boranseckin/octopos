@@ -217,7 +217,7 @@ fn test_unbound_interface() {
 
     assert_eq!(
         send(fd, &out[..len], SockAddr::any_link()),
-        Err(SysError::NotPermitted),
+        Err(SysError::InvalidArgument),
         "send with no interface anywhere must fail"
     );
 
@@ -243,7 +243,7 @@ fn test_unbound_interface() {
 fn test_reject_invalid_addresses() {
     assert_eq!(
         open_packet(Some(InterfaceId(0xfffe)), None),
-        Err(SysError::NoEntry),
+        Err(SysError::NoDevice),
         "bind to a missing interface must fail"
     );
     assert_eq!(
@@ -273,7 +273,7 @@ fn test_reject_invalid_addresses() {
             &out[..len],
             SockAddr::link(Some(InterfaceId(0xfffe)), None)
         ),
-        Err(SysError::NoEntry),
+        Err(SysError::NoDevice),
         "send on a missing interface must fail"
     );
 

@@ -48,12 +48,13 @@ pub enum NetError {
     RouteNotFound,
     RouteExists,
     PacketTooLarge,
-    ResourceUnavailable,
+    OutOfMemory,
     InterfaceNotFound,
     GatewayUnreachable,
     ChecksumFailed,
     TimedOut,
     NotPermitted,
+    AddressUnavailable,
 }
 
 impl core::fmt::Display for NetError {
@@ -73,12 +74,13 @@ impl core::fmt::Display for NetError {
             NetError::RouteNotFound => write!(f, "route not found"),
             NetError::RouteExists => write!(f, "route already exists"),
             NetError::PacketTooLarge => write!(f, "packet is too large"),
-            NetError::ResourceUnavailable => write!(f, "resource unavailable"),
+            NetError::OutOfMemory => write!(f, "out of memory"),
             NetError::InterfaceNotFound => write!(f, "interface not found"),
             NetError::GatewayUnreachable => write!(f, "gateway unreachable"),
             NetError::ChecksumFailed => write!(f, "checksum verification failed"),
             NetError::TimedOut => write!(f, "timed out"),
             NetError::NotPermitted => write!(f, "not permitted"),
+            NetError::AddressUnavailable => write!(f, "address unavailable"),
         }
     }
 }
@@ -86,8 +88,12 @@ impl core::fmt::Display for NetError {
 pub type Result<T> = core::result::Result<T, Traced<NetError>>;
 
 impl Expected for NetError {
+    /// Errors caused by what arrives from the network, not by a kernel bug.
     fn is_expected(&self) -> bool {
-        matches!(self, Self::TimedOut | Self::NetworkUnreachable)
+        matches!(
+            self,
+            Self::NetworkUnreachable | Self::MalformedPacket | Self::ChecksumFailed
+        )
     }
 }
 
