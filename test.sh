@@ -9,8 +9,12 @@ test_bins=$(find user/testbin/*.rs | sed 's|user/testbin/\(.*\)\.rs|target/riscv
 # init.rs checks for this file to run testrunner instead of sh.
 touch /tmp/testmode
 
-# backup original fs.img and create a new one for testing
-mv target/fs.img /tmp/fs.img.backup
+# Back up the original fs.img, if there is one, and restore it on exit.
+if [ -f target/fs.img ]; then
+  mv target/fs.img /tmp/fs.img.backup
+  trap 'mv /tmp/fs.img.backup target/fs.img' EXIT
+fi
+
 qemu-img create target/fs.img 256M
 
 # Pass test binaries and the testmode marker as extra files to mkfs.sh.
@@ -19,11 +23,7 @@ qemu-img create target/fs.img 256M
 
 if ! cargo run --release; then
   echo "test failed"
-  # restore original fs.img
-  mv /tmp/fs.img.backup target/fs.img
   exit 1
 fi
 
 echo "test passed"
-# restore original fs.img
-mv /tmp/fs.img.backup target/fs.img

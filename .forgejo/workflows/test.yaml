@@ -1,0 +1,33 @@
+on:
+  push:
+    branches: main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: rust
+    env:
+      CARGO_TARGET_RISCV64GC_UNKNOWN_NONE_ELF_RUNNER: >-
+        qemu-system-riscv64
+        -machine virt
+        -bios none
+        -m 256M
+        -smp 4
+        -nographic
+        -cpu rv64,zkr=true
+        -global virtio-mmio.force-legacy=false
+        -drive file=target/fs.img,if=none,format=raw,id=x0
+        -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+        -netdev user,id=net0
+        -device e1000,netdev=net0,bus=pcie.0,romfile=
+        -kernel
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends qemu-system-misc qemu-utils
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - run: cargo build --release
+      - run: timeout 15m ./test.sh
