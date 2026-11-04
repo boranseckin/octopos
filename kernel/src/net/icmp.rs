@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use crate::net::ipv4::{Destination, Ipv4Header, Ipv4Proto};
 use crate::net::socket::{RecvQueue, SockAddr};
 use crate::net::udp::MAX_UDP_PAYLOAD;
-use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result, Unresolved};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
 
@@ -61,7 +61,12 @@ impl PingSocket {
         // recalculate checksum, in case it was left as zero.
         let req_icmp = req_icmp.with_echo_ident(self.ident).add_checksum(req_data);
 
-        net::transmit(dest_ip, Ipv4Proto::Icmp, &[req_icmp.as_bytes(), req_data])
+        net::transmit(
+            dest_ip,
+            Ipv4Proto::Icmp,
+            &[req_icmp.as_bytes(), req_data],
+            Unresolved::Queue,
+        )
     }
 
     pub fn receive(&self) -> Result<(SockAddr, Box<[u8]>)> {
@@ -292,7 +297,12 @@ pub fn send_port_unreachable(
     quote[Ipv4Header::SIZE..].copy_from_slice(&orig_data[..8]);
 
     let icmp = IcmpHeader::new_port_unreachable().add_checksum(&quote);
-    net::transmit(src, Ipv4Proto::Icmp, &[icmp.as_bytes(), &quote])
+    net::transmit(
+        src,
+        Ipv4Proto::Icmp,
+        &[icmp.as_bytes(), &quote],
+        Unresolved::Drop,
+    )
 }
 
 /// Handles an incoming ICMP packet.
@@ -316,7 +326,12 @@ pub fn handle_icmp(src_ip: Ipv4Addr, destination: Destination, req_data: &[u8]) 
         IcmpType::EchoRequest => {
             let icmp = IcmpHeader::new_echo_reply(header).add_checksum(payload);
 
-            net::transmit(src_ip, Ipv4Proto::Icmp, &[icmp.as_bytes(), payload])
+            net::transmit(
+                src_ip,
+                Ipv4Proto::Icmp,
+                &[icmp.as_bytes(), payload],
+                Unresolved::Drop,
+            )
         }
         IcmpType::EchoReply => {
             let Some(socket) = PING_TABLE.lock().ingress_lookup(header.echo_ident()) else {

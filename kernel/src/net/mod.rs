@@ -352,6 +352,15 @@ impl core::fmt::Display for Ipv4Cidr {
     }
 }
 
+/// What to do with a packet whose next hop isn't in the ARP cache.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Unresolved {
+    /// Queue it until ARP resolves or `ARP_RESOLVE_TIMEOUT` passes. For traffic a process sent.
+    Queue,
+    /// Drop it, but still send the ARP request. For replies the kernel generates.
+    Drop,
+}
+
 /// Entry in the outgoing packet queue, containing the destination IP address, the interface to send
 /// on, and the packet data.
 #[derive(Clone)]
@@ -636,14 +645,19 @@ fn link_destination(dest: Ipv4Addr, cidr: Ipv4Cidr) -> Option<MacAddr> {
 /// Packets are passed as a list of segments that will be concatenated together.
 ///
 /// Currently only support IPv4 packets.
-pub fn transmit(dest_ip: Ipv4Addr, proto: Ipv4Proto, segments: &[&[u8]]) -> Result<()> {
+pub fn transmit(
+    dest_ip: Ipv4Addr,
+    proto: Ipv4Proto,
+    segments: &[&[u8]],
+    unresolved: Unresolved,
+) -> Result<()> {
     let route = route::best_route_for(dest_ip, None)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::InterfaceNotFound);
     };
 
-    transmit_with_route(route, interface, dest_ip, proto, segments)
+    transmit_with_route(route, interface, dest_ip, proto, segments, unresolved)
 }
 
 /// Transmits a packet on the given interface with the specified route.
@@ -656,6 +670,7 @@ pub fn transmit_with_route(
     dest_ip: Ipv4Addr,
     proto: Ipv4Proto,
     segments: &[&[u8]],
+    unresolved: Unresolved,
 ) -> Result<()> {
     let src_mac = interface.config.mac;
     let Some(src_ipv4) = source_addr(&route, &interface) else {
@@ -707,13 +722,19 @@ pub fn transmit_with_route(
             interface.device.transmit(&packet)
         } else {
             // packet requires MAC address and we don't have it:
-            // - queue the packet and send an ARP request.
-            // - once the reply is received, the packet will be sent.
+            // - queue or drop the packet, and send an ARP request.
+            // - once the reply is received, the packet will be sent if queued.
+            //
+            // queue before requesting: the reply may be handled before we enqueue, and the packet
+            // would miss the dispatch.
             //
             // if the queue is full, send the arp request anyways before returning the error.
-            // the packet will be dropped but the arp request might resolve previously pending
-            // entries, thus clearing out the queue.
-            let queued = OutgoingQueue::enqueue(arp_target, interface.device, packet);
+            // the packet will be dropped but the arp request might resolve previously pending or
+            // future entries, thus clearing out the queue.
+            let queued = match unresolved {
+                Unresolved::Queue => OutgoingQueue::enqueue(arp_target, interface.device, packet),
+                Unresolved::Drop => Ok(()),
+            };
             arp::request(interface.id, arp_target)?;
             queued
         }

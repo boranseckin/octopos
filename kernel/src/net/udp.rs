@@ -5,9 +5,9 @@ use alloc::sync::Arc;
 use crate::net::icmp;
 use crate::net::interface::{self, InterfaceId};
 use crate::net::ipv4::{Destination, Ipv4Header, Ipv4Proto};
+use crate::net::route;
 use crate::net::socket::{RecvQueue, SockAddr};
-use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result};
-use crate::net::{route, source_addr};
+use crate::net::{self, Be, Ipv4Addr, NetError, NetworkHeader, Result, Unresolved, source_addr};
 use crate::param::NSOCKET;
 use crate::spinlock::SpinLock;
 
@@ -401,6 +401,7 @@ fn transmit_udp(
         dest_ip,
         Ipv4Proto::Udp,
         &[header.as_bytes(), payload],
+        Unresolved::Queue,
     )
 }
 
