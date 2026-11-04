@@ -718,9 +718,12 @@ fn main(args: Args) {
     )
     .unwrap_or_else(|e| exit_with_msg(e));
 
-    // reserve the port so that kernel does not assume port unreachable
-    let _udp = socket(SocketType::Udp, SockAddr::any_inet_with_port(CLIENT_PORT))
-        .unwrap_or_else(|e| exit_with_msg(e));
+    // reserve the port on this interface so that kernel does not assume port unreachable
+    let _udp = socket(
+        SocketType::Udp,
+        SockAddr::inet_on(Ipv4Addr::UNSPECIFIED, CLIENT_PORT, interface.id),
+    )
+    .unwrap_or_else(|e| exit_with_msg(e));
 
     let mut client = Client {
         fd,
