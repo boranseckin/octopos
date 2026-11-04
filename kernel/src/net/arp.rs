@@ -215,6 +215,10 @@ pub fn handle_arp(
 
     match req_arp.op() {
         ArpOp::Request => {
+            // learn from senders, but not from probes with no address
+            if !req_arp.spa.is_unspecified() {
+                ArpCache::insert(req_arp.spa, req_arp.sha);
+            }
             reply(interface_id, req_eth, req_arp)?;
         }
         ArpOp::Response => {
