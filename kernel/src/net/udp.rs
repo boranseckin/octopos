@@ -337,8 +337,28 @@ impl UdpHeader {
         net::internet_checksum(&[pseudo_header.as_bytes(), header.as_bytes(), payload])
     }
 
+    fn verify_checksum(&self, src_ip: Ipv4Addr, dest_ip: Ipv4Addr, payload: &[u8]) -> bool {
+        if self.sum.get() == 0 {
+            return true;
+        }
+
+        let pseudo_header = UdpPseudoHeader {
+            src_ip,
+            dest_ip,
+            zero: 0,
+            proto: Ipv4Proto::Udp as u8,
+            udp_len: self.len,
+        };
+
+        net::internet_checksum(&[pseudo_header.as_bytes(), self.as_bytes(), payload]) == 0
+    }
+
     pub fn add_checksum(mut self, src_ip: Ipv4Addr, dest_ip: Ipv4Addr, payload: &[u8]) -> Self {
-        self.sum = Be::new(self.calculate_checksum(src_ip, dest_ip, payload));
+        let sum = self.calculate_checksum(src_ip, dest_ip, payload);
+        // RFC 768
+        // If the computed checksum is zero, it is transmitted as all ones.
+        // An all zero transmitted checksum value means that the transmitter generated no checksum.
+        self.sum = Be::new(if sum == 0 { 0xFFFF } else { sum });
         self
     }
 }
@@ -403,6 +423,16 @@ pub fn handle_udp(
         err!(NetError::MalformedPacket);
     }
 
+    // truncate data to declared length in the header
+    // length check above guarantees the indexing
+    let req_data = &req_data[..udp_len - UdpHeader::SIZE];
+
+    // verify checksum, if any
+    ensure!(
+        req_udp.verify_checksum(req_ipv4.src(), req_ipv4.dest(), req_data),
+        NetError::ChecksumFailed
+    );
+
     let Some(socket) = UDP_TABLE.lock().ingress_lookup(
         req_ipv4.dest(),
         req_udp.dest_port.get(),
@@ -411,10 +441,6 @@ pub fn handle_udp(
         // no socket is bound to this (ip, port)
         return icmp::send_port_unreachable(req_ipv4, destination, &datagram[..UdpHeader::SIZE]);
     };
-
-    // truncate data to declared length in the header
-    let payload_len = udp_len.saturating_sub(UdpHeader::SIZE);
-    let req_data = &req_data[..payload_len.min(req_data.len())];
 
     // do not return here if the queue is full, might as well wakeup the proc so that they can
     // process the full queue.

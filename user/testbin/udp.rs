@@ -781,6 +781,137 @@ fn test_rejects_nonzero_padding() {
     }
 }
 
+/// Offset of the UDP checksum in a frame.
+const UDP_SUM: usize = L4_START + 6;
+
+/// RFC 768 checksum of a UDP `segment` (header and payload) from `src` to `dest`, taking its
+/// checksum field as it is. A valid segment gives 0; with the field zeroed, it gives the checksum.
+fn udp_checksum(src: Ipv4Addr, dest: Ipv4Addr, segment: &[u8]) -> u16 {
+    let mut data = Vec::with_capacity(12 + segment.len());
+    data.extend_from_slice(&src.0);
+    data.extend_from_slice(&dest.0);
+    data.extend_from_slice(&[0, IPPROTO_UDP]);
+    data.extend_from_slice(&(segment.len() as u16).to_be_bytes());
+    data.extend_from_slice(segment);
+    checksum(&data)
+}
+
+/// A frame from 127.0.0.1 to 127.0.0.1 carrying `payload`, with a valid UDP checksum.
+fn checksummed_udp_frame(dest_port: u16, payload: &[u8]) -> Vec<u8> {
+    let lo = Ipv4Addr::LOOPBACK;
+    let mut frame = raw_udp_frame(lo, lo, dest_port).to_vec();
+    frame.extend_from_slice(payload);
+
+    let ip_len = (frame.len() - IP_START) as u16;
+    frame[IP_START + 2..IP_START + 4].copy_from_slice(&ip_len.to_be_bytes());
+    frame[IP_START + 10..IP_START + 12].copy_from_slice(&[0, 0]);
+    let ip_sum = checksum(&frame[IP_START..L4_START]);
+    frame[IP_START + 10..IP_START + 12].copy_from_slice(&ip_sum.to_be_bytes());
+
+    let udp_len = (frame.len() - L4_START) as u16;
+    frame[L4_START + 4..L4_START + 6].copy_from_slice(&udp_len.to_be_bytes());
+    let sum = udp_checksum(lo, lo, &frame[L4_START..]);
+    frame[UDP_SUM..UDP_SUM + 2].copy_from_slice(&sum.to_be_bytes());
+
+    frame
+}
+
+/// A datagram with a wrong checksum is dropped. A valid checksum and no checksum (0) are both
+/// delivered; the valid case also shows the test computes checksums the way the kernel does.
+fn test_checksum_verified() {
+    const PAYLOAD: &[u8] = b"checksum";
+
+    let capture = open_lo_capture();
+    let lo = SockAddr::link(Some(lo_id()), Some(ETHERTYPE_IPV4));
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+
+    let valid = checksummed_udp_frame(port, PAYLOAD);
+    let sum = u16::from_be_bytes([valid[UDP_SUM], valid[UDP_SUM + 1]]);
+    let mut buf = [0u8; 16];
+
+    let mut bad = valid.clone();
+    bad[UDP_SUM..UDP_SUM + 2].copy_from_slice(&(sum ^ 1).to_be_bytes());
+    send(capture, &bad, lo).expect("send raw frame");
+    assert_eq!(
+        receive(fd, &mut buf).map(|(n, _)| n),
+        Err(SysError::TimedOut),
+        "a wrong checksum must be dropped"
+    );
+
+    let mut none = valid.clone();
+    none[UDP_SUM..UDP_SUM + 2].copy_from_slice(&[0, 0]);
+    for (what, frame) in [("valid checksum", &valid), ("no checksum", &none)] {
+        send(capture, frame, lo).expect("send raw frame");
+        let (n, _) = receive(fd, &mut buf).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert_eq!(&buf[..n], PAYLOAD, "payload ({what})");
+    }
+
+    close(fd).expect("close");
+    close(capture).expect("close");
+}
+
+/// A datagram with a wrong checksum to an unbound port gets no Port Unreachable, while the same
+/// datagram with a valid checksum does.
+fn test_no_port_unreachable_for_bad_checksum() {
+    let capture = open_lo_capture();
+    let lo = SockAddr::link(Some(lo_id()), Some(ETHERTYPE_IPV4));
+    let port = unbound_port();
+
+    let valid = checksummed_udp_frame(port, b"x");
+    send(capture, &valid, lo).expect("send raw frame");
+    let mut buf = [0u8; 128];
+    let (_, icmp) = capture_icmp(capture, &mut buf);
+    assert!(icmp.is_some(), "a valid checksum to an unbound port must be answered");
+
+    let mut bad = valid;
+    bad[UDP_SUM] ^= 0xff;
+    send(capture, &bad, lo).expect("send raw frame");
+    assert_no_icmp(capture, "a wrong checksum must not be answered");
+
+    close(capture).expect("close");
+}
+
+/// A checksum that computes to 0 is sent as 0xffff, since 0 means "no checksum" (RFC 768), and
+/// the receiver accepts it.
+fn test_zero_checksum_sent_as_ones() {
+    let capture = open_lo_capture();
+    let (fd, port) = open_udp();
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+
+    // the segment the kernel will build, with a zero payload word. Adding a word equal to its
+    // checksum makes the sum all ones, so the computed checksum becomes 0.
+    let mut segment = [0u8; 10];
+    segment[0..2].copy_from_slice(&port.to_be_bytes());
+    segment[2..4].copy_from_slice(&port.to_be_bytes());
+    segment[4..6].copy_from_slice(&10u16.to_be_bytes());
+    let lo = Ipv4Addr::LOOPBACK;
+    let payload = udp_checksum(lo, lo, &segment).to_be_bytes();
+
+    send(fd, &payload, SockAddr::inet(lo, port)).expect("send");
+
+    let mut frame = [0u8; 128];
+    loop {
+        let (_, _) = receive(capture, &mut frame).expect("datagram must reach lo");
+        let dest_port = u16::from_be_bytes([frame[L4_START + 2], frame[L4_START + 3]]);
+        if frame[IP_PROTO] == IPPROTO_UDP && dest_port == port {
+            break;
+        }
+    }
+    assert_eq!(
+        &frame[UDP_SUM..UDP_SUM + 2],
+        &[0xff, 0xff],
+        "a zero checksum must be sent as all ones"
+    );
+
+    let mut buf = [0u8; 8];
+    let (n, _) = receive(fd, &mut buf).expect("an all ones checksum must be accepted");
+    assert_eq!(&buf[..n], &payload, "payload");
+
+    close(fd).expect("close");
+    close(capture).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -809,4 +940,7 @@ fn main(_args: Args) {
     test_bind_interface_zero_is_any();
     test_bound_send_uses_interface();
     test_rejects_nonzero_padding();
+    test_checksum_verified();
+    test_no_port_unreachable_for_bad_checksum();
+    test_zero_checksum_sent_as_ones();
 }
