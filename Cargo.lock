@@ -10,14 +10,14 @@ checksum = "ee741d62dcaf41ca303576ef890989ccb01d5dd77f8ce1a6d6c7846ab5d09efb"
 
 [[package]]
 name = "octopos"
-version = "1.1.0"
+version = "1.4.0"
 dependencies = [
  "buddy-alloc",
 ]
 
 [[package]]
 name = "user"
-version = "1.0.0"
+version = "1.4.0"
 dependencies = [
  "octopos",
 ]

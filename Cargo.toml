@@ -3,6 +3,9 @@ members = ["kernel", "user" ]
 exclude = ["mkfs"]
 resolver = "3"
 
+[workspace.package]
+version = "1.4.0"
+
 [profile.release]
 lto = true          # link time optimization, eleminates dead code
 strip = true        # strips symbols from the binary

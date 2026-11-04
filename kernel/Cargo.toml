@@ -1,6 +1,5 @@
 [package]
 name = "octopos"
-version = "1.1.0"
 edition = "2024"
 authors = ["Boran Seckin <boran@boranseckin.com>"]
 description = "xv6 for RISC-V in Rust"
@@ -8,6 +7,7 @@ repository = "https://github.com/boranseckin/octopos"
 license = "MIT"
 keywords = ["riscv", "xv6"]
 default-run = "octopos"
+version.workspace = true
 
 [lib]
 name = "kernel"

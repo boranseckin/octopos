@@ -1,12 +1,12 @@
 [package]
 name = "user"
-version = "1.0.0"
 edition = "2024"
 authors = ["Boran Seckin <boran@boranseckin.com>"]
 description = "user space programs for octopos"
 repository = "https://github.com/boranseckin/octopos"
 license = "MIT"
 keywords = ["riscv", "xv6"]
+version.workspace = true
 
 [lib]
 name = "user"
