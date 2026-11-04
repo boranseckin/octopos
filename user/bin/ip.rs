@@ -121,56 +121,63 @@ fn addr_clear_cmd(rest: &mut impl Iterator<Item = &str>) {
 }
 
 fn route_list_cmd() {
-    let mut rows: Vec<_> = Vec::new();
-
     // collect interfaces once and search over it
     let interfaces = interfaces().unwrap_or_else(|e| exit_with_msg(e));
 
+    let mut routes = Vec::new();
+
     for i in 0.. {
-        let route = match route_get(i) {
-            Ok(r) => r,
+        match route_get(i) {
+            Ok(r) => routes.push(r),
             Err(SysError::NoEntry) => break,
             Err(e) => exit_with_msg(e),
-        };
-
-        let addr = Ipv4Cidr {
-            addr: route.dest_ip,
-            prefix_len: route.prefix_len,
-        };
-
-        let gateway = route
-            .gateway
-            .map_or_else(|| "direct".into(), |g| g.to_string());
-
-        let interface = interfaces.iter().find(|&i| i.id == route.interface_id);
-
-        // interface might not exist, since it might change from when we called interfaces() to route_get()
-        let device =
-            interface.map_or_else(|| route.interface_id.to_string(), |i| i.name().to_string());
-
-        let scope = if route.kind == RouteKind::Local {
-            "host"
-        } else if route.gateway.is_some() {
-            "global"
-        } else {
-            "link"
-        };
-
-        let src = route
-            .pref_src
-            .or_else(|| interface.and_then(|i| i.ipv4.map(|c| c.addr)))
-            .map_or_else(|| "-".into(), |s| s.to_string());
-
-        rows.push([
-            addr.to_string(),
-            gateway,
-            device,
-            route.metric.to_string(),
-            route.owner.to_string(),
-            scope.into(),
-            src,
-        ]);
+        }
     }
+
+    routes.sort_by_key(|r| (core::cmp::Reverse(r.prefix_len), r.metric));
+
+    let rows: Vec<_> = routes
+        .iter()
+        .map(|route| {
+            let addr = Ipv4Cidr {
+                addr: route.dest_ip,
+                prefix_len: route.prefix_len,
+            };
+
+            let gateway = route
+                .gateway
+                .map_or_else(|| "direct".into(), |g| g.to_string());
+
+            let interface = interfaces.iter().find(|&i| i.id == route.interface_id);
+
+            // interface might not exist, since it might change from when we called interfaces() to route_get()
+            let device =
+                interface.map_or_else(|| route.interface_id.to_string(), |i| i.name().to_string());
+
+            let scope = if route.kind == RouteKind::Local {
+                "host"
+            } else if route.gateway.is_some() {
+                "global"
+            } else {
+                "link"
+            };
+
+            let src = route
+                .pref_src
+                .or_else(|| interface.and_then(|i| i.ipv4.map(|c| c.addr)))
+                .map_or_else(|| "-".into(), |s| s.to_string());
+
+            [
+                addr.to_string(),
+                gateway,
+                device,
+                route.metric.to_string(),
+                route.owner.to_string(),
+                scope.into(),
+                src,
+            ]
+        })
+        .collect();
 
     print_table(
         [
@@ -180,7 +187,7 @@ fn route_list_cmd() {
             "METRIC",
             "OWNER",
             "SCOPE",
-            "SRC",
+            "SOURCE",
         ],
         &rows,
     );
