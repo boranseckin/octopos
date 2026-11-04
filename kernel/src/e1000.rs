@@ -236,7 +236,7 @@ pub fn handle_interrupt() {
     }
 
     // disable RXT0 interrupts until receive is done
-    state.set_mask(E1000_MMIO_IMC, 1 << 7);
+    state.write_reg(E1000_MMIO_IMC, 1 << 7);
 
     loop {
         let index = state.rx_index;
@@ -277,7 +277,7 @@ pub fn handle_interrupt() {
     }
 
     // re-enable rx interrupts (RXT0)
-    state.set_mask(E1000_MMIO_IMS, 1 << 7);
+    state.write_reg(E1000_MMIO_IMS, 1 << 7);
 }
 
 /// Initializes the e1000 driver by mapping the MMIO region, resetting the device, setting up
@@ -327,7 +327,7 @@ pub unsafe fn init() {
     }
 
     // enable interrupts: IMS = RXT0 (bit7) | LSC (bit2)
-    state.set_mask(E1000_MMIO_IMS, (1 << 7) | (1 << 2));
+    state.write_reg(E1000_MMIO_IMS, (1 << 7) | (1 << 2));
 
     // set RDBAL/RDBAH to PA of rx_ring, RDLEN, RDH=0, RDT=RX_RING_SIZE-1
     let rx_base = state.rx_rings.as_ptr() as u64;
