@@ -5,8 +5,8 @@ use user::prelude::*;
 
 use user::io::{Ioctl, close, ioctl};
 use user::net::{
-    RouteEntry, RouteKind, RouteOwner, SocketType, loopback, receive, route_add, route_remove,
-    send, socket,
+    InterfaceId, RouteEntry, RouteKind, RouteOwner, SocketType, interface_iter, loopback, receive,
+    route_add, route_remove, send, socket,
 };
 use user::process::uptime;
 use user::syscall::{RawSockAddr, raw};
@@ -575,6 +575,212 @@ fn test_loopback_order() {
     close(fd).expect("close");
 }
 
+fn lo_id() -> InterfaceId {
+    loopback().expect("loopback interface").unwrap().id
+}
+
+/// A non-loopback interface, if the kernel has one (e1000 under QEMU). The tests never configure
+/// it, so it has no address and no routes.
+fn other_id() -> Option<InterfaceId> {
+    interface_iter()
+        .flatten()
+        .find(|i| !i.is_loopback())
+        .map(|i| i.id)
+}
+
+/// Opens a UDP socket bound to `ip` on `interface`, on an ephemeral port.
+fn open_udp_on(ip: Ipv4Addr, interface: InterfaceId) -> (Fd, u16) {
+    let fd = socket(SocketType::Udp, SockAddr::inet_on(ip, 0, interface)).expect("socket open");
+    let port = ioctl(fd, Ioctl::SOCKET_GET_PORT, 0).expect("ioctl get port") as u16;
+    (fd, port)
+}
+
+/// A socket bound to lo receives datagrams that arrive on lo, with or without an address. The
+/// source it reports has no interface, as for unbound sockets.
+fn test_bind_interface_receives() {
+    for ip in [Ipv4Addr::UNSPECIFIED, Ipv4Addr::LOOPBACK] {
+        let (fd, port) = open_udp_on(ip, lo_id());
+        set_receive_timeout(fd, ICMP_TIMEOUT);
+        let (sender, sender_port) = open_udp();
+
+        send(sender, b"bound", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+        let mut buf = [0u8; 16];
+        let (n, src) = receive(fd, &mut buf).expect("socket bound to lo must receive");
+        assert_eq!(&buf[..n], b"bound", "payload ({ip})");
+        assert_eq!(
+            src,
+            SockAddr::inet(Ipv4Addr::LOOPBACK, sender_port),
+            "source must be the sender, with no interface ({ip})"
+        );
+
+        close(fd).expect("close");
+        close(sender).expect("close");
+    }
+}
+
+/// A socket bound to another interface does not receive what arrives on lo, so the port counts
+/// as unbound there and lo answers with Port Unreachable.
+fn test_bind_interface_filters() {
+    let Some(other) = other_id() else { return };
+
+    let capture = open_lo_capture();
+    let (fd, port) = open_udp_on(Ipv4Addr::UNSPECIFIED, other);
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+    let (sender, _) = open_udp();
+
+    send(sender, b"x", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+    let mut frame = [0u8; 128];
+    let (saw_udp, icmp) = capture_icmp(capture, &mut frame);
+    assert!(saw_udp, "datagram must reach lo");
+    assert!(icmp.is_some(), "lo must answer with Port Unreachable");
+
+    let mut buf = [0u8; 8];
+    assert_eq!(
+        receive(fd, &mut buf).map(|(n, _)| n),
+        Err(SysError::TimedOut),
+        "a socket bound to another interface must not receive from lo"
+    );
+
+    close(fd).expect("close");
+    close(sender).expect("close");
+    close(capture).expect("close");
+}
+
+/// A port can be bound once per interface, and a socket on any interface conflicts with all of
+/// them.
+fn test_bind_interface_conflicts() {
+    const PORT: u16 = 26210;
+    let lo = lo_id();
+    let on_lo = SockAddr::inet_on(Ipv4Addr::UNSPECIFIED, PORT, lo);
+    let any = SockAddr::any_inet_with_port(PORT);
+
+    let fd = socket(SocketType::Udp, on_lo).expect("socket open on lo");
+    assert_eq!(
+        socket(SocketType::Udp, on_lo),
+        Err(SysError::AlreadyExists),
+        "same port on the same interface must conflict"
+    );
+    assert_eq!(
+        socket(SocketType::Udp, any),
+        Err(SysError::AlreadyExists),
+        "any interface must conflict with a bound interface"
+    );
+
+    if let Some(other) = other_id() {
+        let on_other = SockAddr::inet_on(Ipv4Addr::UNSPECIFIED, PORT, other);
+        let fd_other =
+            socket(SocketType::Udp, on_other).expect("same port on another interface must bind");
+        close(fd_other).expect("close");
+    }
+    close(fd).expect("close");
+
+    let fd = socket(SocketType::Udp, any).expect("socket open on any interface");
+    assert_eq!(
+        socket(SocketType::Udp, on_lo),
+        Err(SysError::AlreadyExists),
+        "a bound interface must conflict with any interface"
+    );
+    close(fd).expect("close");
+}
+
+/// Binding fails for an interface that doesn't exist, and for an address the interface doesn't
+/// own, even if another interface does.
+fn test_bind_interface_rejects() {
+    assert_eq!(
+        socket(
+            SocketType::Udp,
+            SockAddr::inet_on(Ipv4Addr::UNSPECIFIED, 0, InterfaceId(999))
+        ),
+        Err(SysError::NoEntry),
+        "unknown interface must return NoEntry"
+    );
+
+    if let Some(other) = other_id() {
+        assert_eq!(
+            socket(
+                SocketType::Udp,
+                SockAddr::inet_on(Ipv4Addr::LOOPBACK, 0, other)
+            ),
+            Err(SysError::InvalidArgument),
+            "an address owned by lo must not bind on another interface"
+        );
+    }
+}
+
+/// Interface 0 is "any interface": it binds and receives like an unbound socket.
+fn test_bind_interface_zero_is_any() {
+    let (fd, port) = open_udp_on(Ipv4Addr::UNSPECIFIED, InterfaceId(0));
+    set_receive_timeout(fd, ICMP_TIMEOUT);
+
+    send(fd, b"any", SockAddr::inet(Ipv4Addr::LOOPBACK, port)).expect("send");
+
+    let mut buf = [0u8; 8];
+    let (n, _) = receive(fd, &mut buf).expect("interface 0 must receive like any interface");
+    assert_eq!(&buf[..n], b"any", "payload");
+
+    close(fd).expect("close");
+}
+
+/// Sends from a bound socket only use routes on its interface. Another interface has no route
+/// to 127.0.0.1, so the send fails instead of falling back to lo.
+///
+/// The other interface is unconfigured, so this checks the route filter but not the check that
+/// keeps loopback destinations off non-loopback interfaces: that needs an address and a default
+/// route on it.
+fn test_bound_send_uses_interface() {
+    let (receiver, port) = open_udp();
+    set_receive_timeout(receiver, ICMP_TIMEOUT);
+    let dest = SockAddr::inet(Ipv4Addr::LOOPBACK, port);
+
+    let (on_lo, _) = open_udp_on(Ipv4Addr::UNSPECIFIED, lo_id());
+    send(on_lo, b"lo", dest).expect("send from a socket bound to lo");
+    let mut buf = [0u8; 8];
+    let (n, _) = receive(receiver, &mut buf).expect("receive");
+    assert_eq!(&buf[..n], b"lo", "payload");
+    close(on_lo).expect("close");
+
+    if let Some(other) = other_id() {
+        let (on_other, _) = open_udp_on(Ipv4Addr::UNSPECIFIED, other);
+        assert_eq!(
+            send(on_other, b"x", dest),
+            Err(SysError::NetworkUnreachable),
+            "a socket bound to another interface must not send through lo"
+        );
+        close(on_other).expect("close");
+    }
+
+    close(receiver).expect("close");
+}
+
+/// Addresses with non-zero padding are rejected, so the padding can carry new fields later
+/// without old programs passing garbage in them. The same addresses with zero padding open.
+fn test_rejects_nonzero_padding() {
+    let cases = [
+        (SocketType::Udp, SockAddr::any_inet()),
+        (
+            SocketType::Packet,
+            SockAddr::link(Some(lo_id()), Some(ETHERTYPE_IPV4)),
+        ),
+    ];
+
+    for (typ, addr) in cases {
+        let mut raw_addr = RawSockAddr::from(addr);
+
+        let fd = raw_result(raw::socket(typ as usize, &raw_addr)).expect("zero padding must open");
+        close(Fd(fd)).expect("close");
+
+        // the last byte is padding in both inet and link addresses
+        raw_addr.data[13] = 1;
+        assert_eq!(
+            raw_result(raw::socket(typ as usize, &raw_addr)),
+            Err(SysError::InvalidArgument),
+            "non-zero padding must be rejected ({typ:?})"
+        );
+    }
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_socket_open_close();
@@ -596,4 +802,11 @@ fn main(_args: Args) {
     test_drops_other_hosts();
     test_accepts_broadcast();
     test_loopback_order();
+    test_bind_interface_receives();
+    test_bind_interface_filters();
+    test_bind_interface_conflicts();
+    test_bind_interface_rejects();
+    test_bind_interface_zero_is_any();
+    test_bound_send_uses_interface();
+    test_rejects_nonzero_padding();
 }
