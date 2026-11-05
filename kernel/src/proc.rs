@@ -319,7 +319,7 @@ impl core::ops::Deref for Pid {
 
 impl core::fmt::Display for Pid {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
+        core::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -397,7 +397,7 @@ impl core::ops::Deref for ProcName {
 
 impl core::fmt::Display for ProcName {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self)
+        f.pad(self.as_str())
     }
 }
 

@@ -20,6 +20,16 @@ pub enum RouteOwner {
     Static = 3,
 }
 
+impl RouteOwner {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            RouteOwner::Kernel => "kernel",
+            RouteOwner::Dhcp => "dhcp",
+            RouteOwner::Static => "static",
+        }
+    }
+}
+
 impl TryFrom<u8> for RouteOwner {
     type Error = NetError;
 
@@ -35,11 +45,7 @@ impl TryFrom<u8> for RouteOwner {
 
 impl core::fmt::Display for RouteOwner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            RouteOwner::Kernel => write!(f, "kernel"),
-            RouteOwner::Dhcp => write!(f, "dhcp"),
-            RouteOwner::Static => write!(f, "static"),
-        }
+        f.pad(self.as_str())
     }
 }
 
@@ -52,6 +58,15 @@ pub enum RouteKind {
     /// Addressed to this host; delivered through loopback.
     /// `interface_id` is the interface that owns the address.
     Local = 2,
+}
+
+impl RouteKind {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            RouteKind::Unicast => "unicast",
+            RouteKind::Local => "local",
+        }
+    }
 }
 
 impl TryFrom<u8> for RouteKind {
@@ -68,10 +83,7 @@ impl TryFrom<u8> for RouteKind {
 
 impl core::fmt::Display for RouteKind {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            RouteKind::Unicast => write!(f, "unicast"),
-            RouteKind::Local => write!(f, "local"),
-        }
+        f.pad(self.as_str())
     }
 }
 

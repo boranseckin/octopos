@@ -144,3 +144,54 @@ pub fn panic(info: &core::panic::PanicInfo) -> ! {
         core::hint::spin_loop();
     }
 }
+
+/// Fixed-capacity string buffer for formatting without allocation.
+struct StackStr<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> StackStr<N> {
+    fn new() -> Self {
+        Self {
+            buf: [0u8; N],
+            len: 0,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        // SAFETY: buf[..len] is a concatenation of whole `&str`s written by `write_str`
+        unsafe { str::from_utf8_unchecked(&self.buf[..self.len]) }
+    }
+}
+
+impl<const N: usize> fmt::Write for StackStr<N> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let end = self.len + s.len();
+
+        if end > N {
+            return Err(fmt::Error);
+        }
+
+        self.buf[self.len..end].copy_from_slice(s.as_bytes());
+        self.len = end;
+
+        Ok(())
+    }
+}
+
+/// Writes `args` to `f`, honouring width, alignment and precision.
+/// Formats into an `N`-byte stack buffer when padding is requested;
+/// `N` must be at least the longest possible output, or formatting fails.
+pub fn pad_args<const N: usize>(
+    f: &mut fmt::Formatter<'_>,
+    args: fmt::Arguments<'_>,
+) -> fmt::Result {
+    if f.width().is_none() && f.precision().is_none() {
+        return f.write_fmt(args);
+    }
+
+    let mut buf = StackStr::<N>::new();
+    fmt::write(&mut buf, args)?;
+    f.pad(buf.as_str())
+}

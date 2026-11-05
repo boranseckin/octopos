@@ -11,6 +11,7 @@ use crate::net::interface::{InterfaceEntry, InterfaceId, NetDevice};
 use crate::net::ipv4::{Ipv4Header, Ipv4Proto};
 use crate::net::route::RouteEntry;
 use crate::param::TICKS_PER_SEC;
+use crate::printf;
 use crate::proc::{self, Channel};
 use crate::spinlock::SpinLock;
 use crate::trap::TICKS;
@@ -158,11 +159,11 @@ impl MacAddr {
 }
 
 impl core::fmt::Display for MacAddr {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5]
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let [a, b, c, d, e, f] = self.0;
+        printf::pad_args::<17>(
+            formatter,
+            format_args!("{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}"),
         )
     }
 }
@@ -318,7 +319,8 @@ impl TryFrom<&[u8]> for Ipv4Addr {
 
 impl core::fmt::Display for Ipv4Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])
+        let [a, b, c, d] = self.0;
+        printf::pad_args::<15>(f, format_args!("{a}.{b}.{c}.{d}"))
     }
 }
 
@@ -354,7 +356,7 @@ impl core::str::FromStr for Ipv4Cidr {
 
 impl core::fmt::Display for Ipv4Cidr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}/{}", self.addr, self.prefix_len)
+        printf::pad_args::<18>(f, format_args!("{}/{}", self.addr, self.prefix_len))
     }
 }
 

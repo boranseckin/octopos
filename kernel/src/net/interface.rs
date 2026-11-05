@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use crate::net::loopback;
 use crate::net::route;
 use crate::net::{Ipv4Addr, Ipv4Cidr, MacAddr, NetError, Result};
+use crate::printf;
 use crate::proc::Pod;
 use crate::spinlock::SpinLock;
 
@@ -34,7 +35,7 @@ impl InterfaceId {
 
 impl core::fmt::Display for InterfaceId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "if{}", self.0)
+        printf::pad_args::<8>(f, format_args!("if{}", self.0))
     }
 }
 
