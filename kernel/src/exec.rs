@@ -4,7 +4,7 @@ use crate::error::Traced;
 use crate::fs::{FsError, Path};
 use crate::log::Operation;
 use crate::param::{MAXARG, USERSTACK};
-use crate::proc::current_proc;
+use crate::proc::{ProcName, current_proc};
 use crate::riscv::{PGSIZE, PTE_W, PTE_X, pg_round_up};
 use crate::vm::{VA, VmError};
 
@@ -287,18 +287,11 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
         err!(e);
     }
 
+    let basename = path.as_str().rsplit('/').next().unwrap();
+    proc.inner.lock().name = ProcName::new(basename);
+
     // # Safety: we are the current proc
     let data = unsafe { proc.data_mut() };
-
-    // save program name for debugging
-    data.name.clear();
-    data.name.insert_str(
-        0,
-        path.as_str()
-            .rsplit_once("/")
-            .unwrap_or(("", path.as_str()))
-            .1,
-    );
 
     // commit to the user image
     let old_pagetable = data.pagetable.replace(pagetable).unwrap();

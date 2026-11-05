@@ -37,6 +37,9 @@ pub const NBUF: usize = MAXOPBLOCKS * 3;
 /// maximum file path name
 pub const MAXPATH: usize = 128;
 
+/// maximum bytes for a proc name
+pub const MAX_PROC_NAME: usize = 16;
+
 /// size of the boot stack (debug needs more stack for error tracing)
 #[cfg(debug_assertions)]
 pub const BOOTSTACK_SIZE: usize = 4 * 4096;

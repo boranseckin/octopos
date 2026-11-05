@@ -5,7 +5,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use alloc::boxed::Box;
 use alloc::slice;
-use alloc::string::String;
 
 use crate::error::Traced;
 use crate::exec::exec;
@@ -13,7 +12,7 @@ use crate::file::File;
 use crate::fs::{self, Inode, Path};
 use crate::log::Operation;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
-use crate::param::{NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV};
+use crate::param::{MAX_PROC_NAME, NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV};
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts, registers::tp};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::swtch::swtch;
@@ -308,6 +307,12 @@ impl core::ops::Deref for Pid {
     }
 }
 
+impl core::fmt::Display for Pid {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Channel type for `sleep`/`wakeup`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
@@ -329,6 +334,61 @@ pub enum Channel {
     Network,
     /// Socket receive queue
     Socket(usize),
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProcName([u8; MAX_PROC_NAME]);
+
+impl ProcName {
+    pub const EMPTY: Self = Self([0; MAX_PROC_NAME]);
+
+    /// Creates a new Self by truncating the name at `PROC_NAME_LEN` and making sure the truncation
+    /// does not split a UTF-8 character.
+    /// The result is a valid UTF-8 byte array with 0 padding.
+    pub const fn new(name: &str) -> Self {
+        let mut len = if name.len() < MAX_PROC_NAME {
+            name.len()
+        } else {
+            MAX_PROC_NAME
+        };
+
+        while !name.is_char_boundary(len) {
+            len -= 1;
+        }
+
+        let mut bytes = [0; MAX_PROC_NAME];
+        bytes
+            .split_at_mut(len)
+            .0
+            .copy_from_slice(name.as_bytes().split_at(len).0);
+        Self(bytes)
+    }
+
+    /// Recreates UTF-8 string from the byte array.
+    fn as_str(&self) -> &str {
+        let len = self.0.iter().position(|&b| b == 0).unwrap_or(MAX_PROC_NAME);
+        let bytes = &self.0[..len];
+        match str::from_utf8(bytes) {
+            Ok(s) => s,
+            // `Self::new` should not allow Err.
+            Err(e) => str::from_utf8(&bytes[..e.valid_up_to()]).unwrap_or_default(),
+        }
+    }
+}
+
+impl core::ops::Deref for ProcName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl core::fmt::Display for ProcName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self)
+    }
 }
 
 /// Process control block
@@ -369,6 +429,8 @@ pub struct ProcInner {
     pub xstate: isize,
     /// Process ID
     pub pid: Pid,
+    /// Proc name (as long as `PROC_NAME_LEN`, and possibly NULL terminated)
+    pub name: ProcName,
 }
 
 impl ProcInner {
@@ -380,6 +442,7 @@ impl ProcInner {
             killed: false,
             xstate: 0,
             pid: Pid(0),
+            name: ProcName::EMPTY,
         }
     }
 }
@@ -401,8 +464,6 @@ pub struct ProcData {
     pub open_files: [Option<File>; NOFILE],
     /// Current directory
     pub cwd: Inode,
-    /// Process name
-    pub name: String,
 }
 
 impl ProcData {
@@ -415,7 +476,6 @@ impl ProcData {
             context: Context::new(),
             open_files: [const { None }; NOFILE],
             cwd: Inode::new(0, 0, 0),
-            name: String::new(),
         }
     }
 
@@ -537,7 +597,7 @@ impl Proc {
 
         data.size = 0;
         inner.pid = Pid(0);
-        data.name.clear();
+        inner.name = ProcName::EMPTY;
         inner.channel = None;
         inner.killed = false;
         inner.xstate = 0;
@@ -702,7 +762,7 @@ impl ProcTable {
                 continue;
             }
 
-            println!("{} {:?} {}", inner.pid.0, inner.state, proc.data().name);
+            println!("{} {:?} {}", inner.pid.0, inner.state, inner.name);
         }
     }
 }
@@ -769,7 +829,7 @@ where
     let mut inner = proc.setup_kernel(inner, Box::new(f));
 
     let data = unsafe { proc.data_mut() };
-    data.name.push_str(name);
+    inner.name = ProcName::new(name);
     data.cwd = Path::new("/").resolve().expect("root path to exist");
 
     // this is not the best way to handle this, but we need some proc to clean after exitted kernel
@@ -822,6 +882,7 @@ pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize> {
 /// Sets up the child kernel stack to return as if from `fork()` system call.
 pub fn fork() -> Result<Pid> {
     let (proc, data) = current_proc_and_data_mut();
+    let name = proc.inner.lock().name;
 
     // allocate and setup new user process
     let (new_proc, mut new_inner) = PROC_TABLE.alloc()?;
@@ -855,7 +916,7 @@ pub fn fork() -> Result<Pid> {
     }
     new_data.cwd = data.cwd.dup();
 
-    new_data.name = data.name.clone();
+    new_inner.name = name;
 
     let pid = new_inner.pid;
 

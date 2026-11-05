@@ -449,13 +449,16 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
     trapframe.a0 = match result {
         Ok(v) => v,
         Err(error) => {
-            let pid = *proc.inner.lock().pid;
+            let (pid, name) = {
+                let inner = proc.inner.lock();
+                (inner.pid, inner.name)
+            };
             report!(
                 error,
                 "syscall {} from proc {} ({})",
                 trapframe.a7,
                 pid,
-                proc.data().name
+                name
             );
             (-(error.as_code() as isize)) as usize
         }
