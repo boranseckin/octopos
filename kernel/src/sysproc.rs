@@ -1,10 +1,67 @@
 use core::sync::atomic::Ordering;
 
+use crate::abi::ProcState;
 use crate::memlayout::QEMU_POWER;
-use crate::proc::{self, Channel, Pid, current_proc};
+use crate::param::NPROC;
+use crate::proc::{self, Channel, Pid, RawProc};
 use crate::rng::rand_bytes;
 use crate::syscall::{Result, SysError, SyscallArgs};
 use crate::trap::TICKS;
+
+#[repr(usize)]
+pub enum ProcOp {
+    Get = 1,
+}
+
+impl TryFrom<usize> for ProcOp {
+    type Error = SysError;
+
+    fn try_from(value: usize) -> core::result::Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Get),
+            _ => Err(SysError::InvalidArgument),
+        }
+    }
+}
+
+/// Reads or modifies a process.
+///
+/// # Arguments
+///
+/// - `a0` (`ProcOp`): operation to perform.
+/// - `a1` (`*mut RawProc`): pointer to the proc struct.
+/// - `a2` (`usize`): operation-specific argument.
+///
+/// # Operations
+///
+/// - `Get`: writes the proc at index `a2` into `a1`. Indices start at 0 and are contiguous;
+///   returns `NoEntry` when `a2` >= `NPROC`. The table may change between calls, so a listing can
+///   skip or repeat an entry.
+pub fn sys_proc(args: &SyscallArgs) -> Result<usize> {
+    let op = ProcOp::try_from(args.get_int(0) as usize)?;
+    let raw_proc_va = args.get_addr(1);
+
+    match op {
+        ProcOp::Get => {
+            let index = args.get_int(2) as usize;
+
+            if index >= NPROC {
+                err!(SysError::NoEntry);
+            }
+
+            let proc = proc::PROC_TABLE.get(index);
+            let mut raw_proc = RawProc::from(proc);
+
+            if raw_proc.state == ProcState::Unused as u8 {
+                raw_proc = RawProc::default();
+            }
+
+            proc::copy_struct_to_user(&raw_proc, raw_proc_va)?;
+        }
+    }
+
+    Ok(0)
+}
 
 pub fn sys_exit(args: &SyscallArgs) -> ! {
     let n = args.get_int(0);
@@ -43,7 +100,7 @@ pub fn sys_sleep(args: &SyscallArgs) -> Result<usize> {
     let ticks0 = *ticks;
 
     while *ticks - ticks0 < duration {
-        if current_proc().is_killed() {
+        if proc::current_proc().is_killed() {
             err!(SysError::Interrupted);
         }
 

@@ -17,6 +17,7 @@ use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts, registers::tp};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::swtch::swtch;
 use crate::sync::OnceLock;
+use crate::syscall::SysError;
 use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
 use crate::vm::{self, Kvm, PA, PageTable, Uvm, VA, VmError};
@@ -30,6 +31,7 @@ pub enum ProcError {
     OutOfProc,
     InvalidSize,
     Vm(VmError),
+    Sys(SysError),
 }
 
 pub type Result<T> = core::result::Result<T, Traced<ProcError>>;
@@ -41,6 +43,14 @@ impl From<VmError> for ProcError {
 }
 
 traced_from!(VmError => ProcError);
+
+impl From<SysError> for ProcError {
+    fn from(value: SysError) -> Self {
+        Self::Sys(value)
+    }
+}
+
+traced_from!(SysError => ProcError);
 
 impl From<core::alloc::AllocError> for ProcError {
     fn from(_value: core::alloc::AllocError) -> Self {
@@ -405,16 +415,80 @@ pub struct Proc {
     data: UnsafeCell<ProcData>,
 }
 
+/// Wire format of a proc shared with user space.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RawProc {
+    pub size: u64,
+    pub pid: u32,
+    pub ppid: u32,
+    pub name: ProcName,
+    pub state: u8,
+    pub killed: u8,
+    pub _pad: [u8; 6],
+}
+
+/// # Safety: only contains primitive type, padded to align to 8 bytes
+unsafe impl Pod for RawProc {}
+
+impl From<&Proc> for RawProc {
+    fn from(value: &Proc) -> Self {
+        let inner = value.inner.lock();
+        let state = inner.state as u8;
+        let pid = *inner.pid as u32;
+        let killed = if inner.killed { 1 } else { 0 };
+        let name = inner.name;
+        let size = value.size.load(Ordering::Relaxed) as u64;
+        drop(inner);
+
+        let parent = { PROC_TABLE.parents.lock()[value.id] };
+
+        let ppid = if let Some(parent_id) = parent {
+            let parent = PROC_TABLE.get(parent_id);
+            *parent.inner.lock().pid as u32
+        } else {
+            0
+        };
+
+        Self {
+            size,
+            pid,
+            ppid,
+            name,
+            state,
+            killed,
+            ..Default::default()
+        }
+    }
+}
+
 /// The state of a process.
-#[derive(Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProcState {
     #[default]
-    Unused,
-    Used,
-    Sleeping,
-    Runnable,
-    Running,
-    Zombie,
+    Unused = 0,
+    Used = 1,
+    Sleeping = 2,
+    Runnable = 3,
+    Running = 4,
+    Zombie = 5,
+}
+
+impl TryFrom<u8> for ProcState {
+    type Error = ProcError;
+
+    fn try_from(value: u8) -> core::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Unused),
+            1 => Ok(Self::Used),
+            2 => Ok(Self::Sleeping),
+            3 => Ok(Self::Runnable),
+            4 => Ok(Self::Running),
+            5 => Ok(Self::Zombie),
+            _ => Err(ProcError::Sys(SysError::InvalidArgument)),
+        }
+    }
 }
 
 /// Public fields for Proc

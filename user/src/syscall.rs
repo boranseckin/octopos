@@ -50,7 +50,9 @@ pub fn check_unit(ret: isize) -> Result<(), SysError> {
 pub mod raw {
     use core::arch::asm;
 
-    use kernel::abi::{InterfaceOp, RawInterface, RawRoute, RawSockAddr, RouteOp, Stat, Syscall};
+    use kernel::abi::{
+        InterfaceOp, ProcOp, RawInterface, RawProc, RawRoute, RawSockAddr, RouteOp, Stat, Syscall,
+    };
 
     #[inline(always)]
     fn syscall0(syscall: Syscall) -> isize {
@@ -146,6 +148,10 @@ pub mod raw {
 
     pub fn write(fd: usize, buf: *const u8, len: usize) -> isize {
         syscall3(Syscall::Write, fd, buf as usize, len)
+    }
+
+    pub fn proc_get(proc: *mut RawProc, index: usize) -> isize {
+        syscall3(Syscall::Proc, ProcOp::Get as usize, proc as usize, index)
     }
 
     pub fn kill(pid: usize) -> isize {

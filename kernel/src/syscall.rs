@@ -178,6 +178,7 @@ impl From<ProcError> for SysError {
             ProcError::OutOfProc => SysError::ResourceUnavailable,
             ProcError::InvalidSize => SysError::InvalidArgument,
             ProcError::Vm(e) => e.into(),
+            ProcError::Sys(e) => e,
         }
     }
 }
@@ -359,6 +360,7 @@ pub enum Syscall {
     Interface = 28,
     Route = 29,
     Reboot = 30,
+    Proc = 31,
 }
 
 impl TryFrom<usize> for Syscall {
@@ -396,6 +398,7 @@ impl TryFrom<usize> for Syscall {
             28 => Ok(Syscall::Interface),
             29 => Ok(Syscall::Route),
             30 => Ok(Syscall::Reboot),
+            31 => Ok(Syscall::Proc),
             _ => Err(SysError::NotImplemented),
         }
     }
@@ -442,6 +445,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Interface => sys_interface(&args),
             Syscall::Route => sys_route(&args),
             Syscall::Reboot => sys_reboot(&args),
+            Syscall::Proc => sys_proc(&args),
         },
         Err(e) => Err(Traced::from(e)),
     };
