@@ -396,6 +396,11 @@ impl core::fmt::Display for ProcName {
 pub struct Proc {
     /// NOT `Pid`. Used for indexing in `PROC_TABLE` and matching parent-child relationships.
     pub id: usize,
+    /// Size of process memory in bytes (virtual: lazy and COW pages included).
+    /// Written only by the owning process, or by the kernel while no one else can run it.
+    /// All accesses are Relaxed: the proc lock orders hand-offs between harts, and other readers
+    /// may see a stale value.
+    pub size: AtomicUsize,
     pub inner: SpinLock<ProcInner>,
     data: UnsafeCell<ProcData>,
 }
@@ -452,8 +457,6 @@ impl ProcInner {
 pub struct ProcData {
     /// Virtual address of kernel stack
     pub kstack: VA,
-    /// Size of process memory (bytes)
-    pub size: usize,
     /// User page table
     pub pagetable: Option<Uvm>,
     /// Data page for trampoline
@@ -470,7 +473,6 @@ impl ProcData {
     const fn new() -> Self {
         Self {
             kstack: VA::new(0),
-            size: 0,
             pagetable: None,
             trapframe: None,
             context: Context::new(),
@@ -512,6 +514,7 @@ impl Proc {
     const fn new(id: usize) -> Self {
         Self {
             id,
+            size: AtomicUsize::new(0),
             inner: SpinLock::new(ProcInner::new(), "proc"),
             data: UnsafeCell::new(ProcData::new()),
         }
@@ -592,10 +595,10 @@ impl Proc {
         }
 
         if let Some(uvm) = data.pagetable.take() {
-            uvm.proc_free(data.size);
+            uvm.proc_free(self.size.load(Ordering::Relaxed));
         }
 
-        data.size = 0;
+        self.size.store(0, Ordering::Relaxed);
         inner.pid = Pid(0);
         inner.name = ProcName::EMPTY;
         inner.channel = None;
@@ -843,7 +846,7 @@ where
 }
 
 /// Grows or shrinks user memory by `n` bytes.
-/// The new size is reflected in `proc.data.size` and returned.
+/// The new size is reflected in `proc.size` and returned.
 ///
 /// If `lazy` is set, positive change in `n` will update the process size but will not immediately
 /// allocate memory. This memory will be allocated only when the process accesses it, causing a page
@@ -852,9 +855,9 @@ where
 /// # Safety
 /// The caller must ensure exclusive access to the process's memory.
 pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize> {
-    let (_proc, data) = current_proc_and_data_mut();
+    let (proc, data) = current_proc_and_data_mut();
 
-    let mut size = data.size;
+    let mut size = proc.size.load(Ordering::Relaxed);
 
     if n > 0 {
         if lazy {
@@ -874,7 +877,7 @@ pub unsafe fn grow(n: isize, lazy: bool) -> Result<usize> {
         size = data.pagetable_mut().dealloc(size, size - shrink);
     }
 
-    data.size = size;
+    proc.size.store(size, Ordering::Relaxed);
     Ok(size)
 }
 
@@ -893,12 +896,12 @@ pub fn fork() -> Result<Pid> {
 
     // copy user memory from parent to child
     let new_pagetable = new_data.pagetable_mut();
-    let size = data.size;
+    let size = proc.size.load(Ordering::Relaxed);
     if let Err(e) = data.pagetable_mut().copy(new_pagetable, size) {
         new_proc.free(new_inner);
         err!(e);
     };
-    new_data.size = data.size;
+    new_proc.size.store(size, Ordering::Relaxed);
 
     // copy saved user registers
     let new_trapframe = new_data.trapframe_mut();

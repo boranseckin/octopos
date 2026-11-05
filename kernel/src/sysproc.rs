@@ -1,3 +1,5 @@
+use core::sync::atomic::Ordering;
+
 use crate::memlayout::QEMU_POWER;
 use crate::proc::{self, Channel, Pid, current_proc};
 use crate::rng::rand_bytes;
@@ -28,7 +30,7 @@ pub fn sys_wait(args: &SyscallArgs) -> Result<usize> {
 
 pub fn sys_sbrk(args: &SyscallArgs) -> Result<usize> {
     let size = args.get_int(0);
-    let addr = args.proc().data().size;
+    let addr = args.proc().size.load(Ordering::Relaxed);
 
     unsafe { proc::grow(size, size >= 0)? };
     Ok(addr)

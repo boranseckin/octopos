@@ -3,6 +3,7 @@ use alloc::boxed::Box;
 use core::fmt::Display;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
+use core::sync::atomic::Ordering;
 
 use crate::error::{Expected, Traced};
 use crate::fs::{FsError, Inode, InodeInner};
@@ -783,9 +784,9 @@ impl Uvm {
     /// 3. pte is valid and cow is set: valid copy-on-write page, copy page as writable
     /// 4. pte is invalid: lazily allocated page, allocate & map new page
     pub fn vmfault(&mut self, va: VA) -> Result<PA> {
-        let (_proc, data) = proc::current_proc_and_data_mut();
+        let proc = proc::current_proc();
 
-        if va.as_usize() >= data.size {
+        if va.as_usize() >= proc.size.load(Ordering::Relaxed) {
             // case 1: out-of-bounds access
             err!(VmError::InvalidAddress);
         }

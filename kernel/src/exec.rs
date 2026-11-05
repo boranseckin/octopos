@@ -1,4 +1,5 @@
 use core::slice;
+use core::sync::atomic::Ordering;
 
 use crate::error::Traced;
 use crate::fs::{FsError, Path};
@@ -214,7 +215,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
     inode.unlock_put(inner);
     drop(_op);
 
-    let old_size = proc.data().size;
+    let old_size = proc.size.load(Ordering::Relaxed);
 
     // allocate some pages at the next page boundary.
     // make the first inaccessible as a stack guard.
@@ -295,7 +296,7 @@ pub fn exec(path: &Path, argv: &[&str]) -> Result<usize> {
 
     // commit to the user image
     let old_pagetable = data.pagetable.replace(pagetable).unwrap();
-    data.size = size;
+    proc.size.store(size, Ordering::Relaxed);
 
     let trapframe = data.trapframe_mut();
 
