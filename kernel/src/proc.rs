@@ -475,6 +475,19 @@ pub enum ProcState {
     Zombie = 5,
 }
 
+impl ProcState {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            ProcState::Unused => "unused",
+            ProcState::Used => "used",
+            ProcState::Sleeping => "sleeping",
+            ProcState::Runnable => "runnable",
+            ProcState::Running => "running",
+            ProcState::Zombie => "zombie",
+        }
+    }
+}
+
 impl TryFrom<u8> for ProcState {
     type Error = ProcError;
 
@@ -488,6 +501,12 @@ impl TryFrom<u8> for ProcState {
             5 => Ok(Self::Zombie),
             _ => Err(ProcError::Sys(SysError::InvalidArgument)),
         }
+    }
+}
+
+impl core::fmt::Display for ProcState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.pad(self.as_str())
     }
 }
 

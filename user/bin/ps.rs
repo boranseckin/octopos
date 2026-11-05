@@ -3,7 +3,7 @@
 
 use user::prelude::*;
 
-use user::process::{ProcState, proc_get};
+use user::process::proc_get;
 
 const PID_W: usize = 5;
 const STATE_W: usize = 8; // "runnable", "sleeping"
@@ -19,20 +19,11 @@ fn main(_args: &Args) {
     for i in 0.. {
         match proc_get(i) {
             Ok(Some(p)) => {
-                let state = match p.state {
-                    ProcState::Unused => "unused",
-                    ProcState::Used => "used",
-                    ProcState::Sleeping => "sleeping",
-                    ProcState::Runnable => "runnable",
-                    ProcState::Running => "running",
-                    ProcState::Zombie => "zombie",
-                };
-
                 println!(
                     "{:>PID_W$} {:>PID_W$} {:<STATE_W$} {:>SIZE_W$} {}",
                     p.pid,
                     p.ppid,
-                    state,
+                    p.state,
                     p.size / 1024,
                     p.name,
                 )
@@ -42,7 +33,7 @@ fn main(_args: &Args) {
 
             Err(SysError::NoEntry) => break,
 
-            Err(e) => exit_with_msg(format!("ps: {e}")),
+            Err(e) => exit_with_msg(format_args!("ps: {e}")),
         }
     }
 }

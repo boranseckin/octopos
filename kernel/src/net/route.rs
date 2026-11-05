@@ -1,4 +1,3 @@
-use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
@@ -442,7 +441,10 @@ pub fn dump() {
             .and_then(|i| net::source_addr(route, i))
             .map_or("-".to_string(), |s| s.to_string());
 
-        let dest = format!("{}/{}", route.dest_ip, route.prefix_len);
+        let dest = Ipv4Cidr {
+            addr: route.dest_ip,
+            prefix_len: route.prefix_len,
+        };
         let gateway = route
             .gateway
             .map_or("direct".to_string(), |gw| gw.to_string());

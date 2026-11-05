@@ -1,6 +1,5 @@
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use alloc::format;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -206,7 +205,7 @@ pub fn dump() {
             interface
                 .config
                 .ipv4
-                .map(|ip| format!("{}/{}", ip.addr, ip.prefix_len))
+                .map(|ip| ip.to_string())
                 .unwrap_or_else(|| "unconfigured".to_string()),
             if interface.config.is_up { "up" } else { "down" }
         );
