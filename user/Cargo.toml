@@ -100,6 +100,13 @@ doctest = false
 bench = false
 
 [[bin]]
+name = "ps"
+path = "bin/ps.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
 name = "uptime"
 path = "bin/uptime.rs"
 test = false
