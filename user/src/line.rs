@@ -138,17 +138,52 @@ impl<'a> LineEditor<'a> {
     }
 
     /// Called when `0x1b` is read.
-    /// Reads the next two bytes and dispatches the correct handler.
+    /// Reads the sequence and dispatches the correct handler.
     fn handle_escape(&mut self) {
-        let mut seq = [0u8; 2];
-        Stdin.read_exact(&mut seq).unwrap();
+        let mut seq = [0u8; 8];
+        let mut n = 0;
 
-        match seq {
-            [b'[', b'A'] => self.history_up(),
-            [b'[', b'B'] => self.history_down(),
-            [b'[', b'D'] => self.move_left(),
-            [b'[', b'C'] => self.move_right(),
-            _ => {}
+        Stdin.read_exact(&mut seq[..1]).unwrap();
+        n += 1;
+
+        match seq[0] {
+            b'[' => {
+                let mut buf = [0u8; 1];
+                loop {
+                    Stdin.read_exact(&mut buf).unwrap();
+
+                    if n < seq.len() {
+                        seq[n] = buf[0];
+                        n += 1;
+                    }
+
+                    if (0x40..=0x7E).contains(&buf[0]) {
+                        break;
+                    }
+                }
+            }
+
+            b'O' => {
+                Stdin.read_exact(&mut seq[n..n + 1]).unwrap();
+                n += 1;
+            }
+
+            b'f' | b'b' => {}
+
+            _ => return,
+        };
+
+        match &seq[..n] {
+            b"[A" => self.history_up(),
+            b"[B" => self.history_down(),
+            b"[C" => self.move_right(),
+            b"[D" => self.move_left(),
+            b"[1;5C" | b"[1;3C" | b"f" => self.word_right(),
+            b"[1;5D" | b"[1;3D" | b"b" => self.word_left(),
+            b"[H" | b"OH" | b"[1~" | b"[7~" => self.move_to_start(),
+            b"[F" | b"OF" | b"[4~" | b"[8~" => self.move_to_end(),
+            b"[3~" => self.delete(),
+            _ => {} // unknown, but fully consumed
         }
     }
 
@@ -187,6 +222,21 @@ impl<'a> LineEditor<'a> {
         self.redraw();
     }
 
+    fn delete(&mut self) {
+        if self.cursor == self.len {
+            return;
+        }
+
+        // shift buf[cursor + 1..len] left by 1
+        for i in (self.cursor)..(self.len - 1) {
+            self.buf[i] = self.buf[i + 1];
+        }
+
+        self.len -= 1;
+
+        self.redraw();
+    }
+
     fn kill_line(&mut self) {
         // shift buf[cursor..len] to buf[0..]
         for i in self.cursor..self.len {
@@ -200,17 +250,7 @@ impl<'a> LineEditor<'a> {
     }
 
     fn kill_word(&mut self) {
-        let mut i = self.cursor;
-
-        // skip over any spaces before a word
-        while i > 0 && self.buf[i - 1] == b' ' {
-            i -= 1;
-        }
-
-        // skip over the first word
-        while i > 0 && self.buf[i - 1] != b' ' {
-            i -= 1;
-        }
+        let i = self.prev_word_start(self.cursor);
 
         // shift buf[cursor..len] left by cursor - i
         for j in self.cursor..self.len {
@@ -223,38 +263,100 @@ impl<'a> LineEditor<'a> {
         self.redraw();
     }
 
+    fn move_cursor_to(&mut self, to: usize) {
+        if self.cursor == to {
+            return;
+        }
+
+        // ESC [ <digits> D/C = 3 chars + 3 digits
+        let mut buf = [0u8; 6];
+        buf[0] = b'\x1b';
+        buf[1] = b'[';
+
+        let i = if self.cursor < to {
+            let delta = to - self.cursor;
+            let i = write_decimal(&mut buf[2..5], delta);
+            buf[i + 2] = b'C';
+            i + 3
+        } else {
+            let delta = self.cursor - to;
+            let i = write_decimal(&mut buf[2..5], delta);
+            buf[i + 2] = b'D';
+            i + 3
+        };
+
+        self.cursor = to;
+        Stdout.write_all(&buf[..i]).unwrap();
+    }
+
     fn move_left(&mut self) {
         if self.cursor > 0 {
-            self.cursor -= 1;
-
-            // emit \x1b[D to move cursor left
-            Stdout.write_all(b"\x1b[D").unwrap();
+            self.move_cursor_to(self.cursor - 1);
         }
     }
 
     fn move_right(&mut self) {
         if self.cursor < self.len {
-            self.cursor += 1;
-
-            // emit \x1b[C to move cursor right
-            Stdout.write_all(b"\x1b[C").unwrap();
+            self.move_cursor_to(self.cursor + 1);
         }
     }
 
+    fn prev_word_start(&self, from: usize) -> usize {
+        let mut i = from;
+
+        // skip over any spaces before a word
+        while i > 0 && self.buf[i - 1] == b' ' {
+            i -= 1;
+        }
+
+        // skip over the first word
+        while i > 0 && self.buf[i - 1] != b' ' {
+            i -= 1;
+        }
+
+        i
+    }
+
+    fn next_word_end(&self, from: usize) -> usize {
+        let mut i = from;
+
+        // skip over any spaces before a word
+        while i < self.len && self.buf[i] == b' ' {
+            i += 1;
+        }
+
+        // skip over the first word
+        while i < self.len && self.buf[i] != b' ' {
+            i += 1;
+        }
+
+        i
+    }
+
+    fn word_left(&mut self) {
+        self.move_cursor_to(self.prev_word_start(self.cursor))
+    }
+
+    fn word_right(&mut self) {
+        self.move_cursor_to(self.next_word_end(self.cursor))
+    }
+
     fn move_to_start(&mut self) {
-        self.cursor = 0;
-        self.redraw();
+        self.move_cursor_to(0);
     }
 
     fn move_to_end(&mut self) {
-        self.cursor = self.len;
-        self.redraw();
+        self.move_cursor_to(self.len);
     }
 
     fn redraw(&self) {
-        // Worst case: "\r" (1) + prompt + buf (256) + "\x1b[K" (3) + "\x1b[999D" (7)
+        // Worst case: "\x1b[?25l" (6) + "\r" (1) + prompt + buf (256) + "\x1b[K" (3) + "\x1b[999D" (7) + "\x1b[?25h" (6)
         let mut out = [0u8; 512];
         let mut n = 0;
+
+        // hide cursor
+        out[n..n + 6].copy_from_slice(b"\x1b[?25l");
+        n += 6;
 
         // move cursor to start of line
         out[n] = b'\r';
@@ -283,6 +385,10 @@ impl<'a> LineEditor<'a> {
             out[n] = b'D';
             n += 1;
         }
+
+        // show cursor
+        out[n..n + 6].copy_from_slice(b"\x1b[?25h");
+        n += 6;
 
         Stdout.write_all(&out[..n]).unwrap();
     }
