@@ -153,7 +153,7 @@ impl<'a> LineEditor<'a> {
     }
 
     fn insert(&mut self, c: u8) {
-        if self.cursor >= Self::LINE_MAX {
+        if self.len >= Self::LINE_MAX {
             return;
         }
 
