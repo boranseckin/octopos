@@ -435,6 +435,12 @@ unsafe impl Pod for RawProc {}
 impl From<&Proc> for RawProc {
     fn from(value: &Proc) -> Self {
         let inner = value.inner.lock();
+
+        // for unused procs, just return an empty struct
+        if inner.state == ProcState::Unused {
+            return Self::default();
+        }
+
         let state = inner.state as u8;
         let pid = *inner.pid as u32;
         let killed = if inner.killed { 1 } else { 0 };
