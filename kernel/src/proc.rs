@@ -425,7 +425,8 @@ pub struct RawProc {
     pub name: ProcName,
     pub state: u8,
     pub killed: u8,
-    pub _pad: [u8; 6],
+    pub kernel: u8,
+    pub _pad: [u8; 5],
 }
 
 /// # Safety: only contains primitive type, padded to align to 8 bytes
@@ -438,6 +439,7 @@ impl From<&Proc> for RawProc {
         let pid = *inner.pid as u32;
         let killed = if inner.killed { 1 } else { 0 };
         let name = inner.name;
+        let kernel = if inner.kernel { 1 } else { 0 };
         let size = value.size.load(Ordering::Relaxed) as u64;
         drop(inner);
 
@@ -457,6 +459,7 @@ impl From<&Proc> for RawProc {
             name,
             state,
             killed,
+            kernel,
             ..Default::default()
         }
     }
@@ -529,6 +532,8 @@ pub struct ProcInner {
     pub pid: Pid,
     /// Proc name (as long as `PROC_NAME_LEN`, and possibly NULL terminated)
     pub name: ProcName,
+    /// Runs in kernel mode only: no user page table, trapframe or size.
+    pub kernel: bool,
 }
 
 impl ProcInner {
@@ -541,6 +546,7 @@ impl ProcInner {
             xstate: 0,
             pid: Pid(0),
             name: ProcName::EMPTY,
+            kernel: false,
         }
     }
 }
@@ -698,6 +704,7 @@ impl Proc {
         inner.killed = false;
         inner.xstate = 0;
         inner.state = ProcState::Unused;
+        inner.kernel = false;
     }
 
     /// Sets up this process's trapframe and user page table for running user code.
@@ -742,7 +749,7 @@ impl Proc {
     /// The kernel thread entry will call the given function `f` in `s1`.
     pub fn setup_kernel<'a>(
         &self,
-        inner: SpinLockGuard<'a, ProcInner>,
+        mut inner: SpinLockGuard<'a, ProcInner>,
         f: Box<dyn FnOnce()>,
     ) -> SpinLockGuard<'a, ProcInner> {
         // # Safety: the process is not yet runnable, so we are the only one accessing it
@@ -755,6 +762,9 @@ impl Proc {
 
         data.context.ra = kernel_thread_entry as *const () as usize;
         data.context.s1 = Box::into_raw(thin) as *const () as usize;
+
+        // set the kernel thread marker
+        inner.kernel = true;
 
         inner
     }

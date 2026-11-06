@@ -14,6 +14,7 @@ pub struct ProcInfo {
     pub name: ProcName,
     pub size: usize,
     pub killed: bool,
+    pub kernel: bool,
 }
 
 impl TryFrom<RawProc> for ProcInfo {
@@ -26,7 +27,8 @@ impl TryFrom<RawProc> for ProcInfo {
             state: ProcState::try_from(value.state)?,
             name: value.name,
             size: value.size as usize,
-            killed: value.killed == 1,
+            killed: value.killed != 0,
+            kernel: value.kernel != 0,
         })
     }
 }

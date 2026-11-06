@@ -19,13 +19,20 @@ fn main(_args: &Args) {
     for i in 0.. {
         match proc_get(i) {
             Ok(Some(p)) => {
+                let kib;
+
+                let size: &dyn core::fmt::Display = if p.kernel {
+                    &"-"
+                } else {
+                    kib = p.size / 1024;
+                    &kib
+                };
+
+                let (open, close) = if p.kernel { ("[", "]") } else { ("", "") };
+
                 println!(
-                    "{:>PID_W$} {:>PID_W$} {:<STATE_W$} {:>SIZE_W$} {}",
-                    p.pid,
-                    p.ppid,
-                    p.state,
-                    p.size / 1024,
-                    p.name,
+                    "{:>PID_W$} {:>PID_W$} {:<STATE_W$} {:>SIZE_W$} {open}{}{close}",
+                    p.pid, p.ppid, p.state, size, p.name,
                 )
             }
 
