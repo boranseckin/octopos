@@ -12,15 +12,14 @@ const SIZE_W: usize = 8; // KiB; 8 digits covers ~95 GiB of lazy sbrk
 #[unsafe(no_mangle)]
 fn main(_args: &Args) {
     println!(
-        "{:>PID_W$} {:>PID_W$} {:<STATE_W$} {:>SIZE_W$} {}",
-        "PID", "PPID", "STATE", "SIZE(K)", "NAME"
+        "{:>PID_W$} {:>PID_W$} {:<STATE_W$}  {:>SIZE_W$} {}",
+        "PID", "PPID", " STATE", "SIZE(K)", "NAME"
     );
 
     for i in 0.. {
         match proc_get(i) {
             Ok(Some(p)) => {
                 let kib;
-
                 let size: &dyn core::fmt::Display = if p.kernel {
                     &"-"
                 } else {
@@ -28,10 +27,12 @@ fn main(_args: &Args) {
                     &kib
                 };
 
+                let mark = if p.killed { '*' } else { ' ' };
+
                 let (open, close) = if p.kernel { ("[", "]") } else { ("", "") };
 
                 println!(
-                    "{:>PID_W$} {:>PID_W$} {:<STATE_W$} {:>SIZE_W$} {open}{}{close}",
+                    "{:>PID_W$} {:>PID_W$} {mark}{:<STATE_W$} {:>SIZE_W$} {open}{}{close}",
                     p.pid, p.ppid, p.state, size, p.name,
                 )
             }
