@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 
 use crate::abi::OpenFlag;
 use crate::exec::exec;
+use crate::file::Whence;
 use crate::file::{FILE_TABLE, File, FileType};
 use crate::fs::{Directory, Inode, InodeType, Path};
 use crate::log::Operation;
@@ -293,6 +294,13 @@ pub fn sys_mknod(args: &SyscallArgs) -> Result<usize> {
     inode.unlock_put(inner);
 
     Ok(0)
+}
+
+pub fn sys_seek(args: &SyscallArgs) -> Result<usize> {
+    let (_, mut file) = args.get_file(0)?;
+    let offset = args.get_int(1);
+    let whence = Whence::try_from(args.get_int(2) as usize)?;
+    file.seek(offset, whence)
 }
 
 pub fn sys_chdir(args: &SyscallArgs) -> Result<usize> {

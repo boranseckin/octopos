@@ -41,6 +41,7 @@ pub enum SysError {
     FileTableFull = 23,
     TooManyFiles = 24,
     NoSpace = 28,
+    InvalidSeek = 29,
     TooManyLinks = 31,
     BrokenPipe = 32,
     NameTooLong = 36,
@@ -102,6 +103,7 @@ impl SysError {
             23 => Self::FileTableFull,
             24 => Self::TooManyFiles,
             28 => Self::NoSpace,
+            29 => Self::InvalidSeek,
             31 => Self::TooManyLinks,
             32 => Self::BrokenPipe,
             36 => Self::NameTooLong,
@@ -141,6 +143,7 @@ impl Display for SysError {
             SysError::FileTableFull => write!(f, "too many open files in system"),
             SysError::TooManyFiles => write!(f, "too many open files"),
             SysError::NoSpace => write!(f, "no space left on device"),
+            SysError::InvalidSeek => write!(f, "invalid seek"),
             SysError::TooManyLinks => write!(f, "too many links"),
             SysError::BrokenPipe => write!(f, "broken pipe"),
             SysError::NameTooLong => write!(f, "file name too long"),
@@ -361,6 +364,7 @@ pub enum Syscall {
     Route = 29,
     Reboot = 30,
     Proc = 31,
+    Seek = 32,
 }
 
 impl TryFrom<usize> for Syscall {
@@ -399,6 +403,7 @@ impl TryFrom<usize> for Syscall {
             29 => Ok(Syscall::Route),
             30 => Ok(Syscall::Reboot),
             31 => Ok(Syscall::Proc),
+            32 => Ok(Syscall::Seek),
             _ => Err(SysError::NotImplemented),
         }
     }
@@ -446,6 +451,7 @@ pub unsafe fn syscall(trapframe: &mut TrapFrame) {
             Syscall::Route => sys_route(&args),
             Syscall::Reboot => sys_reboot(&args),
             Syscall::Proc => sys_proc(&args),
+            Syscall::Seek => sys_seek(&args),
         },
         Err(e) => Err(Traced::from(e)),
     };

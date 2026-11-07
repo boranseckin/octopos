@@ -4,7 +4,8 @@
 use user::prelude::*;
 
 use user::fs::{InodeType, Stat, fstat, link, mkdir, open, unlink};
-use user::io::{close, read, write};
+use user::io::{Fd, Whence, close, dup, pipe, read, seek, write};
+use user::syscall::{check, raw};
 
 /// Open for both reading and writing, creating the file if it doesn't exist.
 const O_CREATE_RW: usize = OpenFlag::CREATE | OpenFlag::READ_WRITE | OpenFlag::TRUNCATE;
@@ -274,6 +275,204 @@ fn test_append_large() {
     unlink("/fs_append4").expect("unlink");
 }
 
+/// Create `path` with `content` and return a read-write fd to it, positioned at the end.
+fn create_with(path: &str, content: &[u8]) -> Fd {
+    let fd = open(path, O_CREATE_RW).expect("create");
+    write(fd, content).expect("write initial");
+    fd
+}
+
+/// Current offset of `fd`, via seek(0, Current).
+fn tell(fd: Fd) -> usize {
+    seek(fd, 0, Whence::Current).expect("tell")
+}
+
+/// Seeking to the start rewinds the fd so the content can be read again.
+fn test_seek_start() {
+    let fd = create_with("/fs_seek1", b"hello world");
+
+    assert_eq!(seek(fd, 0, Whence::Start), Ok(0), "rewind");
+    let mut buf = [0u8; 16];
+    let n = read(fd, &mut buf).expect("read after rewind");
+    assert_eq!(&buf[..n], b"hello world", "content after rewind");
+
+    assert_eq!(seek(fd, 6, Whence::Start), Ok(6), "seek to 6");
+    let n = read(fd, &mut buf).expect("read from 6");
+    assert_eq!(&buf[..n], b"world", "content from 6");
+
+    close(fd).expect("close");
+    unlink("/fs_seek1").expect("unlink");
+}
+
+/// Current-relative seeks move forwards and backwards; seek(0, Current) reports the offset.
+fn test_seek_current() {
+    let fd = create_with("/fs_seek2", b"hello world");
+    seek(fd, 0, Whence::Start).expect("rewind");
+
+    let mut buf = [0u8; 5];
+    read(fd, &mut buf).expect("read 5");
+    assert_eq!(tell(fd), 5, "tell after reading 5");
+
+    assert_eq!(seek(fd, -3, Whence::Current), Ok(2), "back 3");
+    let mut buf = [0u8; 3];
+    read(fd, &mut buf).expect("read 3");
+    assert_eq!(&buf, b"llo", "content after back 3");
+
+    assert_eq!(seek(fd, 1, Whence::Current), Ok(6), "forward 1");
+    let mut buf = [0u8; 5];
+    read(fd, &mut buf).expect("read 5");
+    assert_eq!(&buf, b"world", "content after forward 1");
+
+    close(fd).expect("close");
+    unlink("/fs_seek2").expect("unlink");
+}
+
+/// End-relative seeks: offset 0 returns the size, negative offsets reach into the tail.
+fn test_seek_end() {
+    let fd = create_with("/fs_seek3", b"hello world");
+    seek(fd, 0, Whence::Start).expect("rewind");
+
+    assert_eq!(seek(fd, 0, Whence::End), Ok(11), "seek(0, End) is the size");
+
+    assert_eq!(seek(fd, -5, Whence::End), Ok(6), "seek(-5, End)");
+    let mut buf = [0u8; 16];
+    let n = read(fd, &mut buf).expect("read tail");
+    assert_eq!(&buf[..n], b"world", "tail content");
+
+    close(fd).expect("close");
+    unlink("/fs_seek3").expect("unlink");
+}
+
+/// Seeks outside 0..=size fail with InvalidArgument and leave the offset unchanged. Seeking exactly
+/// to the end is allowed and reads return EOF there.
+fn test_seek_bounds() {
+    let fd = create_with("/fs_seek4", b"hello world");
+    seek(fd, 4, Whence::Start).expect("seek to 4");
+
+    let bad: &[(isize, Whence, &str)] = &[
+        (-1, Whence::Start, "before start"),
+        (12, Whence::Start, "past end from start"),
+        (1, Whence::End, "past end from end"),
+        (-12, Whence::End, "before start from end"),
+        (-5, Whence::Current, "before start from current"),
+        (8, Whence::Current, "past end from current"),
+        // would truncate to 2 if the bound were checked after casting to u32
+        ((1 << 32) + 2, Whence::Start, "u32 truncation"),
+        // base + offset overflows isize
+        (isize::MAX, Whence::Current, "isize overflow"),
+        (isize::MIN, Whence::Start, "isize min"),
+    ];
+
+    for &(offset, whence, what) in bad {
+        assert_eq!(
+            seek(fd, offset, whence),
+            Err(SysError::InvalidArgument),
+            "{}",
+            what
+        );
+        assert_eq!(tell(fd), 4, "offset unchanged after failed seek: {}", what);
+    }
+
+    assert_eq!(seek(fd, 11, Whence::Start), Ok(11), "seek exactly to end");
+    let mut buf = [0u8; 4];
+    assert_eq!(read(fd, &mut buf), Ok(0), "read at end is EOF");
+
+    close(fd).expect("close");
+    unlink("/fs_seek4").expect("unlink");
+}
+
+/// Writing after a seek overwrites in place; writing after seeking to the end extends the file.
+fn test_seek_write() {
+    let fd = create_with("/fs_seek5", b"hello world");
+
+    seek(fd, 6, Whence::Start).expect("seek to 6");
+    write(fd, b"WORLD").expect("overwrite");
+    assert_eq!(tell(fd), 11, "offset after overwrite");
+
+    seek(fd, 0, Whence::Start).expect("rewind");
+    write(fd, b"J").expect("overwrite first byte");
+
+    seek(fd, 0, Whence::End).expect("seek to end");
+    write(fd, b"!").expect("extend");
+
+    close(fd).expect("close");
+
+    let mut buf = [0u8; 16];
+    let n = read_file("/fs_seek5", &mut buf);
+    assert_eq!(&buf[..n], b"Jello WORLD!", "content after seeks and writes");
+
+    unlink("/fs_seek5").expect("unlink");
+}
+
+/// On an O_APPEND fd, seek moves the read position but writes still go to the end.
+fn test_seek_append() {
+    let fd = create_with("/fs_seek6", b"abc");
+    close(fd).expect("close");
+
+    let fd = open("/fs_seek6", OpenFlag::READ_WRITE | OpenFlag::APPEND).expect("open append");
+
+    seek(fd, 0, Whence::Start).expect("rewind");
+    write(fd, b"def").expect("append");
+    assert_eq!(tell(fd), 6, "offset after append is the new end");
+
+    seek(fd, 1, Whence::Start).expect("seek to 1");
+    let mut buf = [0u8; 16];
+    let n = read(fd, &mut buf).expect("read from 1");
+    assert_eq!(&buf[..n], b"bcdef", "read follows seek on append fd");
+
+    close(fd).expect("close");
+    unlink("/fs_seek6").expect("unlink");
+}
+
+/// A dup'd fd shares the open file, so a seek through one moves the other.
+fn test_seek_dup() {
+    let fd = create_with("/fs_seek7", b"hello world");
+    let fd2 = dup(fd).expect("dup");
+
+    seek(fd, 3, Whence::Start).expect("seek through fd");
+    assert_eq!(tell(fd2), 3, "dup shares offset");
+
+    close(fd2).expect("close dup");
+    close(fd).expect("close");
+    unlink("/fs_seek7").expect("unlink");
+}
+
+/// Pipes and devices have no position: seek fails with InvalidSeek.
+fn test_seek_unseekable() {
+    let (r, w) = pipe().expect("pipe");
+    assert_eq!(seek(r, 0, Whence::Start), Err(SysError::InvalidSeek), "pipe read end");
+    assert_eq!(seek(w, 0, Whence::End), Err(SysError::InvalidSeek), "pipe write end");
+    close(r).expect("close r");
+    close(w).expect("close w");
+
+    assert_eq!(
+        seek(Fd::STDIN, 0, Whence::Current),
+        Err(SysError::InvalidSeek),
+        "console device"
+    );
+}
+
+/// An unknown whence fails with InvalidArgument; a bad fd is reported before a bad whence.
+fn test_seek_invalid_args() {
+    let fd = create_with("/fs_seek8", b"hello");
+
+    assert_eq!(
+        check(raw::seek(fd.as_raw(), 0, 3)),
+        Err(SysError::InvalidArgument),
+        "unknown whence"
+    );
+    assert_eq!(tell(fd), 5, "offset unchanged after unknown whence");
+
+    close(fd).expect("close");
+    unlink("/fs_seek8").expect("unlink");
+
+    assert_eq!(
+        check(raw::seek(99, 0, 7)),
+        Err(SysError::BadDescriptor),
+        "bad fd checked before whence"
+    );
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_create_write_read();
@@ -288,4 +487,13 @@ fn main(_args: Args) {
     test_append_two_fds();
     test_append_after_external_growth();
     test_append_large();
+    test_seek_start();
+    test_seek_current();
+    test_seek_end();
+    test_seek_bounds();
+    test_seek_write();
+    test_seek_append();
+    test_seek_dup();
+    test_seek_unseekable();
+    test_seek_invalid_args();
 }

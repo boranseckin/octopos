@@ -3,7 +3,7 @@ use kernel::abi::SysError;
 use crate::syscall::{check, check_unit, raw};
 
 pub use crate::line::LineEditor;
-pub use kernel::abi::{CONSOLE, Ioctl};
+pub use kernel::abi::{CONSOLE, Ioctl, Whence};
 
 /// A file descriptor returned by or passed to syscalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +50,10 @@ pub fn read(fd: Fd, buf: &mut [u8]) -> Result<usize, SysError> {
 
 pub fn write(fd: Fd, buf: &[u8]) -> Result<usize, SysError> {
     check(raw::write(fd.as_raw(), buf.as_ptr(), buf.len()))
+}
+
+pub fn seek(fd: Fd, offset: isize, whence: Whence) -> Result<usize, SysError> {
+    check(raw::seek(fd.as_raw(), offset as usize, whence as usize))
 }
 
 /// Implemented by readable byte sources, analogous to `std::io::Read`.

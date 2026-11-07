@@ -268,6 +268,36 @@ impl File {
         }
     }
 
+    /// Moves the offset into a file and returns the new one.
+    pub fn seek(&mut self, offset: isize, whence: Whence) -> syscall::Result<usize> {
+        let mut file_inner = FILE_TABLE.inner[self.id].lock();
+
+        match &file_inner.r#type {
+            FileType::Inode { inode } => {
+                let size = inode.lock().size;
+
+                let base = match whence {
+                    Whence::Start => 0,
+                    Whence::Current => file_inner.offset,
+                    Whence::End => size,
+                };
+
+                let new = (base as isize)
+                    .checked_add(offset)
+                    .ok_or(SysError::InvalidArgument)?;
+
+                if new < 0 || new > size as isize {
+                    err!(SysError::InvalidArgument);
+                }
+
+                file_inner.offset = new as u32;
+                Ok(new as usize)
+            }
+
+            _ => err!(SysError::InvalidSeek),
+        }
+    }
+
     pub fn ioctl(&self, cmd: usize, arg: usize) -> syscall::Result<usize> {
         let file_inner = FILE_TABLE.inner[self.id].lock();
 
@@ -308,6 +338,28 @@ impl OpenFlag {
     pub const CREATE: usize = 0x200;
     pub const TRUNCATE: usize = 0x400;
     pub const APPEND: usize = 0x800;
+}
+
+/// Where from the offset is calculated for seek.
+#[repr(usize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Whence {
+    Start = 0,
+    Current = 1,
+    End = 2,
+}
+
+impl TryFrom<usize> for Whence {
+    type Error = SysError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Start),
+            1 => Ok(Self::Current),
+            2 => Ok(Self::End),
+            _ => err!(SysError::InvalidArgument),
+        }
+    }
 }
 
 /// Device interface

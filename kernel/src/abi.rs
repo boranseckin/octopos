@@ -1,5 +1,5 @@
 // Exports common ABI types and constants for use by userspace programs.
-pub use crate::file::{CONSOLE, Ioctl, OpenFlag};
+pub use crate::file::{CONSOLE, Ioctl, OpenFlag, Whence};
 pub use crate::fs::{DIRSIZE, Directory, InodeType, Stat};
 pub use crate::net::eth::{EtherType, EthernetHeader};
 pub use crate::net::interface::{InterfaceFlag, InterfaceId, RawInterface};

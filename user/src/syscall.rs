@@ -150,6 +150,10 @@ pub mod raw {
         syscall3(Syscall::Write, fd, buf as usize, len)
     }
 
+    pub fn seek(fd: usize, offset: usize, whence: usize) -> isize {
+        syscall3(Syscall::Seek, fd, offset, whence)
+    }
+
     pub fn proc_get(proc: *mut RawProc, index: usize) -> isize {
         syscall3(Syscall::Proc, ProcOp::Get as usize, proc as usize, index)
     }
