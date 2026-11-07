@@ -431,7 +431,7 @@ fn main(_args: Args) {
         }
     }
 
-    let mut editor = LineEditor::new();
+    let mut editor = LineEditor::with_history("/etc/sh_history");
     while let Some(line) = editor.read_line("$ ") {
         if line.is_empty() {
             continue;

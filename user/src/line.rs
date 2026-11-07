@@ -1,6 +1,7 @@
 use kernel::abi::Ioctl;
 
-use crate::io::{Fd, Read, Stderr, Stdin, Stdout, Write, ioctl};
+use crate::fs::{OpenFlag, open};
+use crate::io::{Fd, Read, Stderr, Stdin, Stdout, Whence, Write, close, ioctl, seek};
 
 /// A line editor for reading user input from the console, supporting basic editing
 /// and a history of previous lines entered.
@@ -28,11 +29,18 @@ pub struct LineEditor<'a> {
     stashed_buf: [u8; LineEditor::LINE_MAX],
     /// length of the stashed line
     stashed_len: usize,
+    /// file to load history from and append to
+    /// None = in-memory only
+    history_path: Option<&'a str>,
 }
 
 impl<'a> LineEditor<'a> {
     const LINE_MAX: usize = 256;
     const HISTORY_SIZE: usize = 16;
+    /// Max bytes of history file read at startup: enough for HISTORY_SIZE full lines + '\n'.
+    const HISTORY_WINDOW: usize = Self::HISTORY_SIZE * (Self::LINE_MAX + 1);
+    /// Rewrite the file from the ring on load once it grows past this.
+    const HISTORY_COMPACT: usize = 4 * Self::HISTORY_WINDOW;
 
     pub fn new() -> Self {
         Self {
@@ -46,7 +54,19 @@ impl<'a> LineEditor<'a> {
             history_offset: 0,
             stashed_buf: [0; Self::LINE_MAX],
             stashed_len: 0,
+            history_path: None,
         }
+    }
+
+    pub fn with_history(path: &'a str) -> Self {
+        let mut new = Self::new();
+        new.history_path = Some(path);
+        new.load_history();
+        new
+    }
+
+    fn history_len(&self) -> usize {
+        self.history_entries.min(Self::HISTORY_SIZE)
     }
 
     pub fn read_line(&mut self, prompt: &'a str) -> Option<&str> {
@@ -130,7 +150,10 @@ impl<'a> LineEditor<'a> {
         ioctl(Fd::STDIN, Ioctl::CONSOLE_SET_RAW, 0).expect("failed to set console to cooked mode");
 
         if self.len > 0 {
-            self.add_to_history();
+            let line = self.buf;
+            if self.push_history(&line[..self.len]) {
+                self.append_history(&line[..self.len]);
+            }
         }
         self.history_offset = 0;
 
@@ -399,11 +422,117 @@ impl<'a> LineEditor<'a> {
         self.redraw();
     }
 
-    fn add_to_history(&mut self) {
+    /// Adds `line` to the ring unless it's empty or equal to the most recent entry.
+    /// Returns whether it was added, so the caller knows whether to persist it.
+    fn push_history(&mut self, line: &[u8]) -> bool {
+        if line.is_empty() {
+            return false;
+        }
+
+        if self.history_entries > 0 {
+            let prev_slot = (self.history_entries - 1) % Self::HISTORY_SIZE;
+            if &self.history[prev_slot][..self.history_lens[prev_slot]] == line {
+                return false;
+            }
+        }
+
         let slot = self.history_entries % Self::HISTORY_SIZE;
-        self.history[slot][..self.len].copy_from_slice(&self.buf[..self.len]);
-        self.history_lens[slot] = self.len;
+        self.history[slot][..line.len()].copy_from_slice(line);
+        self.history_lens[slot] = line.len();
         self.history_entries += 1;
+
+        true
+    }
+
+    /// Reads the tail of the history file into the ring; compacts the file if it's large.
+    fn load_history(&mut self) {
+        let Some(path) = self.history_path else {
+            return;
+        };
+
+        let Ok(mut fd) = open(path, OpenFlag::READ_ONLY) else {
+            return;
+        };
+
+        let Ok(size) = seek(fd, 0, Whence::End) else {
+            let _ = close(fd);
+            return;
+        };
+
+        let start = size.saturating_sub(Self::HISTORY_WINDOW);
+        if seek(fd, start as isize, Whence::Start).is_err() {
+            let _ = close(fd);
+            return;
+        };
+
+        let len = size - start;
+        let mut buf = [0u8; Self::HISTORY_WINDOW];
+        if fd.read_exact(&mut buf[..len]).is_err() {
+            let _ = close(fd);
+            return;
+        }
+
+        buf[..len]
+            .split(|&c| c == b'\n')
+            // skip past the first '\n' because we might have read mid line
+            .skip(if start > 0 { 1 } else { 0 })
+            .filter(|&l| !l.is_empty() && l.len() <= Self::LINE_MAX)
+            .for_each(|l| {
+                self.push_history(l);
+            });
+
+        let _ = close(fd);
+
+        if size > Self::HISTORY_COMPACT {
+            self.rewrite_history();
+        }
+    }
+
+    /// Appends `line` + '\n' to the history file in one write.
+    fn append_history(&self, line: &[u8]) {
+        let Some(path) = self.history_path else {
+            return;
+        };
+
+        let mut buf = [0u8; Self::LINE_MAX + 1];
+        buf[..line.len()].copy_from_slice(line);
+        buf[line.len()] = b'\n';
+
+        let Ok(mut fd) = open(
+            path,
+            OpenFlag::WRITE_ONLY | OpenFlag::CREATE | OpenFlag::APPEND,
+        ) else {
+            return;
+        };
+
+        let _ = fd.write_all(&buf[..line.len() + 1]);
+        let _ = close(fd);
+    }
+
+    /// Replaces the file with the current ring, oldest first.
+    fn rewrite_history(&self) {
+        let Some(path) = self.history_path else {
+            return;
+        };
+
+        let Ok(mut fd) = open(
+            path,
+            OpenFlag::WRITE_ONLY | OpenFlag::CREATE | OpenFlag::TRUNCATE,
+        ) else {
+            return;
+        };
+
+        let mut buf = [0u8; Self::LINE_MAX + 1];
+        let available = self.history_len();
+        for k in 0..available {
+            let slot = (self.history_entries - available + k) % Self::HISTORY_SIZE;
+            let line = &self.history[slot][..self.history_lens[slot]];
+            buf[..line.len()].copy_from_slice(line);
+            buf[line.len()] = b'\n';
+            let _ = fd.write_all(&buf[..line.len() + 1]);
+        }
+
+        let _ = close(fd);
     }
 
     fn load_from_history(&mut self) {
@@ -415,7 +544,7 @@ impl<'a> LineEditor<'a> {
     }
 
     fn history_up(&mut self) {
-        let available = self.history_entries.min(Self::HISTORY_SIZE);
+        let available = self.history_len();
         if self.history_offset >= available {
             return;
         }
