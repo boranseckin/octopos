@@ -226,7 +226,8 @@ impl<'a> LineEditor<'a> {
         self.cursor += 1;
         self.len += 1;
 
-        self.redraw();
+        // redraw fom the old cursor
+        self.redraw_tail(self.cursor - 1, None);
     }
 
     fn backspace(&mut self) {
@@ -242,7 +243,7 @@ impl<'a> LineEditor<'a> {
         self.cursor -= 1;
         self.len -= 1;
 
-        self.redraw();
+        self.redraw_tail(self.cursor, Some(b"\x08"));
     }
 
     fn delete(&mut self) {
@@ -257,7 +258,7 @@ impl<'a> LineEditor<'a> {
 
         self.len -= 1;
 
-        self.redraw();
+        self.redraw_tail(self.cursor, None);
     }
 
     fn kill_line(&mut self) {
@@ -405,6 +406,43 @@ impl<'a> LineEditor<'a> {
             out[n + 1] = b'[';
             n += 2;
             n += write_decimal(&mut out[n..], back);
+            out[n] = b'D';
+            n += 1;
+        }
+
+        // show cursor
+        out[n..n + 6].copy_from_slice(b"\x1b[?25h");
+        n += 6;
+
+        Stdout.write_all(&out[..n]).unwrap();
+    }
+
+    fn redraw_tail(&self, from: usize, prefix: Option<&[u8]>) {
+        let mut out = [0u8; 512];
+        let mut n = 0;
+
+        // hide cursor
+        out[n..n + 6].copy_from_slice(b"\x1b[?25l");
+        n += 6;
+
+        if let Some(prefix) = prefix {
+            out[n..n + prefix.len()].copy_from_slice(prefix);
+            n += prefix.len();
+        }
+
+        // line content from `from`
+        out[n..n + self.len - from].copy_from_slice(&self.buf[from..self.len]);
+        n += self.len - from;
+
+        // erase trailing characters from previous longer line
+        out[n..n + 3].copy_from_slice(b"\x1b[K");
+        n += 3;
+
+        if self.len > self.cursor {
+            out[n] = b'\x1b';
+            out[n + 1] = b'[';
+            n += 2;
+            n += write_decimal(&mut out[n..], self.len - self.cursor);
             out[n] = b'D';
             n += 1;
         }
