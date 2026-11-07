@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
                     cmd = CommandType::Redirect {
                         cmd: inner,
                         file,
-                        mode: OpenFlag::WRITE_ONLY | OpenFlag::CREATE,
+                        mode: OpenFlag::WRITE_ONLY | OpenFlag::CREATE | OpenFlag::APPEND,
                         fd: Fd::STDOUT,
                     };
                 }

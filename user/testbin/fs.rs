@@ -162,6 +162,118 @@ fn test_open_flags() {
     unlink("/fs_flags").expect("unlink");
 }
 
+/// Read the whole file at `path` into `buf`, returning the number of bytes read.
+fn read_file(path: &str, buf: &mut [u8]) -> usize {
+    let fd = open(path, OpenFlag::READ_ONLY).expect("open for read_file");
+    let mut total = 0;
+    loop {
+        let n = read(fd, &mut buf[total..]).expect("read_file");
+        if n == 0 {
+            break;
+        }
+        total += n;
+    }
+    close(fd).expect("close read_file");
+    total
+}
+
+/// Writes through an O_APPEND fd go to the end of the existing content, not offset 0.
+fn test_append() {
+    let fd = open("/fs_append", O_CREATE_RW).expect("create");
+    write(fd, b"abc").expect("write initial");
+    close(fd).expect("close");
+
+    let fd = open("/fs_append", OpenFlag::WRITE_ONLY | OpenFlag::APPEND).expect("open append");
+    write(fd, b"def").expect("append 1");
+    write(fd, b"gh").expect("append 2");
+    close(fd).expect("close append");
+
+    let mut buf = [0u8; 16];
+    let n = read_file("/fs_append", &mut buf);
+    assert_eq!(&buf[..n], b"abcdefgh", "append content");
+
+    unlink("/fs_append").expect("unlink");
+}
+
+/// Two independent O_APPEND opens of the same file each have their own offset; every write must
+/// still land at the current end instead of overwriting the other fd's data.
+fn test_append_two_fds() {
+    let fd = open("/fs_append2", O_CREATE_RW).expect("create");
+    close(fd).expect("close");
+
+    let flags = OpenFlag::WRITE_ONLY | OpenFlag::APPEND;
+    let a = open("/fs_append2", flags).expect("open a");
+    let b = open("/fs_append2", flags).expect("open b");
+
+    write(a, b"A1").expect("write a1");
+    write(b, b"B1").expect("write b1");
+    write(a, b"A2").expect("write a2");
+    write(b, b"B2").expect("write b2");
+
+    close(a).expect("close a");
+    close(b).expect("close b");
+
+    let mut buf = [0u8; 16];
+    let n = read_file("/fs_append2", &mut buf);
+    assert_eq!(&buf[..n], b"A1B1A2B2", "interleaved append content");
+
+    unlink("/fs_append2").expect("unlink");
+}
+
+/// An O_APPEND fd must see growth from a non-append fd that extended the file after it was
+/// opened, i.e. the end is computed at write time, not at open time.
+fn test_append_after_external_growth() {
+    let fd = open("/fs_append3", O_CREATE_RW).expect("create");
+    write(fd, b"start").expect("write initial");
+
+    let app = open("/fs_append3", OpenFlag::WRITE_ONLY | OpenFlag::APPEND).expect("open append");
+
+    // Extend the file through the plain fd after the append fd was opened.
+    write(fd, b"-more").expect("extend");
+    close(fd).expect("close plain");
+
+    write(app, b"-end").expect("append");
+    close(app).expect("close append");
+
+    let mut buf = [0u8; 32];
+    let n = read_file("/fs_append3", &mut buf);
+    assert_eq!(&buf[..n], b"start-more-end", "append after growth");
+
+    unlink("/fs_append3").expect("unlink");
+}
+
+/// An append larger than one log transaction is split into chunks in the kernel; all of it must
+/// land contiguously after the existing content.
+fn test_append_large() {
+    const LEN: usize = 4096;
+
+    let fd = open("/fs_append4", O_CREATE_RW).expect("create");
+    write(fd, b"xyz").expect("write initial");
+    close(fd).expect("close");
+
+    let mut data = [0u8; LEN];
+    for (i, b) in data.iter_mut().enumerate() {
+        *b = b'a' + (i % 26) as u8;
+    }
+
+    let fd = open("/fs_append4", OpenFlag::WRITE_ONLY | OpenFlag::APPEND).expect("open append");
+    let n = write(fd, &data).expect("large append");
+    assert_eq!(n, LEN, "large append byte count");
+
+    let mut stat = Stat::default();
+    fstat(fd, &mut stat).expect("fstat");
+    assert_eq!(stat.size as usize, 3 + LEN, "size after large append");
+    close(fd).expect("close append");
+
+    let mut buf = [0u8; 3 + LEN];
+    let n = read_file("/fs_append4", &mut buf);
+    assert_eq!(n, 3 + LEN, "read back length");
+    assert_eq!(&buf[..3], b"xyz", "prefix preserved");
+    assert!(buf[3..] == data, "large append content");
+
+    unlink("/fs_append4").expect("unlink");
+}
+
 #[unsafe(no_mangle)]
 fn main(_args: Args) {
     test_create_write_read();
@@ -172,4 +284,8 @@ fn main(_args: Args) {
     test_mkdir();
     test_read_eof();
     test_open_flags();
+    test_append();
+    test_append_two_fds();
+    test_append_after_external_growth();
+    test_append_large();
 }

@@ -32,10 +32,11 @@ pub struct FileMeta {
 /// Per-file mutable state protected by per-file sleeplock
 #[derive(Debug, Clone)]
 pub struct FileInner {
-    /// Index into the file table.
     pub readable: bool,
     pub writeable: bool,
+    pub append: bool,
     pub r#type: FileType,
+    /// Index into the file table.
     pub offset: u32,
 }
 
@@ -59,6 +60,7 @@ impl FileTable {
                 FileInner {
                     readable: false,
                     writeable: false,
+                    append: false,
                     r#type: FileType::None,
                     offset: 0,
                 },
@@ -230,6 +232,12 @@ impl File {
                     let _op = Operation::begin();
                     let mut inode_inner = inode.lock();
 
+                    if file_inner.append {
+                        // we have inode lock here so the offset cannot change by another file
+                        // handle while we are appending.
+                        file_inner.offset = inode_inner.size;
+                    }
+
                     let src =
                         unsafe { slice::from_raw_parts((addr.as_usize() + i) as *const u8, n1) };
                     let write = inode.write(&mut inode_inner, file_inner.offset, src, true);
@@ -299,6 +307,7 @@ impl OpenFlag {
     pub const READ_WRITE: usize = 0x002;
     pub const CREATE: usize = 0x200;
     pub const TRUNCATE: usize = 0x400;
+    pub const APPEND: usize = 0x800;
 }
 
 /// Device interface

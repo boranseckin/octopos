@@ -242,6 +242,7 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
     };
 
     let mut file_inner = FILE_TABLE.inner[file.id].lock();
+
     if inode_inner.r#type == InodeType::Device {
         file_inner.r#type = FileType::Device {
             inode: inode.clone(),
@@ -253,9 +254,11 @@ pub fn sys_open(args: &SyscallArgs) -> Result<usize> {
         };
         file_inner.offset = 0;
     }
+
     file_inner.readable = (o_mode & OpenFlag::WRITE_ONLY) == 0;
     file_inner.writeable =
         (o_mode & OpenFlag::WRITE_ONLY) != 0 || (o_mode & OpenFlag::READ_WRITE != 0);
+    file_inner.append = (o_mode & OpenFlag::APPEND) != 0;
 
     if (o_mode & OpenFlag::TRUNCATE) != 0 && inode_inner.r#type == InodeType::File {
         inode.trunc(&mut inode_inner);
