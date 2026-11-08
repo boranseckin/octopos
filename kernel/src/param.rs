@@ -1,3 +1,7 @@
+#![allow(unused)]
+
+use crate::riscv::PGSIZE;
+
 /// maximum number of CPUs
 pub const NCPU: usize = 8;
 
@@ -54,6 +58,22 @@ pub const NKSTACK_PAGES: usize = 1;
 
 /// user stack pages
 pub const USERSTACK: usize = 4;
+
+/// largest frame
+/// a bigger one can jump over the guard page instead of faulting on it
+pub const MAX_FRAME: usize = PGSIZE;
+
+/// largest frame of a recursive function, since its cost multiplies with the depth
+/// a depth limit of `N` costs at most `N x MAX_RECURSIVE_FRAME` bytes
+pub const MAX_RECURSIVE_FRAME: usize = MAX_FRAME / 8;
+
+/// largest stack buffer in user code
+/// bigger ones go on the heap
+pub const MAX_USER_STACK_BUFFER: usize = 512;
+
+/// largest stack buffer in the kernel
+/// release kernel stacks are one page and interrupts nest on them
+pub const MAX_KERNEL_STACK_BUFFER: usize = 256;
 
 /// timebase for qemu
 pub const TIMEBASE_HZ: usize = 10_000_000;

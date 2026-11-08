@@ -10,7 +10,3 @@ version = "1.4.0"
 lto = true          # link time optimization, eleminates dead code
 strip = true        # strips symbols from the binary
 codegen-units = 1   # compile as one unit
-
-[workspace.lints.clippy]
-large_stack_arrays = "warn"
-large_stack_frames = "warn"
