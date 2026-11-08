@@ -252,7 +252,7 @@ fn test_append_large() {
     write(fd, b"xyz").expect("write initial");
     close(fd).expect("close");
 
-    let mut data = [0u8; LEN];
+    let mut data = vec![0u8; LEN];
     for (i, b) in data.iter_mut().enumerate() {
         *b = b'a' + (i % 26) as u8;
     }
@@ -266,7 +266,7 @@ fn test_append_large() {
     assert_eq!(stat.size as usize, 3 + LEN, "size after large append");
     close(fd).expect("close append");
 
-    let mut buf = [0u8; 3 + LEN];
+    let mut buf = vec![0u8; 3 + LEN];
     let n = read_file("/fs_append4", &mut buf);
     assert_eq!(n, 3 + LEN, "read back length");
     assert_eq!(&buf[..3], b"xyz", "prefix preserved");
@@ -440,8 +440,16 @@ fn test_seek_dup() {
 /// Pipes and devices have no position: seek fails with InvalidSeek.
 fn test_seek_unseekable() {
     let (r, w) = pipe().expect("pipe");
-    assert_eq!(seek(r, 0, Whence::Start), Err(SysError::InvalidSeek), "pipe read end");
-    assert_eq!(seek(w, 0, Whence::End), Err(SysError::InvalidSeek), "pipe write end");
+    assert_eq!(
+        seek(r, 0, Whence::Start),
+        Err(SysError::InvalidSeek),
+        "pipe read end"
+    );
+    assert_eq!(
+        seek(w, 0, Whence::End),
+        Err(SysError::InvalidSeek),
+        "pipe write end"
+    );
     close(r).expect("close r");
     close(w).expect("close w");
 
