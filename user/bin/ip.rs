@@ -134,8 +134,6 @@ fn route_list_cmd() {
         }
     }
 
-    routes.sort_by_key(|r| (core::cmp::Reverse(r.prefix_len), r.metric));
-
     let rows: Vec<_> = routes
         .iter()
         .map(|route| {
