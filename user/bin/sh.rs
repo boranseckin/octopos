@@ -15,7 +15,7 @@ const MAXNODES: usize = 16;
 const MAXDEPTH: usize = 16;
 const MAXARGV: usize = 32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum CommandType<'a> {
     /// A single command with arguments, e.g. `ls -l`
     Exec { argv_start: usize, argc: usize },
@@ -47,6 +47,10 @@ struct Arena<'a> {
 }
 
 impl<'a> Arena<'a> {
+    fn node(&self, index: usize) -> CommandType<'a> {
+        self.nodes[index].expect("parser only links indices it alloated")
+    }
+
     fn alloc_argv(&mut self, args: &[&'a str]) -> (usize, usize) {
         let start = self.argv_count;
         for &arg in args {
@@ -330,91 +334,90 @@ impl<'a> Iterator for Parser<'a> {
     }
 }
 
-fn run_cmd(cmd: CommandType, arena: &mut Arena) -> ! {
-    match cmd {
-        CommandType::Exec { argv_start, argc } => {
-            exec_cmd(
-                arena.argv[argv_start],
-                &arena.argv[argv_start..argv_start + argc],
-            );
-        }
-        CommandType::Redirect {
-            cmd,
-            file,
-            mode,
-            fd,
-        } => {
-            close(fd).unwrap();
-            if open(file, mode).is_err() {
-                eprintln!("sh: cannot open {}", file);
-                exit(1);
+fn run_cmd(cmd: CommandType, arena: &Arena) -> ! {
+    let mut cmd = cmd;
+    loop {
+        cmd = match cmd {
+            CommandType::Exec { argv_start, argc } => {
+                exec_cmd(
+                    arena.argv[argv_start],
+                    &arena.argv[argv_start..argv_start + argc],
+                );
             }
 
-            // now fd 0 or 1 points to the file
-            let inner = arena.nodes[cmd].take().expect("sh: inner cmd");
-            run_cmd(inner, arena);
-        }
-        CommandType::Pipe { left, right } => {
-            let (read_fd, write_fd) = pipe().expect("sh: pipe failed");
+            CommandType::Redirect {
+                cmd,
+                file,
+                mode,
+                fd,
+            } => {
+                close(fd).unwrap();
+                if open(file, mode).is_err() {
+                    eprintln!("sh: cannot open {}", file);
+                    exit(1);
+                }
 
-            if fork().expect("sh: fork failed") == 0 {
-                // won't read from pipe, close read side
-                close(read_fd).unwrap();
-                // close STDOUT to free fd 1
-                close(Fd::STDOUT).unwrap();
-                // write_fd is now copied to lowest free fd (1)
-                dup(write_fd).unwrap();
-                // won't need the original fd anymore
-                close(write_fd).unwrap();
-
-                // exec writes to STDOUT will go to fd 1, which is now the pipe
-                let left_cmd = arena.nodes[left].take().expect("sh: left cmd");
-                run_cmd(left_cmd, arena)
+                // now fd 0 or 1 points to the file
+                arena.node(cmd)
             }
 
-            if fork().expect("sh: fork failed") == 0 {
-                // won't write to pipe, close write side
-                close(write_fd).unwrap();
-                // close STDIN to free fd 0
-                close(Fd::STDIN).unwrap();
-                // read_fd is now copied to lowest free fd (0)
-                dup(read_fd).unwrap();
-                // won't need the original fd anymore
-                close(read_fd).unwrap();
+            CommandType::Pipe { left, right } => {
+                let (read_fd, write_fd) = pipe().expect("sh: pipe failed");
 
-                // exec reads from STDIN will come from fd 0, which is now the pipe
-                let right_cmd = arena.nodes[right].take().expect("sh: right cmd");
-                run_cmd(right_cmd, arena)
+                if fork().expect("sh: fork failed") == 0 {
+                    // won't read from pipe, close read side
+                    close(read_fd).unwrap();
+                    // close STDOUT to free fd 1
+                    close(Fd::STDOUT).unwrap();
+                    // write_fd is now copied to lowest free fd (1)
+                    dup(write_fd).unwrap();
+                    // won't need the original fd anymore
+                    close(write_fd).unwrap();
+
+                    // exec writes to STDOUT will go to fd 1, which is now the pipe
+                    arena.node(left)
+                } else if fork().expect("sh: fork failed") == 0 {
+                    // won't write to pipe, close write side
+                    close(write_fd).unwrap();
+                    // close STDIN to free fd 0
+                    close(Fd::STDIN).unwrap();
+                    // read_fd is now copied to lowest free fd (0)
+                    dup(read_fd).unwrap();
+                    // won't need the original fd anymore
+                    close(read_fd).unwrap();
+
+                    // exec reads from STDIN will come from fd 0, which is now the pipe
+                    arena.node(right)
+                } else {
+                    // parent close pipes, wait for left and right
+                    close(read_fd).unwrap();
+                    close(write_fd).unwrap();
+                    wait(&mut 0).unwrap();
+                    wait(&mut 0).unwrap();
+                    exit(0);
+                }
             }
 
-            // parent close pipes, wait for left and right
-            close(read_fd).unwrap();
-            close(write_fd).unwrap();
-            wait(&mut 0).unwrap();
-            wait(&mut 0).unwrap();
-            exit(0);
-        }
-        CommandType::List { left, right } => {
-            let pid = fork().expect("sh: fork failed");
+            CommandType::List { left, right } => {
+                let pid = fork().expect("sh: fork failed");
 
-            if pid == 0 {
-                let left_cmd = arena.nodes[left].take().expect("sh: left cmd");
-                run_cmd(left_cmd, arena);
-            } else {
-                let _ = wait(&mut 0);
-                let right_cmd = arena.nodes[right].take().expect("sh: right cmd");
-                run_cmd(right_cmd, arena);
+                if pid == 0 {
+                    arena.node(left)
+                } else {
+                    let _ = wait(&mut 0);
+                    arena.node(right)
+                }
             }
-        }
-        CommandType::Background { cmd } => {
-            let pid = fork().expect("sh: fork failed");
 
-            if pid == 0 {
-                let inner_cmd = arena.nodes[cmd].take().expect("sh: inner cmd");
-                run_cmd(inner_cmd, arena);
-            } else {
-                // do not wait
-                exit(0);
+            CommandType::Background { cmd } => {
+                let pid = fork().expect("sh: fork failed");
+
+                if pid == 0 {
+                    arena.node(cmd)
+                } else {
+                    // do not wait
+                    exit(0);
+                }
             }
         }
     }
@@ -460,6 +463,7 @@ fn main(_args: Args) {
 
         match tokenizer.next_token() {
             Some("exit") => exit(0),
+
             Some("cd") => {
                 // chdir must happen from the parent, do not fork
                 let path = tokenizer.next_token().unwrap_or("/");
@@ -467,6 +471,7 @@ fn main(_args: Args) {
                     eprintln!("cd: {} {}", path, e);
                 }
             }
+
             Some(_) => {
                 // Fork first, then parse & execute in child
                 let pid = fork().expect("sh: fork failed");
@@ -474,7 +479,7 @@ fn main(_args: Args) {
                 if pid == 0 {
                     let mut parser = Parser::new(line);
                     if let Some(root) = parser.parse() {
-                        run_cmd(root, &mut parser.arena);
+                        run_cmd(root, &parser.arena);
                     }
                     exit_with_msg("sh: syntax error");
                 } else {
@@ -483,6 +488,7 @@ fn main(_args: Args) {
                     ioctl(Fd::STDIN, Ioctl::CONSOLE_SET_FG_PID, 0).expect("sh: ioctl failed");
                 }
             }
+
             None => continue,
         }
     }
