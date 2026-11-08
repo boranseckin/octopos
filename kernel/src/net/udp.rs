@@ -378,7 +378,8 @@ fn transmit_udp(
     // UDP requires L3 routing information in the header for checksum calculation, so we need to do
     // the routing lookup before passing it to net::transmit().
     // To avoid double lookup, we are using net::transmit_with_route().
-    let route = route::best_route_for(dest_ip, bound_interface)?;
+    let route =
+        route::best_route_for(dest_ip, bound_interface).ok_or(NetError::NetworkUnreachable)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::NotConfigured);

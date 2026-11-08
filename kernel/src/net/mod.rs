@@ -659,7 +659,7 @@ pub fn transmit(
     segments: &[&[u8]],
     unresolved: Unresolved,
 ) -> Result<()> {
-    let route = route::best_route_for(dest_ip, None)?;
+    let route = route::best_route_for(dest_ip, None).ok_or(NetError::NetworkUnreachable)?;
 
     let Some(interface) = interface::find_interface_by_id(route::egress_interface(&route)) else {
         err!(NetError::InterfaceNotFound);
