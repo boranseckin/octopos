@@ -49,11 +49,11 @@ impl<'a> Arena<'a> {
     fn alloc_argv(&mut self, args: &[&'a str]) -> (usize, usize) {
         let start = self.argv_count;
         for &arg in args {
-            self.argv[self.argv_count] = arg;
-            self.argv_count += 1;
             if self.argv_count >= self.argv.len() {
                 panic!("argv arena overflow");
             }
+            self.argv[self.argv_count] = arg;
+            self.argv_count += 1;
         }
         (start, args.len())
     }
@@ -159,13 +159,13 @@ impl<'a> Parser<'a> {
     }
 
     fn alloc_cmd(&mut self, cmd: CommandType<'a>) -> usize {
-        let idx = self.arena.node_count;
-        self.arena.nodes[idx] = Some(cmd);
-        self.arena.node_count += 1;
-
         if self.arena.node_count >= self.arena.nodes.len() {
             panic!("sh: arena overflow");
         }
+
+        let idx = self.arena.node_count;
+        self.arena.nodes[idx] = Some(cmd);
+        self.arena.node_count += 1;
 
         idx
     }
