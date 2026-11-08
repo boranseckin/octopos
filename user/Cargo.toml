@@ -8,9 +8,6 @@ license = "MIT"
 keywords = ["riscv", "xv6"]
 version.workspace = true
 
-[lints]
-workspace = true
-
 [lib]
 name = "user"
 path = "src/lib.rs"
