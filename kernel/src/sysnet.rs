@@ -298,8 +298,8 @@ impl RouteFlag {
 /// # Operations
 ///
 /// - `Get`: writes the route at index `a2` into `a1`. Indices start at 0 and are contiguous;
-///   iterate until `NoEntry`. The table may change between calls, so a listing can skip or
-///   repeat an entry.
+///   iterate until `NoEntry`. Routes are ordered by priority where the lowest index is the highest
+///   priority. The table may change between calls, so a listing can skip or repeat an entry.
 /// - `Add`: reads a route from `a1` and adds it. `a2` holds `RouteFlag` bits. With
 ///   `ROUTE_REPLACE`, an existing route with the same key is overwritten instead of rejected.
 /// - `Remove`: reads a route from `a1` and removes the stored route with the same key. Fields

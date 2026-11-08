@@ -1,3 +1,5 @@
+use core::cmp;
+
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
@@ -207,6 +209,15 @@ fn owns_addr(routes: &[RouteEntry], interface_id: InterfaceId, addr: Ipv4Addr) -
         .any(|r| r.interface_id == interface_id && r.kind == RouteKind::Local && r.dest_ip == addr)
 }
 
+/// Insert the `route` into `routes` while keeping the priority order according to `route_priority`.
+/// Sorting is stable: when a route with the same priority is added, the older route takes precedence.
+fn insert_sorted(routes: &mut Vec<RouteEntry>, route: RouteEntry) {
+    let key = route_priority(&route);
+    let index = routes.partition_point(|r| route_priority(r) >= key);
+    routes.insert(index, route);
+    debug_assert!(routes.is_sorted_by_key(|r| cmp::Reverse(route_priority(r))));
+}
+
 /// Removes this interface's routes that fail `valid`.
 fn retain_valid(
     routes: &mut Vec<RouteEntry>,
@@ -235,13 +246,13 @@ fn prune_interface(routes: &mut Vec<RouteEntry>, interface_id: InterfaceId) {
     });
 }
 
-/// Generates a sort key for a route entry, used to sort routes by their prefix length and metric.
-pub fn route_sort_key(route: &RouteEntry) -> (u8, core::cmp::Reverse<u32>) {
+/// Priority used to keep ROUTES in lookup order. Higher is preferred.
+pub fn route_priority(route: &RouteEntry) -> (u8, cmp::Reverse<u32>) {
     // Sort by longest prefix length first, then by lowest metric.
-    (route.prefix_len, core::cmp::Reverse(route.metric))
+    (route.prefix_len, cmp::Reverse(route.metric))
 }
 
-/// Returns a copy of the route entry at a given index.
+/// Returns a copy of the route entry at a given index in lookup order (best is first).
 pub fn route_at(index: usize) -> Option<RouteEntry> {
     ROUTES.lock().get(index).copied()
 }
@@ -296,20 +307,20 @@ pub fn add_route(route: RouteEntry, replace: bool) -> Result<()> {
         }
     }
 
-    if let Some(existing) = routes.iter_mut().find(|r| route.eq(*r)) {
+    if let Some(index) = routes.iter_mut().position(|r| route.eq(r)) {
         if !replace {
             err!(NetError::RouteExists);
         }
 
-        if existing.owner == RouteOwner::Kernel {
+        if routes[index].owner == RouteOwner::Kernel {
             err!(NetError::NotPermitted)
         }
 
-        // overwrite existing route
-        *existing = route;
-    } else {
-        routes.push(route);
+        // remove directly since remove_route would prune and also re-take the lock.
+        routes.remove(index);
     }
+
+    insert_sorted(&mut routes, route);
 
     Ok(())
 }
@@ -350,29 +361,35 @@ pub fn replace_interface_route(interface_id: InterfaceId, ipv4: Ipv4Cidr) {
     routes.retain(|r| r.interface_id != interface_id || !matches!(r.owner, RouteOwner::Kernel));
 
     // Add a new route for local route for loopback.
-    routes.push(RouteEntry {
-        dest_ip: ipv4.addr,
-        prefix_len: 32,
-        gateway: None,
-        interface_id, // use the actual interface_id not loopback
-        metric: 0,
-        owner: RouteOwner::Kernel,
-        kind: RouteKind::Local,
-        pref_src: Some(ipv4.addr),
-    });
+    insert_sorted(
+        &mut routes,
+        RouteEntry {
+            dest_ip: ipv4.addr,
+            prefix_len: 32,
+            gateway: None,
+            interface_id, // use the actual interface_id not loopback
+            metric: 0,
+            owner: RouteOwner::Kernel,
+            kind: RouteKind::Local,
+            pref_src: Some(ipv4.addr),
+        },
+    );
 
     // Add a new route for the interface's IP address and prefix.
-    routes.push(RouteEntry {
-        dest_ip: ipv4.addr
-            & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
-        prefix_len: ipv4.prefix_len,
-        gateway: None,
-        interface_id,
-        metric: 10,
-        owner: RouteOwner::Kernel,
-        kind: RouteKind::Unicast,
-        pref_src: None,
-    });
+    insert_sorted(
+        &mut routes,
+        RouteEntry {
+            dest_ip: ipv4.addr
+                & Ipv4Addr::prefix_len_to_mask(ipv4.prefix_len).expect("valid prefix length"),
+            prefix_len: ipv4.prefix_len,
+            gateway: None,
+            interface_id,
+            metric: 10,
+            owner: RouteOwner::Kernel,
+            kind: RouteKind::Unicast,
+            pref_src: None,
+        },
+    );
 
     prune_interface(&mut routes, interface_id);
 }
@@ -389,8 +406,7 @@ pub fn best_route_for(dest_ip: Ipv4Addr, interface_id: Option<InterfaceId>) -> R
     if let Some(route) = routes
         .iter()
         .filter(|r| interface_id.is_none_or(|i| r.interface_id == i))
-        .filter(|r| route_matches(dest_ip, r.dest_ip, r.prefix_len))
-        .max_by_key(|r| route_sort_key(r))
+        .find(|r| route_matches(dest_ip, r.dest_ip, r.prefix_len))
     {
         Ok(*route)
     } else {
@@ -419,8 +435,7 @@ pub fn dump() {
         };
     }
 
-    let mut routes = ROUTES.lock().clone();
-    routes.sort_by_key(|r| core::cmp::Reverse(route_sort_key(r)));
+    let routes = ROUTES.lock().clone();
 
     println!("");
     row!(
@@ -433,12 +448,12 @@ pub fn dump() {
         "SOURCE"
     );
 
-    for route in routes.iter() {
+    for route in routes {
         let interface = interface::find_interface_by_id(route.interface_id);
         let device = interface.as_ref().map_or("-", |i| i.config.name);
         let src = interface
             .as_ref()
-            .and_then(|i| net::source_addr(route, i))
+            .and_then(|i| net::source_addr(&route, i))
             .map_or("-".to_string(), |s| s.to_string());
 
         let dest = Ipv4Cidr {
