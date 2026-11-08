@@ -1,3 +1,6 @@
+use alloc::boxed::Box;
+use alloc::vec;
+
 use kernel::abi::Ioctl;
 
 use crate::fs::{OpenFlag, open};
@@ -5,7 +8,7 @@ use crate::io::{Fd, Read, Stderr, Stdin, Stdout, Whence, Write, close, ioctl, se
 
 /// A line editor for reading user input from the console, supporting basic editing
 /// and a history of previous lines entered.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LineEditor<'a> {
     /// buffer for the current line being edited
     buf: [u8; LineEditor::LINE_MAX],
@@ -17,7 +20,7 @@ pub struct LineEditor<'a> {
     prompt: &'a str,
 
     /// circular buffer of previous lines entered
-    history: [[u8; LineEditor::LINE_MAX]; LineEditor::HISTORY_SIZE],
+    history: Box<[[u8; LineEditor::LINE_MAX]]>,
     /// length of each entry in `history`
     history_lens: [usize; LineEditor::HISTORY_SIZE],
     /// number of entries in `history`, circular index
@@ -48,7 +51,7 @@ impl<'a> LineEditor<'a> {
             len: 0,
             cursor: 0,
             prompt: "",
-            history: [[0; Self::LINE_MAX]; Self::HISTORY_SIZE],
+            history: vec![[0u8; Self::LINE_MAX]; Self::HISTORY_SIZE].into_boxed_slice(),
             history_lens: [0; Self::HISTORY_SIZE],
             history_entries: 0,
             history_offset: 0,
@@ -504,7 +507,7 @@ impl<'a> LineEditor<'a> {
         };
 
         let len = size - start;
-        let mut buf = [0u8; Self::HISTORY_WINDOW];
+        let mut buf = vec![0u8; len];
         if fd.read_exact(&mut buf[..len]).is_err() {
             let _ = close(fd);
             return;
