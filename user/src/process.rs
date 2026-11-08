@@ -1,10 +1,14 @@
 use core::fmt::Display;
+use core::iter;
+use core::ptr;
+
+use alloc::vec::Vec;
 
 use kernel::abi::SysError;
 
 use crate::syscall::{check, check_unit, raw, validate_path};
 
-pub use kernel::abi::{ProcName, ProcOp, ProcState, RawProc, TICKS_PER_SEC};
+pub use kernel::abi::{MAXARG, ProcName, ProcOp, ProcState, RawProc, TICKS_PER_SEC};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProcInfo {
@@ -49,20 +53,28 @@ pub fn exec(path: &str, argv: &[&str]) -> SysError {
         Err(e) => return e,
     };
 
-    const MAX_ARGV: usize = 16;
-    const BUF_SIZE: usize = 512;
-
-    let mut buf = [0u8; BUF_SIZE];
-    let mut ptrs: [*const u8; MAX_ARGV + 1] = [core::ptr::null(); MAX_ARGV + 1];
-    let mut offset = 0;
-
-    for (i, arg) in argv.iter().enumerate().take(MAX_ARGV) {
-        ptrs[i] = buf[offset..].as_ptr();
-        buf[offset..offset + arg.len()].copy_from_slice(arg.as_bytes());
-        // buf is zeroed, so the byte after the arg is already a null terminator
-        offset += arg.len() + 1;
+    if argv.len() > MAXARG {
+        return SysError::InvalidArgument;
     }
-    // ptrs is already null-terminated (initialized to null)
+
+    let total = argv.iter().map(|a| a.len() + 1).sum();
+    let mut buf = Vec::with_capacity(total);
+    let mut offsets = Vec::with_capacity(argv.len());
+
+    for arg in argv.iter() {
+        // record when this arg started
+        offsets.push(buf.len());
+        // push the arg and a null byte after
+        buf.extend_from_slice(arg.as_bytes());
+        buf.push(0);
+    }
+
+    // turn offsets into pointers and append one null byte
+    let ptrs: Vec<_> = offsets
+        .iter()
+        .map(|&o| buf[o..].as_ptr())
+        .chain(iter::once(ptr::null()))
+        .collect();
 
     let ret = raw::exec(cpath.as_ptr(), ptrs.as_ptr());
     // exec only returns on failure
