@@ -12,6 +12,7 @@ use user::process::{exec, fork, wait};
 
 const MAXARGS: usize = 16;
 const MAXNODES: usize = 16;
+const MAXDEPTH: usize = 16;
 const MAXARGV: usize = 32;
 
 #[derive(Debug, Clone)]
@@ -37,7 +38,7 @@ enum CommandType<'a> {
     Background { cmd: usize },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Arena<'a> {
     nodes: [Option<CommandType<'a>>; MAXNODES],
     node_count: usize,
@@ -50,7 +51,7 @@ impl<'a> Arena<'a> {
         let start = self.argv_count;
         for &arg in args {
             if self.argv_count >= self.argv.len() {
-                panic!("argv arena overflow");
+                exit_with_msg("sh: line too complex");
             }
             self.argv[self.argv_count] = arg;
             self.argv_count += 1;
@@ -160,7 +161,7 @@ impl<'a> Parser<'a> {
 
     fn alloc_cmd(&mut self, cmd: CommandType<'a>) -> usize {
         if self.arena.node_count >= self.arena.nodes.len() {
-            panic!("sh: arena overflow");
+            exit_with_msg("sh: line too complex");
         }
 
         let idx = self.arena.node_count;
@@ -178,8 +179,12 @@ impl<'a> Parser<'a> {
         self.tokens.next()
     }
 
-    fn parse_line(&mut self) -> Option<CommandType<'a>> {
-        let mut cmd = self.parse_pipe()?;
+    fn parse_line(&mut self, depth: usize) -> Option<CommandType<'a>> {
+        if depth > MAXDEPTH {
+            exit_with_msg("sh: nested too deeply");
+        }
+
+        let mut cmd = self.parse_pipe(depth + 1)?;
 
         if self.peek_token() == Some("&") {
             self.next_token();
@@ -190,7 +195,7 @@ impl<'a> Parser<'a> {
 
         if self.peek_token() == Some(";") {
             self.next_token();
-            if let Some(right) = self.parse_line() {
+            if let Some(right) = self.parse_line(depth + 1) {
                 return Some(CommandType::List {
                     left: self.alloc_cmd(cmd),
                     right: self.alloc_cmd(right),
@@ -201,12 +206,16 @@ impl<'a> Parser<'a> {
         Some(cmd)
     }
 
-    fn parse_pipe(&mut self) -> Option<CommandType<'a>> {
-        let left = self.parse_exec()?;
+    fn parse_pipe(&mut self, depth: usize) -> Option<CommandType<'a>> {
+        if depth > MAXDEPTH {
+            exit_with_msg("sh: nested too deeply");
+        }
+
+        let left = self.parse_exec(depth + 1)?;
 
         if self.peek_token() == Some("|") {
             self.next_token();
-            let right = self.parse_pipe()?;
+            let right = self.parse_pipe(depth + 1)?;
             return Some(CommandType::Pipe {
                 left: self.alloc_cmd(left),
                 right: self.alloc_cmd(right),
@@ -216,13 +225,17 @@ impl<'a> Parser<'a> {
         Some(left)
     }
 
-    fn parse_exec(&mut self) -> Option<CommandType<'a>> {
+    fn parse_exec(&mut self, depth: usize) -> Option<CommandType<'a>> {
+        if depth > MAXDEPTH {
+            exit_with_msg("sh: nested too deeply");
+        }
+
         // handle sub-shell
         if self.peek_token() == Some("(") {
             self.next_token();
-            let cmd = self.parse_line()?;
+            let cmd = self.parse_line(depth + 1)?;
             if self.peek_token() != Some(")") {
-                panic!("sh: expected ')'");
+                exit_with_msg("sh: syntax error: expected ')'");
             }
             self.next_token();
             return Some(self.parse_redirects(cmd));
@@ -237,7 +250,7 @@ impl<'a> Parser<'a> {
             }
 
             if argc >= MAXARGS {
-                panic!("sh: too many args")
+                exit_with_msg("sh: too many arguments")
             }
 
             argv[argc] = token;
@@ -260,7 +273,9 @@ impl<'a> Parser<'a> {
             match token {
                 "<" => {
                     self.next_token();
-                    let file = self.next_token().expect("file");
+                    let file = self.next_token().unwrap_or_else(|| {
+                        exit_with_msg("sh: syntax error: missing file after '<'")
+                    });
                     let inner = self.alloc_cmd(cmd);
                     cmd = CommandType::Redirect {
                         cmd: inner,
@@ -271,7 +286,9 @@ impl<'a> Parser<'a> {
                 }
                 ">" => {
                     self.next_token();
-                    let file = self.next_token().expect("file");
+                    let file = self.next_token().unwrap_or_else(|| {
+                        exit_with_msg("sh: syntax error: missing file after '>'")
+                    });
                     let inner = self.alloc_cmd(cmd);
                     cmd = CommandType::Redirect {
                         cmd: inner,
@@ -282,7 +299,9 @@ impl<'a> Parser<'a> {
                 }
                 ">>" => {
                     self.next_token();
-                    let file = self.next_token().expect("file");
+                    let file = self.next_token().unwrap_or_else(|| {
+                        exit_with_msg("sh: syntax error: missing file after '>>'")
+                    });
                     let inner = self.alloc_cmd(cmd);
                     cmd = CommandType::Redirect {
                         cmd: inner,
@@ -299,7 +318,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse(&mut self) -> Option<CommandType<'a>> {
-        self.parse_line()
+        self.parse_line(0)
     }
 }
 
@@ -457,7 +476,7 @@ fn main(_args: Args) {
                     if let Some(root) = parser.parse() {
                         run_cmd(root, &mut parser.arena);
                     }
-                    exit_with_msg("sh: parse failed");
+                    exit_with_msg("sh: syntax error");
                 } else {
                     ioctl(Fd::STDIN, Ioctl::CONSOLE_SET_FG_PID, pid).expect("sh: ioctl failed");
                     wait(&mut 0).expect("sh: wait failed");
