@@ -110,6 +110,7 @@ pub mod registers {
             StoreAddressMisaligned,
             StoreAccessFault,
             EnvironmentCall,
+            InstructionPageFault,
             LoadPageFault,
             StorePageFault,
             Unknown,
@@ -139,9 +140,31 @@ pub mod registers {
                     6 => Exception::StoreAddressMisaligned,
                     7 => Exception::StoreAccessFault,
                     8 => Exception::EnvironmentCall,
+                    12 => Exception::InstructionPageFault,
                     13 => Exception::LoadPageFault,
                     15 => Exception::StorePageFault,
                     _ => Exception::Unknown,
+                }
+            }
+        }
+
+        impl core::fmt::Display for Exception {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self {
+                    Exception::InstructionAddressMisaligned => {
+                        write!(f, "instruction address misaligned")
+                    }
+                    Exception::InstructionAccessFault => write!(f, "instruction access fault"),
+                    Exception::IllegalInstruction => write!(f, "illegal instruction"),
+                    Exception::Breakpoint => write!(f, "breakpoint"),
+                    Exception::LoadAccessFault => write!(f, "load access fault"),
+                    Exception::StoreAddressMisaligned => write!(f, "store address misaligned"),
+                    Exception::StoreAccessFault => write!(f, "store access fault"),
+                    Exception::EnvironmentCall => write!(f, "environment call"),
+                    Exception::InstructionPageFault => write!(f, "instruction page fault"),
+                    Exception::LoadPageFault => write!(f, "load page fault"),
+                    Exception::StorePageFault => write!(f, "store page fault"),
+                    Exception::Unknown => write!(f, "unknown exception"),
                 }
             }
         }

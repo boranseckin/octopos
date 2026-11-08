@@ -60,22 +60,25 @@ pub unsafe fn usertrap() {
             }
 
             // page fault on lazily-allocated page
-            scause::Trap::Exception(scause::Exception::StorePageFault)
-            | scause::Trap::Exception(scause::Exception::LoadPageFault) => {
+            scause::Trap::Exception(except)
+                if except == scause::Exception::StorePageFault
+                    || except == scause::Exception::LoadPageFault =>
+            {
                 // vmfault handles the page fault
                 // if err, either out-of-memory or out-of-bound, kill the process
                 if let Err(e) = pagetable.vmfault(VA::from(stval::read())) {
-                    let pid = {
+                    let (pid, name) = {
                         let mut inner = proc.inner.lock();
                         inner.killed = true;
-                        inner.pid
+                        (inner.pid, inner.name)
                     };
 
-                    report!(
+                    println!(
+                        "! pid {} ({}): killed by {} ({}) sepc=0x{:x} stval=0x{:x}",
+                        pid,
+                        name,
+                        except,
                         e,
-                        "page fault scause=0x{:X} pid={} sepc=0x{:X} stval=0x{:X}",
-                        scause.bits(),
-                        *pid,
                         sepc::read(),
                         stval::read(),
                     );
@@ -95,15 +98,18 @@ pub unsafe fn usertrap() {
 
             // something else
             _ => {
-                let pid = proc.inner.lock().pid;
+                let (pid, name) = {
+                    let inner = proc.inner.lock();
+                    (inner.pid, inner.name)
+                };
                 println!(
-                    "! unexpected interrupt scause=0x{:X} pid={} sepc=0x{:X} stval=0x{:X}",
+                    "! pid {} ({}): unexpected interrupt scause=0x{:x} sepc=0x{:x} stval=0x{:x}",
+                    pid,
+                    name,
                     scause.bits(),
-                    *pid,
                     sepc::read(),
                     stval::read(),
                 );
-                proc.inner.lock().killed = true;
             }
         }
 
