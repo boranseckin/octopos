@@ -48,19 +48,16 @@ struct Arena<'a> {
 
 impl<'a> Arena<'a> {
     fn node(&self, index: usize) -> CommandType<'a> {
-        self.nodes[index].expect("parser only links indices it alloated")
+        self.nodes[index].expect("parser only links indices it allocated")
     }
 
-    fn alloc_argv(&mut self, args: &[&'a str]) -> (usize, usize) {
-        let start = self.argv_count;
-        for &arg in args {
-            if self.argv_count >= self.argv.len() {
-                exit_with_msg("sh: line too complex");
-            }
-            self.argv[self.argv_count] = arg;
-            self.argv_count += 1;
+    fn push_arg(&mut self, arg: &'a str) {
+        if self.argv_count >= self.argv.len() {
+            exit_with_msg("sh: line too complex");
         }
-        (start, args.len())
+
+        self.argv[self.argv_count] = arg;
+        self.argv_count += 1;
     }
 }
 
@@ -245,7 +242,7 @@ impl<'a> Parser<'a> {
             return Some(self.parse_redirects(cmd));
         }
 
-        let mut argv = [""; MAXARGS];
+        let argv_start = self.arena.argv_count;
         let mut argc = 0;
 
         while let Some(token) = self.peek_token() {
@@ -257,7 +254,7 @@ impl<'a> Parser<'a> {
                 exit_with_msg("sh: too many arguments")
             }
 
-            argv[argc] = token;
+            self.arena.push_arg(token);
             argc += 1;
             self.next_token();
         }
@@ -266,7 +263,6 @@ impl<'a> Parser<'a> {
             return None;
         }
 
-        let (argv_start, argc) = self.arena.alloc_argv(&argv[..argc]);
         let cmd = CommandType::Exec { argv_start, argc };
 
         Some(self.parse_redirects(cmd))
