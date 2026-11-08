@@ -322,7 +322,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse(&mut self) -> Option<CommandType<'a>> {
-        self.parse_line(0)
+        let line = self.parse_line(0);
+        if let Some(t) = self.peek_token() {
+            exit_with_msg(format_args!("sh: syntax error: unexpected '{t}'"));
+        }
+        line
     }
 }
 
