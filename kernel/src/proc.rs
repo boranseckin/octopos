@@ -11,14 +11,11 @@ use crate::exec::exec;
 use crate::file::File;
 use crate::fs::{self, Inode, Path};
 use crate::log::Operation;
-use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
-use crate::param::{
-    BOOTSTACK_SIZE, MAX_PROC_NAME, NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV, TRACK_STACK_USAGE,
-};
+use crate::memlayout::{TRAMPOLINE, TRAPFRAME};
+use crate::param::{MAX_PROC_NAME, NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV};
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts, registers::tp};
 use crate::spinlock::{SpinLock, SpinLockGuard};
-use crate::stack::{self, STACK_MARGIN, check_margin};
-use crate::start::STACK0;
+use crate::stack::{BootStack, KernelStack};
 use crate::swtch::swtch;
 use crate::sync::OnceLock;
 use crate::syscall::SysError;
@@ -564,8 +561,6 @@ impl ProcInner {
 /// Private fields for Proc
 #[derive(Debug, Default)]
 pub struct ProcData {
-    /// Virtual address of kernel stack
-    pub kstack: VA,
     /// User page table
     pub pagetable: Option<Uvm>,
     /// Data page for trampoline
@@ -581,7 +576,6 @@ pub struct ProcData {
 impl ProcData {
     const fn new() -> Self {
         Self {
-            kstack: VA::new(0),
             pagetable: None,
             trapframe: None,
             context: Context::new(),
@@ -659,6 +653,10 @@ impl Proc {
     pub fn is_killed(&self) -> bool {
         let inner = self.inner.lock();
         inner.killed
+    }
+
+    pub fn kstack(&self) -> KernelStack {
+        KernelStack::for_slot(self.id)
     }
 
     /// Create a user page table using a given process's trapframe address, with no user memory,
@@ -832,9 +830,9 @@ impl ProcTable {
     /// The caller must ensure that the kernel page table is not used concurrently.
     /// Which should be the case when initializing the page.
     pub unsafe fn map_stacks(&self, kvm: &mut Kvm) {
-        for (i, _) in self.table.iter().enumerate() {
-            // kstack() already accounts for an unmapped guard page below each stack.
-            let base_va = VA::from(kstack(i));
+        for proc in self.iter() {
+            // KernelStack already accounts for an unmapped guard page below each stack.
+            let base_va = proc.kstack().bottom();
 
             for page in 0..NKSTACK_PAGES {
                 // kstack pages are never freed.
@@ -857,9 +855,10 @@ impl ProcTable {
 
                 let data = unsafe { proc.data_mut() };
                 data.context.zero();
-                data.context.sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize();
+                data.context.sp = proc.kstack().top().as_usize();
 
-                unsafe { stack::paint(data.kstack, stack::PAINT_SIZE) };
+                // SAFETY: slot is Unused and we hold its lock, nothing runs on its stack
+                unsafe { proc.kstack().paint() };
 
                 return Ok((proc, inner));
             }
@@ -1173,9 +1172,12 @@ pub unsafe fn scheduler() -> ! {
 
     cpu.proc.take();
 
+    // SAFETY: interrupts are disabled, so hart cannot change.
     let hart = unsafe { current_id() };
-    let boot_bottom = VA::from(&raw const STACK0 as usize + hart * BOOTSTACK_SIZE);
-    unsafe { stack::paint(boot_bottom, STACK_MARGIN) };
+    let boot = BootStack::for_hart(hart);
+
+    // SAFETY: we are in scheduler's first frame, far above the margin.
+    unsafe { boot.paint_margin() };
 
     loop {
         // The most recent process to run may have had interrupts turned off; enable them to avoid
@@ -1198,20 +1200,23 @@ pub unsafe fn scheduler() -> ! {
 
                 // Process is done running for now.
                 // It should have changed its p->state before coming back.
-                let margin_ok = unsafe { stack::check_margin(proc.data().kstack) };
-                let report = (TRACK_STACK_USAGE && inner.state == ProcState::Zombie)
-                    .then(|| unsafe { stack::high_water(proc.data().kstack, stack::PAINT_SIZE) });
-                let (pid, name) = (inner.pid, inner.name);
-
                 cpu.proc.take();
                 found = true;
+
+                // Get everything we need before dropping the lock and reporting if needed.
+                // SAFETY: proc just switched off and we hold the lock
+                let margin_ok = unsafe { proc.kstack().check_margin() };
+                let report = (inner.state == ProcState::Zombie)
+                    .then(|| unsafe { proc.kstack().high_water() })
+                    .flatten();
+                let (pid, name) = (inner.pid, inner.name);
 
                 drop(inner);
 
                 if !margin_ok {
                     panic!(
-                        "kstack of pid {} ({}) came within {} bytes of overflowing",
-                        pid, name, STACK_MARGIN
+                        "kstack of pid {} ({}) came too close to overflowing",
+                        pid, name
                     );
                 }
 
@@ -1221,7 +1226,7 @@ pub unsafe fn scheduler() -> ! {
                         pid,
                         name,
                         mark,
-                        NKSTACK_PAGES * PGSIZE
+                        KernelStack::SIZE
                     );
                 }
             }
@@ -1232,11 +1237,9 @@ pub unsafe fn scheduler() -> ! {
             unsafe { asm!("wfi") };
         }
 
-        if !unsafe { check_margin(boot_bottom) } {
-            panic!(
-                "boot stack of hart {} came within {} bytes of overflowing",
-                hart, STACK_MARGIN
-            );
+        // SAFETY: interrupts are off, so no trap frame can be written
+        if !unsafe { boot.check_margin() } {
+            panic!("boot stack of hart {hart} came too close to overflowing");
         }
     }
 }
@@ -1481,10 +1484,6 @@ pub fn copy_struct_from_user<T: Pod>(src: VA) -> vm::Result<T> {
 /// # Safety
 /// Must be called only once during kernel initialization.
 pub unsafe fn init() {
-    for proc in PROC_TABLE.iter() {
-        // # Safety: we are during initialization, so we are the only ones with access to the proc
-        unsafe { proc.data_mut() }.kstack = VA::from(kstack(proc.id));
-    }
-
+    // kstacks are derived from the slot id, so there is nothing to init.
     println!("proc init");
 }

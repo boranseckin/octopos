@@ -2,10 +2,10 @@ use core::mem;
 
 use crate::kernelvec::kernelvec;
 use crate::memlayout::{E1000_IRQ, TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ};
-use crate::param::{NKSTACK_PAGES, TICKS_PER_SEC, TIMEBASE_HZ};
+use crate::param::{TICKS_PER_SEC, TIMEBASE_HZ};
 use crate::proc;
+use crate::riscv::interrupts;
 use crate::riscv::registers::{satp, scause, sepc, sstatus, stimecmp, stval, stvec, time, tp};
-use crate::riscv::{PGSIZE, interrupts};
 use crate::spinlock::SpinLock;
 use crate::syscall::syscall;
 use crate::trampoline::{trampoline, userret, uservec};
@@ -131,7 +131,7 @@ pub unsafe fn usertrap() {
 /// Called from `usertrap()`
 #[unsafe(no_mangle)]
 pub unsafe fn usertrapret() {
-    let (_proc, data) = proc::current_proc_and_data_mut();
+    let (proc, data) = proc::current_proc_and_data_mut();
 
     // we're about to switch the destination of traps from `kerneltrap()` to `usertrap()`, so turn
     // off interrupts until we're back in user space, where `usertrap()` is correct.
@@ -143,10 +143,9 @@ pub unsafe fn usertrapret() {
     unsafe { stvec::write(trampoline_uservec) };
 
     // set up trapframe values that uservec will need when the process next traps into the kernel.
-    let kstack = data.kstack;
     let trapframe = data.trapframe_mut();
     trapframe.kernel_satp = unsafe { satp::read() }; // kernel page table
-    trapframe.kernel_sp = (kstack + NKSTACK_PAGES * PGSIZE).as_usize(); // process's kernel stack
+    trapframe.kernel_sp = proc.kstack().top().as_usize(); // process's kernel stack
     trapframe.kernel_trap = usertrap as *const () as usize;
     trapframe.kernel_hartid = unsafe { tp::read() }; // hartid for `current_id()`
 
