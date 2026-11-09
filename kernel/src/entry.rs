@@ -14,7 +14,7 @@ pub unsafe extern "C" fn _entry() -> ! {
     // In RISC-V, the stack grows downwards. Stack pointer of each CPU points
     // to the top of the stack. Each stack is BOOTSTACK_SIZE bytes.
     naked_asm!(
-        "la sp, {stack}",    // load address of STACK0 to stack pointer
+        "la sp, {stack}",   // load address of STACK0 to stack pointer
         "li a0, {size}",    // load immediate value to a0
         "csrr a1, mhartid", // read hartid from control and status register to a1
         "addi a1, a1, 1",   // add immediate 1 to a1

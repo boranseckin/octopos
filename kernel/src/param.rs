@@ -46,15 +46,15 @@ pub const MAX_PROC_NAME: usize = 16;
 
 /// size of the boot stack (debug needs more stack for error tracing)
 #[cfg(debug_assertions)]
-pub const BOOTSTACK_SIZE: usize = 4 * 4096;
+pub const BOOTSTACK_SIZE: usize = 4 * PGSIZE;
 #[cfg(not(debug_assertions))]
-pub const BOOTSTACK_SIZE: usize = 4096;
+pub const BOOTSTACK_SIZE: usize = PGSIZE;
 
 /// kernel stack pages per process (debug needs more stack to dump)
 #[cfg(debug_assertions)]
 pub const NKSTACK_PAGES: usize = 8;
 #[cfg(not(debug_assertions))]
-pub const NKSTACK_PAGES: usize = 1;
+pub const NKSTACK_PAGES: usize = 2;
 
 /// user stack pages
 pub const USERSTACK: usize = 4;
@@ -83,3 +83,6 @@ pub const TICKS_PER_SEC: usize = 10;
 
 /// print ignored errors
 pub const TRACK_EXPECTED_ERRORS: bool = false;
+
+/// print stack usage per proc on exit
+pub const TRACK_STACK_USAGE: bool = false;
