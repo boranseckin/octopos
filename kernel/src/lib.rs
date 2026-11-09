@@ -28,6 +28,7 @@ pub(crate) mod riscv;
 pub(crate) mod rng;
 pub(crate) mod sleeplock;
 pub(crate) mod spinlock;
+pub(crate) mod stack;
 pub(crate) mod start;
 pub(crate) mod swtch;
 pub(crate) mod sync;

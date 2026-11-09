@@ -12,9 +12,13 @@ use crate::file::File;
 use crate::fs::{self, Inode, Path};
 use crate::log::Operation;
 use crate::memlayout::{TRAMPOLINE, TRAPFRAME, kstack};
-use crate::param::{MAX_PROC_NAME, NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV};
+use crate::param::{
+    BOOTSTACK_SIZE, MAX_PROC_NAME, NCPU, NKSTACK_PAGES, NOFILE, NPROC, ROOTDEV, TRACK_STACK_USAGE,
+};
 use crate::riscv::{PGSIZE, PTE_R, PTE_W, PTE_X, interrupts, registers::tp};
 use crate::spinlock::{SpinLock, SpinLockGuard};
+use crate::stack::{self, STACK_MARGIN, check_margin};
+use crate::start::STACK0;
 use crate::swtch::swtch;
 use crate::sync::OnceLock;
 use crate::syscall::SysError;
@@ -855,6 +859,8 @@ impl ProcTable {
                 data.context.zero();
                 data.context.sp = (data.kstack + NKSTACK_PAGES * PGSIZE).as_usize();
 
+                unsafe { stack::paint(data.kstack, stack::PAINT_SIZE) };
+
                 return Ok((proc, inner));
             }
         }
@@ -1167,6 +1173,10 @@ pub unsafe fn scheduler() -> ! {
 
     cpu.proc.take();
 
+    let hart = unsafe { current_id() };
+    let boot_bottom = VA::from(&raw const STACK0 as usize + hart * BOOTSTACK_SIZE);
+    unsafe { stack::paint(boot_bottom, STACK_MARGIN) };
+
     loop {
         // The most recent process to run may have had interrupts turned off; enable them to avoid
         // a deadlock if all processes are waiting. Then, turn them off to avoid possible rece
@@ -1188,14 +1198,45 @@ pub unsafe fn scheduler() -> ! {
 
                 // Process is done running for now.
                 // It should have changed its p->state before coming back.
+                let margin_ok = unsafe { stack::check_margin(proc.data().kstack) };
+                let report = (TRACK_STACK_USAGE && inner.state == ProcState::Zombie)
+                    .then(|| unsafe { stack::high_water(proc.data().kstack, stack::PAINT_SIZE) });
+                let (pid, name) = (inner.pid, inner.name);
+
                 cpu.proc.take();
                 found = true;
+
+                drop(inner);
+
+                if !margin_ok {
+                    panic!(
+                        "kstack of pid {} ({}) came within {} bytes of overflowing",
+                        pid, name, STACK_MARGIN
+                    );
+                }
+
+                if let Some(mark) = report {
+                    println!(
+                        "pid {} ({}): kstack high-water {} / {} bytes",
+                        pid,
+                        name,
+                        mark,
+                        NKSTACK_PAGES * PGSIZE
+                    );
+                }
             }
         }
 
         if !found {
             // nothing to run; stop running on this core until an interrupt.
             unsafe { asm!("wfi") };
+        }
+
+        if !unsafe { check_margin(boot_bottom) } {
+            panic!(
+                "boot stack of hart {} came within {} bytes of overflowing",
+                hart, STACK_MARGIN
+            );
         }
     }
 }
