@@ -129,7 +129,34 @@ impl From<InterfaceEntry> for RawInterface {
     }
 }
 
-static INTERFACES: SpinLock<Vec<InterfaceEntry>> = SpinLock::new(Vec::new(), "net_interfaces");
+struct InterfaceTable {
+    entries: Vec<InterfaceEntry>,
+}
+
+static INTERFACES: SpinLock<InterfaceTable> = SpinLock::new(
+    InterfaceTable {
+        entries: Vec::new(),
+    },
+    "net_interfaces",
+);
+
+impl InterfaceTable {
+    fn get(&self, index: usize) -> Option<&InterfaceEntry> {
+        self.entries.get(index)
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut InterfaceEntry> {
+        self.entries.get_mut(index)
+    }
+
+    fn position(&self, id: InterfaceId) -> Option<usize> {
+        self.entries.iter().position(|i| i.id == id)
+    }
+
+    fn insert(&mut self, interface: InterfaceEntry) {
+        self.entries.push(interface);
+    }
+}
 
 /// Returns a copy of the interface entry at a given index.
 pub fn interface_at(index: usize) -> Option<InterfaceEntry> {
@@ -144,7 +171,7 @@ pub fn register_interface(id: InterfaceId, config: InterfaceConfig, device: Arc<
 
     INTERFACES
         .lock()
-        .push(InterfaceEntry { id, config, device });
+        .insert(InterfaceEntry { id, config, device });
 }
 
 /// Sets the IPv4 configuration for a network interface, replacing any existing configuration.
@@ -163,7 +190,7 @@ pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Cidr>) -> Result<()>
     {
         let mut ifs = INTERFACES.lock();
 
-        let Some(interface) = ifs.iter_mut().find(|i| i.id == id) else {
+        let Some(interface) = ifs.position(id).and_then(|i| ifs.get_mut(i)) else {
             err!(NetError::InterfaceNotFound)
         };
 
@@ -184,11 +211,11 @@ pub fn set_interface_ipv4(id: InterfaceId, ipv4: Option<Ipv4Cidr>) -> Result<()>
 
 /// Finds a network interface by its identifier.
 ///
-/// Returned entry is a clone of the one in the registry. This value could be stale immediately
-/// after it's returned.
+/// Returned entry is a clone of the one in the registry.
+/// This value could be stale immediately after it's returned.
 pub fn find_interface_by_id(id: InterfaceId) -> Option<InterfaceEntry> {
     let ifs = INTERFACES.lock();
-    ifs.iter().find(|i| i.id == id).cloned()
+    ifs.position(id).and_then(|i| ifs.get(i)).cloned()
 }
 
 /// Prints the interface registry for debugging purposes.
@@ -196,7 +223,7 @@ pub fn dump() {
     let ifs = INTERFACES.lock();
 
     println!("");
-    for interface in ifs.iter() {
+    for interface in ifs.entries.iter() {
         println!(
             "{}: {} {} {} {}",
             interface.id,
