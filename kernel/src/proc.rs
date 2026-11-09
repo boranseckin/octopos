@@ -24,7 +24,7 @@ use crate::sync::OnceLock;
 use crate::syscall::SysError;
 use crate::trampoline::trampoline;
 use crate::trap::usertrapret;
-use crate::vm::{self, Kvm, PA, PageTable, Uvm, VA, VmError};
+use crate::vm::{self, Kvm, PA, Page, Uvm, VA, VmError};
 
 pub static CPU_TABLE: CpuTable = CpuTable::new();
 pub static PROC_TABLE: ProcTable = ProcTable::new();
@@ -833,12 +833,12 @@ impl ProcTable {
     /// Which should be the case when initializing the page.
     pub unsafe fn map_stacks(&self, kvm: &mut Kvm) {
         for (i, _) in self.table.iter().enumerate() {
+            // kstack() already accounts for an unmapped guard page below each stack.
             let base_va = VA::from(kstack(i));
 
             for page in 0..NKSTACK_PAGES {
-                // TODO: This is not a page table per se but "stack" is a s big as a PGSIZE so the
-                // same initializer works for now.
-                let pa = PageTable::try_new().expect("proc map stack kalloc").as_pa();
+                // kstack pages are never freed.
+                let pa = Page::try_new().expect("proc map stack kalloc");
                 let va = base_va + page * PGSIZE;
                 kvm.map(va, pa, PGSIZE, PTE_R | PTE_W);
             }

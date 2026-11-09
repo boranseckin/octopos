@@ -219,7 +219,17 @@ impl_cmp!(VA);
 
 #[repr(C, align(4096))]
 #[derive(Debug, Clone)]
-struct Page([u8; 4096]);
+pub struct Page([u8; PGSIZE]);
+
+impl Page {
+    /// Allocates a zeroed, page-aligned physical page and returns its address.
+    /// Page is not freed automatically, the caller is responsible.
+    pub fn try_new() -> Result<PA> {
+        let mem = Box::<Self>::try_new_zeroed()?;
+        let mem_ptr = Box::into_raw(unsafe { mem.assume_init() });
+        Ok(PA::from(mem_ptr as usize))
+    }
+}
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -659,23 +669,19 @@ impl Uvm {
         let old_size = pg_round_up(old_size);
 
         for i in (old_size..new_size).step_by(PGSIZE) {
-            let mem = match Box::<Page>::try_new_zeroed() {
-                Ok(mem) => unsafe { mem.assume_init() },
+            let mem = match Page::try_new() {
+                Ok(mem) => mem,
                 Err(err) => {
                     self.dealloc(i, old_size);
                     err!(err);
                 }
             };
 
-            let mem = Box::into_raw(mem);
-
-            if let Err(err) = self.0.map_pages(
-                VA::from(i),
-                PA::from(mem as usize),
-                PGSIZE,
-                PTE_R | PTE_U | xperm,
-            ) {
-                let _pg = unsafe { Box::from_raw(mem) };
+            if let Err(err) = self
+                .0
+                .map_pages(VA::from(i), mem, PGSIZE, PTE_R | PTE_U | xperm)
+            {
+                let _pg = unsafe { Box::from_raw(mem.as_mut_ptr::<Page>()) };
                 self.dealloc(i, old_size);
                 err!(err);
             }
@@ -803,11 +809,7 @@ impl Uvm {
 
             // case 3: COW page, copy and remap as writable
             let old_pa = pte.as_pa();
-            let mem = {
-                let mem = Box::<Page>::try_new_zeroed()?;
-                unsafe { mem.assume_init() }
-            };
-            let new_pa = PA::from(Box::into_raw(mem) as usize);
+            let new_pa = Page::try_new()?;
 
             unsafe {
                 ptr::copy_nonoverlapping(
@@ -830,16 +832,10 @@ impl Uvm {
         }
 
         // case 4: pte absent, lazily allocate a new page
-        let mem = {
-            let mem = Box::<Page>::try_new_zeroed()?;
-            unsafe { mem.assume_init() }
-        };
-        let mem_ptr = Box::into_raw(mem);
-        let pa = PA::from(mem_ptr as usize);
-
+        let pa = Page::try_new()?;
         if let Err(e) = self.map_pages(va, pa, PGSIZE, PTE_W | PTE_U | PTE_R) {
             // # Safety: mem_ptr was allocated above and is not mapped in pagetable.
-            drop(unsafe { Box::from_raw(mem_ptr) });
+            drop(unsafe { Box::from_raw(pa.as_mut_ptr::<Page>()) });
             err!(e);
         }
 
