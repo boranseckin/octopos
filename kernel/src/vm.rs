@@ -802,8 +802,10 @@ impl Uvm {
         if let pte = self.walk_mut(va, false)?
             && pte.is_v()
         {
-            if !pte.is_cow() {
-                // case 2: mapped but not writable
+            if !pte.is_u() || !pte.is_cow() {
+                // case 2
+                // either a guard page: mapped but not user-accessible
+                // or not a cow page: mapped but not writable
                 err!(VmError::InvalidAddress);
             }
 
